@@ -97,6 +97,57 @@ Returns a typed `MissionDetailResponse` with `status`, `epistemic_status`,
 Retrieve later with `GET /api/v1/missions/{mission_id}` and
 `GET /api/v1/missions/{mission_id}/artifacts`.
 
+## Data sources (Phase 2)
+
+Missions default to bundled **sample** data and run fully offline. An optional
+**CelesTrak** connector can fetch real General Perturbations (GP/OMM) elements.
+
+### Default offline behavior
+Network access is **disabled by default**. The existing sample workflow is
+unchanged and needs no network.
+
+### Enabling CelesTrak (local development)
+Both switches must be set (a live request needs both):
+
+```bash
+ORBITMIND_NETWORK_ENABLED=true
+ORBITMIND_CELESTRAK_ENABLED=true
+# configurable (verify the endpoint against official CelesTrak docs first):
+ORBITMIND_CELESTRAK_BASE_URL=https://celestrak.org/NORAD/elements/gp.php
+ORBITMIND_CELESTRAK_CACHE_TTL_SECONDS=7200
+ORBITMIND_CELESTRAK_MIN_REFRESH_SECONDS=3600
+```
+
+### Sample vs CelesTrak
+- `"source": "sample"` (default) — bundled, stale, test-only TLE (offline).
+- `"source": "celestrak"` — real GP data; `satellite_id` is a NORAD number (e.g.
+  `"25544"`). Requires the switches above.
+- **No silent fallback:** if CelesTrak is unavailable the mission fails safely.
+  Opt in with `"allow_sample_fallback": true` to fall back to the sample — the
+  result is then explicitly labelled `source=sample`, `freshness=test-fixture`.
+
+### Freshness meanings
+`test-fixture · current · fresh · aging · stale · expired · unavailable · invalid`.
+Stale/expired data is **never** reported as live. Every external mission result
+carries a `source_data` block (source, record id, data epoch, fetch time, cache
+status, freshness, policy version, checksum, limitations).
+
+### Cache behavior
+Raw payloads are cached under `cache/<source_id>/` (gitignored); metadata lives in
+the DB. Reads are cache-first within the TTL; refreshes respect a minimum interval
+and an in-process lock (no Redis, no background polling). See
+[CACHE_AND_FRESHNESS.md](docs/operations/CACHE_AND_FRESHNESS.md) and
+[SOURCE_OPERATIONS.md](docs/operations/SOURCE_OPERATIONS.md).
+
+### Source endpoints (local-dev-only; no auth yet)
+`GET /api/v1/sources`, `/{id}`, `/{id}/policy`, `/{id}/health`, `/{id}/cache`,
+and `POST /{id}/refresh?satellite_id=<norad>`.
+
+### Data limitations & rights
+CelesTrak licensing/commercial-use terms are **not confirmed** in this repo and are
+labelled *requires review*; attribution to CelesTrak is recorded. See
+[DATA_RIGHTS_AND_SOURCE_POLICY.md](docs/architecture/DATA_RIGHTS_AND_SOURCE_POLICY.md).
+
 ## Testing
 
 ```bash
@@ -134,8 +185,11 @@ status, checksum). Binary images are never stored in the database.
   element-set epoch.
 - TEME→geodetic uses GMST rotation only (no polar motion/nutation); good for
   demonstration ground tracks, not sub-km frame precision.
-- Single-user / single-tenant; no auth yet (interfaces designed for it).
+- Single-user / single-tenant; no auth yet (interfaces designed for it). The source
+  endpoints (incl. refresh) are local-development-only.
 - In-process synchronous workflow (no durable/long-running workflows yet).
+- CelesTrak endpoint + licensing are unverified offline (risk R-012); the connector
+  is configurable, offline-tested, and rights are labelled "requires review".
 
 ## Roadmap
 
@@ -152,6 +206,9 @@ See [`docs/architecture/ROADMAP.md`](docs/architecture/ROADMAP.md).
   model-estimate | hypothesis | assumption | unknown | rejected` (ADR-0006).
 - Artifacts are written only under the configured artifacts directory; path
   traversal is rejected (SR-13).
+- Network is disabled by default; a live CelesTrak request needs two explicit
+  switches, is HTTPS-only + host-allowlisted, and never happens during startup,
+  `/health`, or tests (ADR-0009).
 - No secrets in code/VCS; no hidden network calls; generated code is never executed
   or auto-deployed. Full list in
   [`docs/requirements/SAFETY_REQUIREMENTS.md`](docs/requirements/SAFETY_REQUIREMENTS.md).

@@ -11,10 +11,18 @@ epistemic labeling, persistence (SQLite/SQLAlchemy/Alembic), 2 visual artifacts,
 provenance, audit, retrieval endpoints — all offline-tested.
 
 ## Phase 2 — Real approved data connectors
-CelesTrak / NASA Earthdata / NOAA SWPC / SatNOGS. Each connector requires: source
-policy, licensing note, rate limits, cache policy, freshness policy, schema
-versioning, failure behavior, and **offline test fixtures**. Live calls behind a
-connector interface; tests stay offline via fakes.
+**CelesTrak GP connector implemented ✅** behind a generic `OrbitalSource` interface:
+source policy + rights metadata, configurable endpoint, network-disabled-by-default
+(two switches), HTTPS-only + host allowlist, bounded retries/size/timeouts, GP/OMM
+JSON schema validation, normalization to the unchanged SGP4 path, DB-metadata + file
+cache, freshness classification, minimum-refresh discipline, source/health/cache/
+refresh API, full audit, and offline mocked tests. Source data flows into mission
+results with explicit freshness/limitations and **no silent fallback**.
+
+NASA Earthdata / NOAA SWPC / SatNOGS / Space-Track remain **future** connectors,
+each to follow the same pattern (`docs/development/ADDING_A_SOURCE_CONNECTOR.md`):
+source policy, licensing note, rate/cache/freshness policy, schema versioning,
+failure behavior, and **offline test fixtures**.
 
 ## Phase 3 — Scientific memory & retrieval
 PostgreSQL as system of record; full-text retrieval; optional pgvector; documents,

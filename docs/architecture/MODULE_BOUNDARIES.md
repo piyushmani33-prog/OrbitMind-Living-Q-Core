@@ -12,7 +12,7 @@ created merely for appearance.
 | `observability` | Implemented | health/version/capabilities reporting | core, persistence |
 | `mission` | Implemented | mission domain models, request validation, status lifecycle | core |
 | `orchestration` | Implemented | Prime Orchestrator + in-process Workflow abstraction | mission, space, verification, visualization, persistence, governance, sources, core |
-| `sources` | Implemented (offline) | source registry + bundled fixture loaders + provenance | core |
+| `sources` | Implemented | source registry (offline fixtures) + typed source policy/rights, safe HTTP fetcher, cache/freshness, and the CelesTrak connector (`sources/celestrak/`) behind a generic `OrbitalSource` interface | core, space (elements), persistence (source_repository), httpx |
 | `space` | Implemented | SGP4 orbital propagation, coordinate transforms, units | core, sources |
 | `verification` | Implemented | deterministic checks → structured findings | core |
 | `visualization` | Implemented | altitude + ground-track charts, JSON sidecars, path guard | core |
