@@ -1,7 +1,9 @@
 # Product Requirements — OrbitMind Living Q-Core
 
-Status: Living document · Phase 0/1 scope · Derived from the owner build specification
-(the reference vision documents are absent — see RISK R-001).
+Status: Living document · Phase 0/1 scope · Derived from the owner build specification.
+The reference vision documents were inspected and reconciled on 2026-06-19
+(R-001 closed; see `../architecture/REFERENCE_RECONCILIATION.md` and
+`../reference/REFERENCE_MANIFEST.md`) and confirm this scope.
 
 ## 1. Product summary
 

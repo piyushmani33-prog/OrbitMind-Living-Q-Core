@@ -2,6 +2,11 @@
 
 Phases are gated by owner approval. Each phase keeps the repo runnable and tested.
 
+> Reconciled with the reference documents (2026-06-19): this phasing aligns with the
+> Vision document's own 12–18 month plan (Foundations → Mission spine → Scientific
+> memory → Satellite intelligence → Quantum Organ → Tool Forge → Visual Intelligence
+> → Research Autopilot → Hardening). See `REFERENCE_RECONCILIATION.md`.
+
 ## Phase 0 — Foundation ✅ (this build)
 Repo, tooling, docs, ADRs, FastAPI app, health/version/capabilities, CI scaffold.
 

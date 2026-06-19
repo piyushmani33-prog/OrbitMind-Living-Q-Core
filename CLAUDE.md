@@ -65,6 +65,9 @@ context, decision, alternatives, consequences, review trigger) for any material
 architectural change. Do not silently change an ADR's decision.
 
 ## Reference documents
-The product vision docs are expected under `docs/reference/` but are currently
-**absent** (tracked as risk R-001). This `CLAUDE.md` + the build spec are the
-working source of truth until they arrive; reconcile against them when added.
+The product vision docs are under `docs/reference/` (the binary `.docx` are kept
+locally but gitignored; readable derivatives are tracked under
+`docs/reference/extracted/`). They were inspected, hashed, and reconciled on
+2026-06-19 (R-001 closed). The reconciliation of record is
+`docs/architecture/REFERENCE_RECONCILIATION.md`; integrity metadata is in
+`docs/reference/REFERENCE_MANIFEST.md`. The originals remain authoritative.

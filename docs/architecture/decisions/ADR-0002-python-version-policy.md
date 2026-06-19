@@ -30,6 +30,12 @@ dependencies work on the current interpreter.
 - A compatibility failure on 3.14 for a future dependency triggers the documented
   fallback (create a 3.12 venv), not a silent change.
 
+## Reference reconciliation (2026-06-19)
+The inspected reference documents **confirm** this decision: both state Python 3.12
+is the production baseline and note that 3.14 support depends on validating the exact
+dependency lockfile (Qiskit explicitly tells users to verify supported Python
+versions per release). No change to the decision.
+
 ## Review trigger
 Revisit when adding Phase 2+ dependencies (Astropy, pandas, pgvector drivers) or if
 any tool/library fails to provide a working 3.14 wheel.
