@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, Float, ForeignKey, Index, String, Text
+from sqlalchemy import JSON, Boolean, Float, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from orbitmind.persistence.database import Base, UTCDateTime
@@ -118,3 +118,102 @@ class AuditEventRow(Base):
     actor: Mapped[str] = mapped_column(String(64))
     detail: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     at: Mapped[datetime] = mapped_column(UTCDateTime, index=True)
+
+
+# --------------------------------------------------------------------------
+# Phase 2 — sources, policies, fetches, cache, health, normalized elements
+# --------------------------------------------------------------------------
+class SourceDefinitionRow(Base):
+    __tablename__ = "source_definitions"
+
+    source_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    name: Mapped[str] = mapped_column(String(128))
+    kind: Mapped[str] = mapped_column(String(32))
+    description: Mapped[str] = mapped_column(Text)
+    enabled: Mapped[bool] = mapped_column(Boolean)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime)
+
+
+class SourcePolicyRow(Base):
+    __tablename__ = "source_policies"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    source_id: Mapped[str] = mapped_column(ForeignKey("source_definitions.source_id"), index=True)
+    policy_version: Mapped[str] = mapped_column(String(16))
+    base_url: Mapped[str] = mapped_column(String(255))
+    schema_format: Mapped[str] = mapped_column(String(32))
+    schema_version: Mapped[str] = mapped_column(String(32))
+    network_enabled: Mapped[bool] = mapped_column(Boolean)
+    snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    recorded_at: Mapped[datetime] = mapped_column(UTCDateTime)
+
+
+class SourceFetchRow(Base):
+    __tablename__ = "source_fetches"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    source_id: Mapped[str] = mapped_column(String(64), index=True)
+    cache_key: Mapped[str] = mapped_column(String(255), index=True)
+    url: Mapped[str] = mapped_column(String(512))
+    outcome: Mapped[str] = mapped_column(String(16))
+    http_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    content_type: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    response_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    checksum: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    schema_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    from_cache: Mapped[bool] = mapped_column(Boolean, default=False)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    requested_at: Mapped[datetime] = mapped_column(UTCDateTime, index=True)
+    completed_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+
+
+class SourceCacheEntryRow(Base):
+    __tablename__ = "source_cache_entries"
+
+    cache_key: Mapped[str] = mapped_column(String(255), primary_key=True)
+    source_id: Mapped[str] = mapped_column(String(64), index=True)
+    url: Mapped[str] = mapped_column(String(512))
+    body_path: Mapped[str] = mapped_column(String(512))
+    checksum: Mapped[str] = mapped_column(String(64))
+    schema_version: Mapped[str] = mapped_column(String(32))
+    http_status: Mapped[int] = mapped_column(Integer)
+    content_type: Mapped[str] = mapped_column(String(128))
+    fetched_at: Mapped[datetime] = mapped_column(UTCDateTime)
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime)
+    effective_epoch: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    last_success_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    last_failure_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class SourceHealthEventRow(Base):
+    __tablename__ = "source_health_events"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    source_id: Mapped[str] = mapped_column(String(64), index=True)
+    health: Mapped[str] = mapped_column(String(16))
+    detail: Mapped[str] = mapped_column(Text, default="")
+    at: Mapped[datetime] = mapped_column(UTCDateTime, index=True)
+
+
+class OrbitalElementRecordRow(Base):
+    __tablename__ = "orbital_element_records"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    mission_id: Mapped[str | None] = mapped_column(
+        ForeignKey("missions.id"), nullable=True, index=True
+    )
+    source_id: Mapped[str] = mapped_column(String(64), index=True)
+    satellite_id: Mapped[str] = mapped_column(String(64), index=True)
+    norad_cat_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    object_name: Mapped[str] = mapped_column(String(128))
+    epoch: Mapped[datetime] = mapped_column(UTCDateTime)
+    tle_line1: Mapped[str] = mapped_column(String(80))
+    tle_line2: Mapped[str] = mapped_column(String(80))
+    checksum: Mapped[str] = mapped_column(String(64))
+    freshness_state: Mapped[str] = mapped_column(String(16))
+    liveness: Mapped[str] = mapped_column(String(16))
+    cache_status: Mapped[str] = mapped_column(String(16))
+    policy_version: Mapped[str] = mapped_column(String(16))
+    fetched_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime)

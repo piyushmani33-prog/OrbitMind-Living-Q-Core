@@ -1,0 +1,2 @@
+# Raw external source payloads are cached here at runtime under cache/<source_id>/.
+# This directory is tracked (empty); its contents are gitignored.

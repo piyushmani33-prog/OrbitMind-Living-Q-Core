@@ -38,6 +38,10 @@ data/*.sqlite3
 /artifacts/*
 !/artifacts/.gitkeep
 
+# --- Source cache (raw external payloads; never commit) ---
+/cache/*
+!/cache/.gitkeep
+
 # --- Secrets / local environment (never commit) ---
 .env
 .env.*

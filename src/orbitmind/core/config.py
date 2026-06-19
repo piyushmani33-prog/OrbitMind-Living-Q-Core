@@ -45,9 +45,33 @@ class Settings(BaseSettings):
     # Quantum adapter
     quantum_enabled: bool = False
 
+    # --- Network safety (Phase 2). DISABLED by default (ADR-0009). ---
+    # A live external request requires BOTH the global switch AND the source switch.
+    network_enabled: bool = False
+    celestrak_enabled: bool = False
+
+    # CelesTrak connector configuration (endpoint is configurable, not hard-coded).
+    celestrak_base_url: str = "https://celestrak.org/NORAD/elements/gp.php"
+    celestrak_connect_timeout_seconds: float = 5.0
+    celestrak_read_timeout_seconds: float = 10.0
+    celestrak_max_retries: int = 2
+    celestrak_cache_ttl_seconds: int = 7200  # 2h: do not refetch within this window
+    celestrak_min_refresh_seconds: int = 3600  # 1h: minimum interval between live fetches
+    celestrak_max_response_bytes: int = 1_048_576  # 1 MiB response-size cap
+
+    # Controlled cache directory for raw source payloads (metadata lives in the DB).
+    cache_dir: Path = PROJECT_ROOT / "cache"
+
     def resolved_artifacts_dir(self) -> Path:
         """Absolute, resolved artifacts directory (used as the path-traversal root)."""
-        path = self.artifacts_dir
+        return self._resolve(self.artifacts_dir)
+
+    def resolved_cache_dir(self) -> Path:
+        """Absolute, resolved source-cache directory (path-traversal root for cache)."""
+        return self._resolve(self.cache_dir)
+
+    @staticmethod
+    def _resolve(path: Path) -> Path:
         if not path.is_absolute():
             path = (PROJECT_ROOT / path).resolve()
         return path.resolve()

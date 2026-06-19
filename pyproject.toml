@@ -25,6 +25,9 @@ dependencies = [
     "matplotlib>=3.9,<4.0",
     "numpy>=2.0,<3.0",
     "structlog>=24.1",
+    # Phase 2: a small, well-established async/sync HTTP client (already present via
+    # the FastAPI test stack) for the CelesTrak connector. No large SDK is used.
+    "httpx>=0.27,<1.0",
 ]
 
 [project.optional-dependencies]
