@@ -35,6 +35,13 @@ class OutputType(StrEnum):
     GROUND_TRACK = "ground_track"
 
 
+class MissionSource(StrEnum):
+    """Where a mission obtains its orbital elements (decoupled from the sources module)."""
+
+    SAMPLE = "sample"  # bundled offline fixture (default)
+    CELESTRAK = "celestrak"  # CelesTrak GP (Phase 2; requires network + source enabled)
+
+
 class Observer(BaseModel):
     """Optional ground observer location (geodetic)."""
 
@@ -56,6 +63,10 @@ class MissionRequest(BaseModel):
     step_seconds: int = Field(gt=0)
     observer: Observer | None = None
     output_types: list[OutputType] = Field(default_factory=lambda: list(OutputType))
+    source: MissionSource = MissionSource.SAMPLE
+    # Default: NO silent fallback. A CelesTrak mission only falls back to the bundled
+    # sample if the caller explicitly opts in (and the result is labelled accordingly).
+    allow_sample_fallback: bool = False
 
     @model_validator(mode="after")
     def _check_window(self) -> MissionRequest:

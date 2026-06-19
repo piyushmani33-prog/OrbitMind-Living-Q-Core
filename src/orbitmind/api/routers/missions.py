@@ -7,7 +7,12 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query
 
 from orbitmind.api.container import AppContainer
-from orbitmind.api.deps import get_container, get_orchestrator, get_repository
+from orbitmind.api.deps import (
+    get_container,
+    get_orchestrator,
+    get_repository,
+    get_source_repository,
+)
 from orbitmind.api.schemas import (
     ArtifactsResponse,
     MissionDetailResponse,
@@ -21,6 +26,7 @@ from orbitmind.core.units import UNITS
 from orbitmind.mission.models import Mission
 from orbitmind.orchestration.orchestrator import PrimeOrchestrator
 from orbitmind.persistence.repositories import SqlAlchemyMissionRepository
+from orbitmind.persistence.source_repository import SqlAlchemySourceRepository
 from orbitmind.sources.registry import SourceRegistry
 from orbitmind.space.propagation import summarize_samples
 
@@ -28,6 +34,7 @@ router = APIRouter(prefix="/api/v1/missions", tags=["missions"])
 
 OrchestratorDep = Annotated[PrimeOrchestrator, Depends(get_orchestrator)]
 RepositoryDep = Annotated[SqlAlchemyMissionRepository, Depends(get_repository)]
+SourceRepositoryDep = Annotated[SqlAlchemySourceRepository, Depends(get_source_repository)]
 ContainerDep = Annotated[AppContainer, Depends(get_container)]
 
 
@@ -46,11 +53,15 @@ def _to_summary(mission: Mission) -> MissionSummaryResponse:
 def _build_detail(
     mission: Mission,
     repo: SqlAlchemyMissionRepository,
+    source_repo: SqlAlchemySourceRepository,
     registry: SourceRegistry,
 ) -> MissionDetailResponse:
     samples = repo.get_samples(mission.id)
     source = None
-    if mission.satellite_id in registry.supported_satellite_ids():
+    if (
+        mission.normalized_request.source.value == "sample"
+        and mission.satellite_id in registry.supported_satellite_ids()
+    ):
         source = registry.get_source_record(mission.satellite_id)
     return MissionDetailResponse(
         mission_id=mission.id,
@@ -61,6 +72,7 @@ def _build_detail(
         completed_at=mission.completed_at,
         request=mission.normalized_request,
         source=source,
+        source_data=source_repo.get_mission_source_data(mission.id),
         units=dict(UNITS),
         summary=summarize_samples(samples),
         sample_count=len(samples),
@@ -77,6 +89,7 @@ def submit_orbit_propagation(
     payload: OrbitPropagationRequest,
     orchestrator: OrchestratorDep,
     repo: RepositoryDep,
+    source_repo: SourceRepositoryDep,
     container: ContainerDep,
 ) -> MissionDetailResponse:
     """Submit, validate, run, verify, visualize, persist, and return the mission."""
@@ -87,7 +100,7 @@ def submit_orbit_propagation(
     mission = repo.get_mission(mission_id)
     if mission is None:  # pragma: no cover - just persisted
         raise NotFoundError("mission not found after submission")
-    return _build_detail(mission, repo, container.registry)
+    return _build_detail(mission, repo, source_repo, container.registry)
 
 
 @router.get("", response_model=MissionListResponse)
@@ -109,6 +122,7 @@ def list_missions(
 def get_mission(
     mission_id: str,
     repo: RepositoryDep,
+    source_repo: SourceRepositoryDep,
     container: ContainerDep,
 ) -> MissionDetailResponse:
     """Retrieve a stored mission with results, provenance, and audit trail."""
@@ -117,7 +131,7 @@ def get_mission(
     mission = repo.get_mission(mission_id)
     if mission is None:
         raise NotFoundError("mission not found")
-    return _build_detail(mission, repo, container.registry)
+    return _build_detail(mission, repo, source_repo, container.registry)
 
 
 @router.get("/{mission_id}/artifacts", response_model=ArtifactsResponse)

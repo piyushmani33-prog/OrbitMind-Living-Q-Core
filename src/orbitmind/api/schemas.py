@@ -13,7 +13,14 @@ from pydantic import BaseModel, Field, model_validator
 from orbitmind.governance.audit import AuditEvent
 from orbitmind.governance.epistemic import EpistemicStatus
 from orbitmind.governance.provenance import ProvenanceRecord
-from orbitmind.mission.models import MissionRequest, MissionStatus, Observer, OutputType
+from orbitmind.mission.models import (
+    MissionRequest,
+    MissionSource,
+    MissionStatus,
+    Observer,
+    OutputType,
+)
+from orbitmind.sources.models import MissionSourceData
 from orbitmind.space.models import OrbitalSourceRecord, OrbitalStateSample
 from orbitmind.verification.models import VerificationFinding
 from orbitmind.visualization.models import ArtifactRecord
@@ -35,6 +42,9 @@ class OrbitPropagationRequest(BaseModel):
     observer_longitude: float | None = Field(default=None, ge=-180.0, le=180.0)
     observer_altitude_km: float | None = Field(default=None, ge=-0.5, le=9.0)
     output_types: list[OutputType] | None = None
+    # Default stays "sample" (offline). "celestrak" requires network + source enabled.
+    source: MissionSource = MissionSource.SAMPLE
+    allow_sample_fallback: bool = False
 
     @model_validator(mode="after")
     def _check_window(self) -> OrbitPropagationRequest:
@@ -60,6 +70,8 @@ class OrbitPropagationRequest(BaseModel):
             step_seconds=self.step_seconds,
             observer=observer,
             output_types=outputs,
+            source=self.source,
+            allow_sample_fallback=self.allow_sample_fallback,
         )
 
 
@@ -80,6 +92,7 @@ class MissionDetailResponse(MissionSummaryResponse):
     """Full mission record including results, provenance, and artifacts."""
 
     source: OrbitalSourceRecord | None
+    source_data: MissionSourceData | None
     units: dict[str, str]
     summary: dict[str, float]
     sample_count: int
@@ -104,6 +117,52 @@ class ArtifactsResponse(BaseModel):
 
     mission_id: str
     artifacts: list[ArtifactRecord]
+
+
+class SourceSummaryResponse(BaseModel):
+    """Compact view of a registered source."""
+
+    source_id: str
+    name: str
+    kind: str
+    description: str
+    enabled: bool
+    network_enabled: bool
+
+
+class SourceCacheView(BaseModel):
+    """Sanitized cache-entry metadata (no internal filesystem path exposed)."""
+
+    cache_key: str
+    source_id: str
+    url: str
+    checksum: str
+    schema_version: str
+    http_status: int
+    content_type: str
+    fetched_at: datetime
+    expires_at: datetime
+    effective_epoch: datetime | None
+    last_success_at: datetime | None
+    last_failure_at: datetime | None
+    failure_reason: str | None
+
+
+class SourceCacheResponse(BaseModel):
+    """Cache entries for a source."""
+
+    source_id: str
+    entries: list[SourceCacheView]
+
+
+class RefreshResultResponse(BaseModel):
+    """Outcome of an explicit refresh (local-development-only endpoint)."""
+
+    source_id: str
+    satellite_id: str
+    outcome: str  # fetched | cached | suppressed | failed | disabled
+    freshness_state: str | None = None
+    message: str
 
 
 class ErrorResponse(BaseModel):

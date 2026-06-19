@@ -7,11 +7,15 @@ safe :class:`~orbitmind.core.errors.ValidationError` on failure.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 
 from orbitmind.core.config import Settings
 from orbitmind.core.errors import ValidationError
-from orbitmind.mission.models import MissionRequest
+from orbitmind.mission.models import MissionRequest, MissionSource
+
+# CelesTrak satellite ids are NORAD catalog numbers (digits only), not arbitrary input.
+_NORAD_ID = re.compile(r"^\d{1,9}$")
 
 
 def validate_mission_request(
@@ -20,9 +24,14 @@ def validate_mission_request(
     supported_satellite_ids: Iterable[str],
 ) -> None:
     """Validate a request against configured safety bounds. Raises on violation."""
-    supported = set(supported_satellite_ids)
-    if request.satellite_id not in supported:
+    if request.source is MissionSource.SAMPLE and request.satellite_id not in set(
+        supported_satellite_ids
+    ):
         raise ValidationError("unsupported satellite identifier")
+    if request.source is MissionSource.CELESTRAK and not _NORAD_ID.match(request.satellite_id):
+        raise ValidationError(
+            "CelesTrak satellite identifier must be a NORAD catalog number (digits)"
+        )
 
     max_seconds = settings.max_propagation_hours * 3600.0
     if request.duration_seconds > max_seconds:

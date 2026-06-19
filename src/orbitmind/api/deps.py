@@ -11,6 +11,7 @@ from orbitmind.core.config import Settings
 from orbitmind.observability.service import ObservabilityService
 from orbitmind.orchestration.orchestrator import PrimeOrchestrator
 from orbitmind.persistence.repositories import SqlAlchemyMissionRepository
+from orbitmind.persistence.source_repository import SqlAlchemySourceRepository
 
 
 def get_container(request: Request) -> AppContainer:
@@ -36,5 +37,15 @@ def get_repository(request: Request) -> Iterator[SqlAlchemyMissionRepository]:
     session = container.database.session()
     try:
         yield SqlAlchemyMissionRepository(session)
+    finally:
+        session.close()
+
+
+def get_source_repository(request: Request) -> Iterator[SqlAlchemySourceRepository]:
+    """Yield a source repository bound to a per-request session, closed afterwards."""
+    container = get_container(request)
+    session = container.database.session()
+    try:
+        yield SqlAlchemySourceRepository(session)
     finally:
         session.close()

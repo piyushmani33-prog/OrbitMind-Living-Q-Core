@@ -46,8 +46,13 @@ class SourceRegistry:
                 checksum=entry["sha256"],
                 test_only=bool(entry.get("test_only", True)),
             )
-            self._records[record.satellite_id] = record
-            self._files[record.satellite_id] = self._dir / entry["file"]
+            path = self._dir / entry["file"]
+            # Index by the friendly id and, as an alias, the NORAD catalog number,
+            # so an external (NORAD-numbered) request can resolve to a sample fixture
+            # for an explicit, opt-in fallback.
+            for key in {record.satellite_id, str(record.norad_cat_id)} - {"None"}:
+                self._records[key] = record
+                self._files[key] = path
 
     def supported_satellite_ids(self) -> set[str]:
         """Identifiers available in the registry."""
