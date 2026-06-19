@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "note": "Bundled, deterministic sample TLE fixtures for offline demonstration and tests. These are STALE elements captured for reproducibility and are NOT live satellite data. Do not represent results derived from them as current satellite status (SR-05).",
+  "fixtures": [
+    {
+      "satellite_id": "ISS",
+      "name": "ISS (ZARYA)",
+      "norad_cat_id": 25544,
+      "file": "iss_zarya.tle",
+      "format": "tle-3line",
+      "source_name": "python-sgp4 reference example (Vallado test vector)",
+      "source_url": "https://pypi.org/project/sgp4/  (documented example TLE; offline copy)",
+      "epoch_utc": "2019-12-09T16:38:29Z",
+      "fixture_created": "2026-06-19",
+      "data_use_note": "Public reference TLE used for library examples. Test-only; not live tracking data.",
+      "sha256": "e20e7db3f19c0ebb5c2d2a10a425fa8440b61452773f35b4ba19c47184576214",
+      "test_only": true
+    }
+  ]
+}
