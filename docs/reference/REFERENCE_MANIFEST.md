@@ -1,60 +1,63 @@
 # Reference Document Manifest
 
-This manifest records the authoritative product-vision / feasibility reference
-documents and their integrity metadata.
+Authoritative product-vision / feasibility source material and its integrity metadata.
 
 ## Inspection record
+- **Inspected (UTC):** 2026-06-19
+- **Method:** SHA-256 over the exact bytes; read-only text extraction via
+  `scripts/extract_docx.py`; DOCX metadata (`docProps/core.xml`, `app.xml`) and
+  embedded media reviewed for sensitive content.
+- **Result:** both expected documents are now **present and inspected** (they were
+  delivered via the user's Downloads folder and copied byte-for-byte into
+  `docs/reference/`; the originals in Downloads are untouched, and the copies'
+  checksums match the originals exactly). Risk **R-001 is now resolved** — see
+  `../architecture/RISK_REGISTER.md`.
 
-- **Date inspected:** 2026-06-19
-- **Inspected by:** principal architect (automated build)
-- **Method:** recursive search of `E:\quantum-project` (excluding `.venv`, `.git`)
-  for `*.docx, *.pdf, *.doc, *.rtf, *.odt`, plus a direct listing of
-  `docs/reference/`.
+## Documents
 
-## Result: reference documents NOT PRESENT
+### 1. OrbitMind Living Q-Core.docx
+| Field | Value |
+|-------|-------|
+| Exact filename | `OrbitMind Living Q-Core.docx` |
+| File type | Microsoft Word (OOXML `.docx`), 155,934 bytes |
+| SHA-256 | `743df017f700b7401591b19a9f8c27e147768be71b85cc9c7ab4aa45f6e47060` |
+| Inspected (UTC) | 2026-06-19 |
+| Purpose | Primary vision + reference architecture for OrbitMind Living Q-Core. |
+| Classification | **Advisory / feasibility** (a synthesis citing official docs). Contains **aspirational** language ("living", "self-improving") that the document itself reframes as bounded engineering. **Not contractually normative.** |
+| Major relevant sections | Executive summary; Core architecture & technology choices (FastAPI/Pydantic/Postgres/pgvector/Redis/Temporal/Celery, sandbox tiers); Knowledge, retrieval, reasoning & Research Autopilot (schema, hybrid retrieval); Quantum Organ, Tool Forge & orchestration; **Data sources & Visual Intelligence** (CelesTrak 2-hour guidance + source policy matrix); Security/operations/cost/evaluation/roadmap. |
+| Tracked by Git | **No** (binary; gitignored via a narrow rule — see Repository decision). |
+| Suitable for a public repo | Content has **no secrets/PII** (empty author/title; `DocSecurity=0`); sensitivity-wise it could be public, but publication is an **owner business decision**. Default: not tracked pending that decision. |
+| Embedded media | 3 PNG diagrams (system spine, Research Autopilot workflow, roadmap) — not representable in the text derivative. |
 
-The expected documents were **not found** in the repository at inspection time —
-this is the **second** confirmed absence (the first was during Phase 0/1).
+### 2. OrbitMind Living Q-Core Feasibility Brief.docx
+| Field | Value |
+|-------|-------|
+| Exact filename | `OrbitMind Living Q-Core Feasibility Brief.docx` |
+| File type | Microsoft Word (OOXML `.docx`), 21,572 bytes |
+| SHA-256 | `aa56ed0bdcf1d42b34ca5d356255e3fcdefa10b7bcd3750eabee950cb9ebbf26` |
+| Inspected (UTC) | 2026-06-19 |
+| Purpose | Feasibility assessment + first-release scope guidance. |
+| Classification | **Advisory / feasibility**; explicitly **rejects** the literal "100% correct autonomous universe-brain" framing. Not contractually normative. |
+| Major relevant sections | Executive assessment; What the product should actually be (five coupled planes; system-spine flow); Recommended reference architecture; Data/science/quantum foundations (CelesTrak 2-hour guidance; data-rights registry); Security/correctness/governance (correctness-in-layers); What to build first; Open questions & limitations. |
+| Tracked by Git | **No** (binary; gitignored). |
+| Suitable for a public repo | No secrets/PII; publication is an owner decision. |
+| Embedded media | None. |
 
-| Expected filename (any of) | SHA-256 | Status | Normativity | Relevant sections |
-|---|---|---|---|---|
-| `OrbitMind Living Q-Core.docx` (vision) | _n/a — file absent_ | **NOT PRESENT** | unknown until provided | unknown |
-| `OrbitMind Living Q-Core Feasibility Brief.docx` | _n/a — file absent_ | **NOT PRESENT** | unknown until provided | unknown |
+## Generated derivatives
+Read-only text extracts (clearly labelled, non-authoritative) are under
+`docs/reference/extracted/` and **are tracked by Git** so the content is
+reviewable/diffable in-repo:
+- `extracted/OrbitMind-Living-Q-Core.extracted.md`
+- `extracted/OrbitMind-Living-Q-Core-Feasibility-Brief.extracted.md`
 
-No SHA-256 checksums can be computed because the files do not exist. **No checksums
-were invented.**
+Extraction is paragraph-text only: **tables are flattened** (structure lost) and
+**images/diagrams are omitted** (the main document's 3 PNG diagrams in particular).
+The original DOCX remain authoritative.
 
-## What was used as the authoritative specification instead
-
-Because the DOCX references are absent, the **owner build prompts** (Phase 0/1 and
-this Phase 2 prompt) are treated as the approved, authoritative specification, as
-the owner explicitly authorized in the Phase 0 instructions:
-
-> "If the documents are absent … do not stop the entire build. Continue using this
-> prompt as the approved project specification and record the missing documents as
-> a risk."
-
-## Action required by the owner
-
-Place the original documents under `docs/reference/`, e.g.:
-
-```
-docs/reference/OrbitMind-Living-Q-Core.docx
-docs/reference/OrbitMind-Living-Q-Core-Feasibility-Brief.docx
-```
-
-When added:
-
-1. Re-run this inspection; compute and record SHA-256 for each file here.
-2. Optionally extract text with the read-only `scripts/extract_docx.py` into
-   `docs/reference/extracted/` (clearly labelled generated derivatives; originals
-   preserved, never modified).
-3. Re-open and complete `docs/architecture/REFERENCE_RECONCILIATION.md` against the
-   *actual* document content.
-4. Close/revise risk **R-001** in `docs/architecture/RISK_REGISTER.md`.
-
-## Related
-
-- Risk: [`RISK_REGISTER.md`](../architecture/RISK_REGISTER.md) → **R-001** (open).
-- Reconciliation: [`REFERENCE_RECONCILIATION.md`](../architecture/REFERENCE_RECONCILIATION.md)
-  (currently reconciled against the build prompt, pending the real documents).
+## Repository decision (originals)
+The binary DOCX are **kept locally and preserved, but not tracked** (gitignored via
+the narrow rule `docs/reference/*.docx` in `.gitignore`). Rationale: there is no Git
+remote and future visibility is unknown; the readable Markdown derivatives + these
+checksums give reproducible, verifiable content in-repo without committing binary
+vision documents that may not be intended for a public repository. The owner can
+remove the ignore rule to track them. **The originals are never deleted.**

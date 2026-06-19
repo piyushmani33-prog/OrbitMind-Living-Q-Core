@@ -42,6 +42,13 @@ data/*.sqlite3
 /cache/*
 !/cache/.gitkeep
 
+# --- Reference source documents (binary; preserved locally, not tracked) ---
+# Narrow rule: only the original .docx vision documents. Their checksums are in
+# docs/reference/REFERENCE_MANIFEST.md and readable derivatives are tracked under
+# docs/reference/extracted/. Remove this rule to track the originals (owner decision).
+docs/reference/*.docx
+docs/reference/*.pdf
+
 # --- Secrets / local environment (never commit) ---
 .env
 .env.*

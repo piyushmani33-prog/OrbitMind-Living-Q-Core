@@ -1,49 +1,29 @@
 # Reference Documents
 
-This directory is the home for the authoritative product/vision source material.
+This directory holds the authoritative product/vision source material.
 
-## Expected documents (currently MISSING)
+## Status: PRESENT and reconciled (2026-06-19)
 
-The following documents are expected here but were **not present** when the
-repository was first built:
+The two reference documents have been delivered, inspected, hashed, and reconciled:
 
-- `OrbitMind Living Q-Core` (vision / product document)
-- `OrbitMind Living Q-Core Feasibility Brief`
+- `OrbitMind Living Q-Core.docx` — primary vision + reference architecture
+- `OrbitMind Living Q-Core Feasibility Brief.docx` — feasibility + first-release scope
 
-## Action required by the owner
+Integrity metadata (SHA-256, classification, sections) is in
+[`REFERENCE_MANIFEST.md`](REFERENCE_MANIFEST.md). The reconciliation of record is
+[`../architecture/REFERENCE_RECONCILIATION.md`](../architecture/REFERENCE_RECONCILIATION.md).
+Risk **R-001** ("reference documents absent") is **closed**.
 
-Place the original documents in this folder, for example:
+## Layout
+- `*.docx` — the **authoritative originals** (binary). They are **preserved locally
+  but gitignored** (narrow rule `docs/reference/*.docx`) pending an owner decision on
+  publishing; their checksums are recorded in the manifest. **Never modify, rename,
+  re-save, or delete them.**
+- `extracted/` — generated, read-only **text derivatives** (tracked by Git) for
+  in-repo review/diffing. Derivatives are NOT authoritative and omit images/tables.
 
-```
-docs/reference/OrbitMind-Living-Q-Core.docx
-docs/reference/OrbitMind-Living-Q-Core-Feasibility-Brief.docx
-```
-
-`.docx`, `.pdf`, or `.md` are all acceptable. Do **not** rename or delete the
-originals once added.
-
-If `.docx` files are added and need to be inspected, a safe, read-only,
-standard-library-only text extractor is provided at:
-
-```
-scripts/extract_docx.py
-```
-
-It unzips the DOCX (a ZIP container) and pulls text from `word/document.xml`
-using only the Python standard library. It does not install any office suite and
-does not modify the source file.
-
-## Current status
-
-Because the reference documents are absent, the build proceeded using the
-**owner's build prompt as the approved project specification**. The missing
-documents are tracked as a risk in
-[`docs/architecture/RISK_REGISTER.md`](../architecture/RISK_REGISTER.md)
-(risk **R-001**).
-
-When the real documents arrive, review them against:
-
-- `docs/requirements/PRODUCT_REQUIREMENTS.md`
-- `docs/architecture/decisions/` (all ADRs)
-
-and record any material conflicts as new ADRs or risk-register entries.
+## Extraction tool
+A safe, read-only, standard-library-only extractor is at `scripts/extract_docx.py`
+(unzips the DOCX and pulls text from `word/document.xml`; no office suite; never
+modifies the source). Re-run it if the originals are updated, then refresh the
+manifest checksums and the reconciliation.
