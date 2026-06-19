@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python (3.12 production baseline)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Ruff (lint)
+        run: python -m ruff check .
+
+      - name: Ruff (format check)
+        run: python -m ruff format --check .
+
+      - name: mypy (strict)
+        run: python -m mypy src
+
+      - name: Alembic migration applies
+        run: python -m alembic upgrade head
+        env:
+          ORBITMIND_DATABASE_URL: sqlite:///./ci.db
+
+      - name: Pytest (+ coverage)
+        run: python -m pytest --cov=orbitmind --cov-report=term-missing
+
+  # Dependency review on PRs (supply-chain guard, SR/R-008).
+  dependency-review:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/dependency-review-action@v4

@@ -1,0 +1,2 @@
+# Generated mission artifacts are written under artifacts/<mission_id>/ at runtime.
+# This directory is intentionally tracked (empty) so the path exists; its contents are gitignored.

@@ -1,0 +1,33 @@
+# Development convenience only. For the Phase 0/1 slice the app uses SQLite and
+# needs no other services. A commented PostgreSQL service shows the future path
+# (ADR-0003); it is intentionally NOT enabled now.
+
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      ORBITMIND_ENV: local
+      ORBITMIND_DATABASE_URL: sqlite:///./data/orbitmind.db
+      ORBITMIND_ARTIFACTS_DIR: /app/artifacts
+    volumes:
+      # Persist the local DB and generated artifacts across container restarts.
+      - ./data:/app/data
+      - ./artifacts:/app/artifacts
+
+  # --- Future PostgreSQL target (Phase 8). Do NOT enable without owner approval. ---
+  # db:
+  #   image: postgres:16
+  #   environment:
+  #     POSTGRES_USER: orbitmind
+  #     POSTGRES_PASSWORD: change-me-in-a-secret-manager
+  #     POSTGRES_DB: orbitmind
+  #   ports:
+  #     - "5432:5432"
+  #   volumes:
+  #     - pgdata:/var/lib/postgresql/data
+  # Then set: ORBITMIND_DATABASE_URL=postgresql+psycopg://orbitmind:...@db:5432/orbitmind
+#
+# volumes:
+#   pgdata:
