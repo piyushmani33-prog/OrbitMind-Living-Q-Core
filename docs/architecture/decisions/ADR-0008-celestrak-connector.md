@@ -43,6 +43,17 @@ licensing terms are not confirmed by any reference document available offline
   offline fixtures, and explicit "requires review" rights labeling (ADR-0009/0010,
   DATA_RIGHTS_AND_SOURCE_POLICY.md).
 
+## Reference reconciliation (2026-06-19)
+The inspected reference documents (citing official CelesTrak GP-data docs) confirm
+the endpoint host, the GP/OMM JSON format, the field set, and the **2-hour update
+cadence**. As a result: (a) the connector's minimum refresh interval is now **floored
+at 7200s** (`CELESTRAK_OFFICIAL_MIN_REFRESH_SECONDS`); (b) R-012 is split into
+**R-012a (technical — closed/mitigated)** and **R-012b (legal/commercial rights —
+open)**; see `CELESTRAK_VERIFICATION.md`. No commercial-use rights are claimed.
+Alpha-5/alphanumeric catalogue numbers remain unsupported (numeric only) — a noted
+future enhancement (R-016).
+
 ## Review trigger
-Revisit when adding a second connector (Phase 2+ pattern), when the official
-endpoint/licensing is confirmed, or if CelesTrak changes its GP JSON schema.
+Revisit when adding a second connector (Phase 2+ pattern), when CelesTrak's
+licensing/commercial terms are confirmed (R-012b), when Alpha-5 ids are needed, or
+if CelesTrak changes its GP JSON schema.

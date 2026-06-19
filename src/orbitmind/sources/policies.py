@@ -21,6 +21,12 @@ from orbitmind.sources.models import (
 CELESTRAK_SOURCE_ID = "celestrak"
 SAMPLE_SOURCE_ID = "sample"
 
+# Official CelesTrak guidance: new GP data is checked only every 2 hours, so there is
+# no reason to poll more often. The policy floors the minimum refresh interval here,
+# so configuration can never poll more frequently than the source permits.
+# Ref: https://celestrak.org/NORAD/documentation/gp-data-formats.php
+CELESTRAK_OFFICIAL_MIN_REFRESH_SECONDS = 7200
+
 
 def _celestrak_definition(settings: Settings) -> SourceDefinition:
     host = urlsplit(settings.celestrak_base_url).hostname or "celestrak.org"
@@ -47,7 +53,10 @@ def _celestrak_definition(settings: Settings) -> SourceDefinition:
         data_category="orbital-elements-gp",
         attribution_text=license_record.attribution_text,
         license=license_record,
-        min_refresh_seconds=settings.celestrak_min_refresh_seconds,
+        # Never poll more often than CelesTrak's official 2-hour guidance.
+        min_refresh_seconds=max(
+            settings.celestrak_min_refresh_seconds, CELESTRAK_OFFICIAL_MIN_REFRESH_SECONDS
+        ),
         cache_ttl_seconds=settings.celestrak_cache_ttl_seconds,
         connect_timeout_seconds=settings.celestrak_connect_timeout_seconds,
         read_timeout_seconds=settings.celestrak_read_timeout_seconds,

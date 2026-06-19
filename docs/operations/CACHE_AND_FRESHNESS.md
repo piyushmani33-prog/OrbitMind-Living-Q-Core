@@ -45,5 +45,7 @@ policy version, checksum, and a limitations note.
 
 ## Tuning (env vars)
 `ORBITMIND_CELESTRAK_CACHE_TTL_SECONDS` (default 7200),
-`ORBITMIND_CELESTRAK_MIN_REFRESH_SECONDS` (default 3600). Do not set the minimum
-refresh below the source's published update cadence.
+`ORBITMIND_CELESTRAK_MIN_REFRESH_SECONDS` (default 7200). The CelesTrak policy
+**floors** this at 7200s (the official 2-hour cadence): configuring a smaller value
+has no effect, so the connector never polls more often than the source permits.
+See `../architecture/CELESTRAK_VERIFICATION.md`.

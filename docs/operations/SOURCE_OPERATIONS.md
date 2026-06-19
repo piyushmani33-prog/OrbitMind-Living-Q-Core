@@ -14,8 +14,10 @@ ORBITMIND_CELESTRAK_ENABLED=true
 Optional tuning (see `.env.example`): base URL, timeouts, retries, cache TTL,
 minimum refresh interval, max response bytes.
 
-> The CelesTrak endpoint is **configurable and unverified offline** (risk R-012).
-> Verify it against the official CelesTrak documentation before enabling live use.
+> The CelesTrak endpoint/format/cadence are **verified** against official GP-data
+> documentation (R-012a closed; see `../architecture/CELESTRAK_VERIFICATION.md`); the
+> minimum poll interval is floored at the official 2 hours. **Commercial/redistribution
+> rights remain unconfirmed** (R-012b open) — review CelesTrak's terms before such use.
 
 ## Source API endpoints
 All are local-development-only (no authentication yet):

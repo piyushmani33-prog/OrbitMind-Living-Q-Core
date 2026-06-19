@@ -6,6 +6,7 @@ import httpx
 import pytest
 from tests.conftest import make_transport
 
+from orbitmind.core.config import Settings
 from orbitmind.sources.errors import (
     DisallowedRequestError,
     NetworkDisabledError,
@@ -13,9 +14,16 @@ from orbitmind.sources.errors import (
 )
 from orbitmind.sources.http_client import SafeHttpFetcher
 from orbitmind.sources.models import SourcePolicy
-from orbitmind.sources.policies import SourceCatalog
+from orbitmind.sources.policies import CELESTRAK_OFFICIAL_MIN_REFRESH_SECONDS, SourceCatalog
 
 URL = "https://celestrak.org/NORAD/elements/gp.php"
+
+
+def test_min_refresh_floored_at_official_guidance() -> None:
+    # Even if configured below CelesTrak's 2-hour guidance, the policy must not poll faster.
+    catalog = SourceCatalog(Settings(celestrak_min_refresh_seconds=60))
+    policy = catalog.get("celestrak").policy
+    assert policy.min_refresh_seconds == CELESTRAK_OFFICIAL_MIN_REFRESH_SECONDS == 7200
 
 
 def _policy(catalog: SourceCatalog, **overrides: object) -> SourcePolicy:

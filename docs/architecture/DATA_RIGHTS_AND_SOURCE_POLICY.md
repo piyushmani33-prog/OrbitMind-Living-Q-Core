@@ -27,8 +27,9 @@ network-enabled flag, and policy version.
   redistribution or commercial use.
 - `requires_review = true`, `commercial_use_confirmed = false`. **No commercial
   rights are claimed.**
-- Endpoint is configurable and unverified offline (risk R-012); not asserted as
-  authoritative.
+- Endpoint/format/cadence **verified** against official GP-data docs (R-012a closed;
+  `CELESTRAK_VERIFICATION.md`); min poll interval floored at the official 2 hours.
+  **Legal/commercial rights remain unconfirmed (R-012b open).**
 
 ## Liveness / freshness honesty
 External data is classified and **never** presented as live when it is not (see

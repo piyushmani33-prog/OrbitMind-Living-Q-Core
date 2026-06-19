@@ -56,7 +56,9 @@ class Settings(BaseSettings):
     celestrak_read_timeout_seconds: float = 10.0
     celestrak_max_retries: int = 2
     celestrak_cache_ttl_seconds: int = 7200  # 2h: do not refetch within this window
-    celestrak_min_refresh_seconds: int = 3600  # 1h: minimum interval between live fetches
+    # CelesTrak checks for new GP data only every 2 hours; do not poll more often.
+    # The connector policy floors this at the official 7200s regardless of config.
+    celestrak_min_refresh_seconds: int = 7200  # 2h official minimum (CelesTrak guidance)
     celestrak_max_response_bytes: int = 1_048_576  # 1 MiB response-size cap
 
     # Controlled cache directory for raw source payloads (metadata lives in the DB).

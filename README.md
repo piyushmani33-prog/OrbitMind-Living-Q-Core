@@ -115,7 +115,8 @@ ORBITMIND_CELESTRAK_ENABLED=true
 # configurable (verify the endpoint against official CelesTrak docs first):
 ORBITMIND_CELESTRAK_BASE_URL=https://celestrak.org/NORAD/elements/gp.php
 ORBITMIND_CELESTRAK_CACHE_TTL_SECONDS=7200
-ORBITMIND_CELESTRAK_MIN_REFRESH_SECONDS=3600
+# CelesTrak checks for new GP data only every 2h; the policy floors this at 7200s.
+ORBITMIND_CELESTRAK_MIN_REFRESH_SECONDS=7200
 ```
 
 ### Sample vs CelesTrak
@@ -188,8 +189,10 @@ status, checksum). Binary images are never stored in the database.
 - Single-user / single-tenant; no auth yet (interfaces designed for it). The source
   endpoints (incl. refresh) are local-development-only.
 - In-process synchronous workflow (no durable/long-running workflows yet).
-- CelesTrak endpoint + licensing are unverified offline (risk R-012); the connector
-  is configurable, offline-tested, and rights are labelled "requires review".
+- CelesTrak endpoint/format/cadence are verified against official docs (R-012a
+  closed; `docs/architecture/CELESTRAK_VERIFICATION.md`); its **legal/commercial-use
+  rights remain unconfirmed** (R-012b open) and are labelled "requires review".
+  Alpha-5 (alphanumeric) catalogue ids are not yet supported (numeric only, R-016).
 
 ## Roadmap
 
