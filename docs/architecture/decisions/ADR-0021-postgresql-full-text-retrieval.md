@@ -9,9 +9,13 @@ ADR-0022). It must work in offline SQLite tests and in production PostgreSQL.
 
 ## Decision
 - **Candidate selection is dialect-aware; ranking is identical across dialects.**
-  - On **PostgreSQL**, candidates are selected with native full-text search:
-    `to_tsvector('english', search_text) @@ plainto_tsquery('english', :q)`, backed by a
-    GIN index (created PostgreSQL-conditionally in the Phase 3B migration).
+  - On **PostgreSQL**, candidates are selected with native full-text search using
+    **OR (any-term) semantics**: the per-term tsqueries are OR'd —
+    `to_tsvector('english', search_text) @@ (plainto_tsquery(:t0) || plainto_tsquery(:t1) || …)`
+    — backed by a GIN index (created PostgreSQL-conditionally in the Phase 3B migration).
+    Per-term OR is used deliberately: a single `plainto_tsquery(:q)` ANDs all terms and
+    would zero-result queries that the lexical backend answers (validated 2026-06-20).
+    Terms are bound parameters, never interpolated (injection-safe).
   - On **SQLite**, candidates are selected by exact-term matching over the same
     `search_text` (no `tsvector`); this is the deterministic lexical fallback.
 - **One explicit ranking formula** (`memory/ranking.py`) is applied in Python to the
@@ -37,6 +41,14 @@ ADR-0022). It must work in offline SQLite tests and in production PostgreSQL.
 - Fast offline tests and explainable, reproducible ranking; production gains indexed
   full-text candidate selection.
 - A small dialect-aware seam must be maintained.
+
+## Validation (2026-06-20)
+Exercised against real PostgreSQL 16.13 (psycopg 3.3.4): the GIN FTS index exists and is
+valid; `EXPLAIN` shows a Bitmap Index Scan on it when forced (seq scan only because the
+fixture corpus is tiny); all 11 validation queries return `backend=postgres-fts`; gold
+evaluation on PostgreSQL scores recall@5 = MRR = nDCG = 1.0 with full citation
+completeness and reproducible orderings. See
+[POSTGRESQL_LOCAL_OPERATIONS.md](../../operations/POSTGRESQL_LOCAL_OPERATIONS.md).
 
 ## Review trigger
 Revisit if ranking quality needs `ts_rank`/BM25, or if corpus size outgrows the

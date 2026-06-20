@@ -35,3 +35,22 @@ Evaluation runs on the active dialect. On SQLite it exercises the deterministic 
 backend; on PostgreSQL it exercises full-text candidate selection. The ranking formula is
 identical; only candidate selection differs (see
 [../architecture/DETERMINISTIC_RETRIEVAL.md](../architecture/DETERMINISTIC_RETRIEVAL.md)).
+
+## PostgreSQL evaluation of record (2026-06-20)
+Run against real PostgreSQL 16.13 on the bundled gold dataset (5 queries):
+
+| Metric | SQLite | PostgreSQL |
+|--------|--------|------------|
+| recall@5 | 1.0 | 1.0 |
+| MRR | 1.0 | 1.0 |
+| nDCG@5 | 1.0 | 1.0 |
+| citation completeness | 1.0 | 1.0 |
+| duplicate-result rate | 0.0 | 0.0 |
+| zero-result rate | 0.0 | 0.0 |
+| reproducible | True | True |
+
+The metrics match because both backends use OR (any-term) matching; PostgreSQL stemming is
+the only intended difference. (An earlier single-`plainto_tsquery` implementation ANDed
+terms and produced zero_result_rate = 0.2 on PostgreSQL — fixed by OR'ing per-term
+tsqueries, not by changing the gold dataset.) Reproduced by
+`scripts/pg_validate.py` and `test_gold_evaluation_on_postgres`.

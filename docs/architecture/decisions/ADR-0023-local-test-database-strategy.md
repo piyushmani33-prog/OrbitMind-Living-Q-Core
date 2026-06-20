@@ -32,6 +32,16 @@ running a database server.
 - Fast, hermetic default tests; production dialect remains exercisable on demand.
 - Two retrieval candidate paths to maintain, clearly separated and labelled.
 
+## Validation (2026-06-20)
+The `postgres` marker is implemented (`tests/integration/test_postgres_memory.py`, 13
+tests) and skips cleanly unless `ORBITMIND_TEST_POSTGRES_URL` (a disposable DB) is set.
+Run locally and green against PostgreSQL 16.13; a CI `postgres-integration` job runs them
+against a PostgreSQL 16 service container while the default offline job is unchanged. The
+default SQLite suite stays green (190 passed, 13 postgres skipped). A real dialect defect
+was found and fixed during validation: SQLite does not enforce foreign keys by default, so
+an insert-ordering bug (children before parents) only surfaced on PostgreSQL — fixed by
+flushing FK parents before children.
+
 ## Review trigger
 Revisit if a lightweight, embeddable PostgreSQL-compatible test engine becomes viable,
 or if dialect drift causes defects.

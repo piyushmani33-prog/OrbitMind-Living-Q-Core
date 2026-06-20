@@ -33,6 +33,14 @@ introduces full-text retrieval, which benefits from a real RDBMS engine.
 - A small amount of dialect-aware code (retrieval candidate selection, the FTS index)
   must be maintained and clearly labelled.
 
+## Validation (2026-06-20)
+Validated against a real PostgreSQL **16.13** (driver psycopg **3.3.4**) via the Compose
+profile: the full migration chain reaches head on a **fresh** PostgreSQL database (39
+tables), PostgreSQL-specific DDL (FTS GIN index) succeeds, no migration falls back to
+SQLite behaviour, existing satellite/source/small-body tables are intact, and a
+`pg_dump`/`pg_restore` development smoke test round-trips counts + checksums. SQLite
+remains the default for offline unit tests.
+
 ## Review trigger
 Revisit if concurrency/scale needs outgrow a single PostgreSQL instance, or if a
 managed vector/search service is adopted.

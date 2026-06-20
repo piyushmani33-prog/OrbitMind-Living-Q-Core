@@ -14,7 +14,7 @@ docker compose --profile postgres up -d          # start a local PostgreSQL 16
 pip install -e .[postgres]                        # install the psycopg driver
 
 # Local-only, throwaway credentials (never use in production, never commit real ones):
-export ORBITMIND_DATABASE_URL="postgresql+psycopg://orbitmind:orbitmind@localhost:5432/orbitmind"
+export ORBITMIND_DATABASE_URL="postgresql+psycopg://orbitmind:orbitmind@127.0.0.1:55432/orbitmind"
 
 alembic upgrade head                              # apply all migrations
 ```

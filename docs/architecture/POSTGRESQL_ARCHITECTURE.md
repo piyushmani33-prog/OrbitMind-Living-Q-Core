@@ -37,3 +37,13 @@ placeholders. No database starts automatically; no cloud resource is created.
 Additive, reversible Alembic migrations; **no destructive migration of user data** and
 no automatic migration of an owner's production database without explicit approval. See
 [../operations/DATABASE_MIGRATION_BACKUP.md](../operations/DATABASE_MIGRATION_BACKUP.md).
+
+## Validated against real PostgreSQL (2026-06-20)
+Exercised on PostgreSQL **16.13** (psycopg **3.3.4**): fresh-DB migration to head (39
+tables), FTS GIN index verified by query-plan inspection, 13 live `postgres` integration
+tests, gold evaluation recall@5 = 1.0, and a `pg_dump`/`pg_restore` smoke test. A real
+FK-ordering defect (insert children before parents) that SQLite's FK-off default had
+masked was found and fixed. The local Compose service publishes host port **55432**
+(→ container 5432) to avoid colliding with any host PostgreSQL on 5432; on Windows connect
+via `127.0.0.1` (not `localhost`). See
+[../operations/POSTGRESQL_LOCAL_OPERATIONS.md](../operations/POSTGRESQL_LOCAL_OPERATIONS.md).

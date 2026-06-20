@@ -35,6 +35,16 @@ confirm retrieval is healthy and reproducible. Because citations carry the chunk
 checksum and version, any drift between the restored database and the source documents is
 detectable rather than silent.
 
+## Development smoke test of record (2026-06-20)
+A `pg_dump`/`pg_restore` development smoke test was run against PostgreSQL 16.13 (this is
+a **development** smoke test, not a production disaster-recovery certification): a small
+corpus (1 document/5 chunks, 1 concept, 1 claim, 1 evidence link, 1 graph edge with an
+existing-domain entity reference) was ingested, dumped in custom format, and restored into
+a separate disposable database. Row counts and the chunk checksum were **identical** across
+source and restored databases, and the restored database served a real `postgres-fts`
+retrieval query with a version-pinned citation. Host PostgreSQL tools were unavailable, so
+`pg_dump`/`pg_restore` were run inside the PostgreSQL container (`docker exec`).
+
 ## Migrations are non-destructive
 Phase 3B migrations are additive and reversible; an owner's production database is never
 migrated automatically without explicit approval (ADR-0018).

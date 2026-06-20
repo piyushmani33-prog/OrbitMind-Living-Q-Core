@@ -15,10 +15,14 @@ parameters.
 ## Pipeline
 1. Tokenize the query; drop curated stopwords; optionally expand with concept/domain
    terms (a soft signal).
-2. **Dialect-aware candidate selection:**
-   - **PostgreSQL:** `to_tsvector('english', search_text) @@ plainto_tsquery('english', :q)`,
-     backed by the `ix_document_chunks_fts` GIN index.
-   - **SQLite:** exact-term matching over the same `search_text` (deterministic fallback).
+2. **Dialect-aware candidate selection (OR semantics on both):**
+   - **PostgreSQL:** the per-term tsqueries are OR'd —
+     `to_tsvector('english', search_text) @@ (plainto_tsquery(:t0) || plainto_tsquery(:t1) || …)`,
+     backed by the `ix_document_chunks_fts` GIN index. (Per-term OR is used deliberately
+     instead of a single `plainto_tsquery`, which would AND all terms and could
+     zero-result a query that the lexical backend would answer.) Terms are bound
+     parameters, never interpolated.
+   - **SQLite:** exact-term (any-term) matching over the same `search_text`.
 3. **One explicit ranking formula** (`ranking.py`) scores candidates identically on both
    dialects:
    `total = lexical(distinct matched terms + 0.05·occurrences) + title_boost(0.5) +
@@ -33,7 +37,17 @@ epistemic status (`assumption` — source text is a source assertion), verificat
 truncated states are explicit.
 
 ## SQLite vs PostgreSQL — an honest difference
-The **ranking formula is identical**; only candidate *selection* differs. PostgreSQL FTS
-stems, so its candidate set can differ from SQLite's exact-term set. The backend is
-labelled on every result; SQLite retrieval is **not** claimed identical to PostgreSQL
-ranking. This is asserted in tests (`test_postgres_backend_uses_fts_filter_and_is_labelled`).
+The **ranking formula is identical** and both backends use **OR (any-term) matching**, so
+the candidate *sets* now align except for one intended difference: **PostgreSQL stems**
+(e.g. "asteroids" matches "asteroid"), while the SQLite fallback matches exact terms. The
+backend (`postgres-fts` vs `deterministic-lexical`) is labelled on every result; SQLite
+retrieval is **not** claimed identical to PostgreSQL ranking. Asserted in
+`test_postgres_backend_uses_fts_filter_and_is_labelled` (SQLite) and the live
+`tests/integration/test_postgres_memory.py` suite.
+
+## Query plan (validated 2026-06-20)
+On the bundled corpus (~324 chunks) the planner chooses a **sequential scan** for the FTS
+predicate because the table is tiny — this is correct cost-based behaviour, not a missing
+index. Forcing `enable_seqscan=off` produces a **Bitmap Index Scan on
+`ix_document_chunks_fts`** (~0.3 ms vs ~33 ms), confirming the GIN index is valid and
+used once the table is large enough to warrant it.

@@ -55,6 +55,14 @@ generative answer synthesis, no LLM, no network.** The Phase 3A object model is 
 foundation the knowledge graph indexes. See
 [SCIENTIFIC_MEMORY.md](SCIENTIFIC_MEMORY.md).
 
+**PostgreSQL closure (validated 2026-06-20):** exercised against real PostgreSQL 16.13
+(psycopg 3.3.4) — fresh-DB migration to head, FTS GIN index verified (query plan inspected),
+13 live `postgres` integration tests green, gold evaluation recall@5 = 1.0, `pg_dump`/
+`pg_restore` smoke test, and a CI `postgres-integration` service-container job. A real
+FK-ordering defect masked by SQLite was found and fixed. SQLite remains the default for
+offline tests. Phase 3B is **formally complete**. See
+[POSTGRESQL_LOCAL_OPERATIONS.md](../operations/POSTGRESQL_LOCAL_OPERATIONS.md).
+
 ### Later Phase-3 family work (planned, deferred)
 JPL Horizons live ephemerides; planetary/lunar ephemerides; debris collision risk;
 space-weather ingestion (NOAA SWPC); astronomy catalogues (stars/galaxies); radio-signal
