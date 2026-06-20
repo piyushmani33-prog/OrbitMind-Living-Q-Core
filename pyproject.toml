@@ -36,6 +36,11 @@ quantum = [
     "qiskit>=1.2",
     "qiskit-aer>=0.15",
 ]
+# PostgreSQL production system-of-record driver (ADR-0018). NOT required for SQLite
+# unit tests or basic local development; install only to run against PostgreSQL.
+postgres = [
+    "psycopg[binary]>=3.2",
+]
 dev = [
     "pytest>=8.0",
     "pytest-cov>=5.0",

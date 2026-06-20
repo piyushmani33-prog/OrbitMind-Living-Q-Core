@@ -64,6 +64,15 @@ class Database:
         """Create all tables from the ORM metadata (local/dev convenience)."""
         Base.metadata.create_all(self.engine)
 
+    @property
+    def dialect(self) -> str:
+        """The SQLAlchemy dialect name (e.g. 'sqlite', 'postgresql')."""
+        return self.engine.dialect.name
+
+    @property
+    def is_postgres(self) -> bool:
+        return self.engine.dialect.name == "postgresql"
+
     def session(self) -> Session:
         """Open a new session."""
         return self._session_factory()

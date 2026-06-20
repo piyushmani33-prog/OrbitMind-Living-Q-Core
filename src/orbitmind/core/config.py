@@ -83,8 +83,28 @@ class Settings(BaseSettings):
     jpl_max_results: int = 200  # hard cap on returned rows (query + CAD)
     jpl_max_query_span_days: int = 366  # max CAD date-range span
 
+    # --- Scientific memory (Phase 3B) ---
+    # Ingestion is allowlisted to approved directories (relative to the project root).
+    memory_ingestion_roots: tuple[str, ...] = (
+        "docs/reference/extracted",
+        "docs/architecture",
+        "data/samples/memory",
+    )
+    memory_allowed_extensions: tuple[str, ...] = (".md", ".txt")
+    memory_max_file_bytes: int = 2_000_000  # 2 MiB per document
+    memory_chunk_max_chars: int = 1200
+    memory_chunk_overlap_chars: int = 150
+    memory_fts_language: str = "english"  # PostgreSQL FTS configuration
+    memory_max_search_results: int = 50
+    # Embeddings/vector search are DISABLED by default (null provider; ADR-0022).
+    memory_embeddings_enabled: bool = False
+
     # Controlled cache directory for raw source payloads (metadata lives in the DB).
     cache_dir: Path = PROJECT_ROOT / "cache"
+
+    def resolved_ingestion_roots(self) -> tuple[Path, ...]:
+        """Absolute, resolved allowlisted ingestion roots."""
+        return tuple(self._resolve(Path(r)) for r in self.memory_ingestion_roots)
 
     def resolved_artifacts_dir(self) -> Path:
         """Absolute, resolved artifacts directory (used as the path-traversal root)."""

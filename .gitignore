@@ -42,6 +42,15 @@ data/*.sqlite3
 /cache/*
 !/cache/.gitkeep
 
+# --- Phase 3B: scientific memory (never commit local stores/output) ---
+# PostgreSQL data volumes, DB dumps/backups, ingestion output, and any embeddings.
+pgdata/
+*.dump
+*.sql.gz
+/ingestion_output/
+*.embeddings
+*.npy
+
 # --- Reference source documents (binary; preserved locally, not tracked) ---
 # Narrow rule: only the original .docx vision documents. Their checksums are in
 # docs/reference/REFERENCE_MANIFEST.md and readable derivatives are tracked under
