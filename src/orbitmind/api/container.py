@@ -14,6 +14,7 @@ import httpx
 from orbitmind.core.config import Settings, get_settings
 from orbitmind.memory.service import MemoryService
 from orbitmind.observability.service import ObservabilityService
+from orbitmind.optimization.service import OptimizationService
 from orbitmind.orchestration.orchestrator import PrimeOrchestrator
 from orbitmind.orchestration.source_resolver import SourceResolver
 from orbitmind.persistence.database import Database
@@ -114,6 +115,11 @@ class AppContainer:
 
         # --- Phase 3B: scientific memory service ---
         self.memory_service = MemoryService(settings=self.settings, database=self.database)
+
+        # --- Phase 4A: bounded quantum optimization service ---
+        self.optimization_service = OptimizationService(
+            settings=self.settings, database=self.database
+        )
 
     def init_storage(self) -> None:
         """Ensure the schema exists and the source catalog is recorded (local/dev)."""
