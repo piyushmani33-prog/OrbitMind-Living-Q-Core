@@ -1,0 +1,10 @@
+{
+  "signature": { "source": "NASA/JPL Small-Body Database (SBDB) API", "version": "1.3" },
+  "code": "300",
+  "message": "specified object was matched by multiple objects",
+  "list": [
+    { "pdes": "2001 AB", "name": "" },
+    { "pdes": "2002 AB", "name": "" },
+    { "pdes": "2003 AB", "name": "" }
+  ]
+}

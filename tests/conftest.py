@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
@@ -65,11 +66,15 @@ def _block_real_network(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("httpx.AsyncHTTPTransport.handle_async_request", _blocked)
 
 
-def build_celestrak_omm(epoch_iso: str = "2026-06-19T12:00:00.000000") -> dict[str, Any]:
-    """A realistic CelesTrak GP/OMM JSON record (ISS) with a chosen EPOCH."""
+def build_celestrak_omm(epoch_iso: str | None = None) -> dict[str, Any]:
+    """A realistic CelesTrak GP/OMM JSON record (ISS) with a chosen EPOCH.
+
+    The default EPOCH is "now" so a freshly-fetched record classifies as CURRENT
+    regardless of the calendar date (the fixed orbital elements are unaffected).
+    """
     full = dict(exporter.export_omm(Satrec.twoline2rv(_ISS_L1, _ISS_L2), "ISS (ZARYA)"))
     omm = {k: v for k, v in full.items() if k in _CELESTRAK_KEYS}
-    omm["EPOCH"] = epoch_iso
+    omm["EPOCH"] = epoch_iso or dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT%H:%M:%S.%f")
     return omm
 
 
@@ -162,6 +167,95 @@ def celestrak_store(celestrak_settings: Settings) -> SourceCacheStore:
 @pytest.fixture
 def celestrak_catalog(celestrak_settings: Settings) -> SourceCatalog:
     return SourceCatalog(celestrak_settings)
+
+
+# --- JPL small-body (Phase 3A) fixtures ------------------------------------
+_JPL_FIXTURES = Path(__file__).parent / "fixtures" / "jpl"
+
+
+def load_jpl_fixture(name: str) -> dict[str, Any]:
+    """Load a JPL response fixture JSON by filename."""
+    return json.loads((_JPL_FIXTURES / name).read_text(encoding="utf-8"))
+
+
+def make_jpl_transport(
+    *,
+    sbdb: dict[str, Any] | None = None,
+    query: dict[str, Any] | None = None,
+    cad: dict[str, Any] | None = None,
+    status_code: int = 200,
+    content_type: str = "application/json",
+    raw_body: bytes | None = None,
+    exc: type[Exception] | None = None,
+) -> httpx.MockTransport:
+    """A MockTransport routing JPL requests by endpoint path to canned responses."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if exc is not None:
+            raise exc("synthetic transport error")
+        assert request.url.host == "ssd-api.jpl.nasa.gov"
+        headers = {"content-type": content_type}
+        if raw_body is not None:
+            return httpx.Response(status_code, content=raw_body, headers=headers)
+        path = request.url.path
+        body = (
+            sbdb
+            if path.endswith("/sbdb.api")
+            else (
+                query
+                if path.endswith("/sbdb_query.api")
+                else (cad if path.endswith("/cad.api") else None)
+            )
+        )
+        if body is None:
+            return httpx.Response(404, json={"message": "no fixture"}, headers=headers)
+        return httpx.Response(status_code, json=body, headers=headers)
+
+    return httpx.MockTransport(handler)
+
+
+@pytest.fixture
+def jpl_settings(tmp_path: Path) -> Settings:
+    """Settings with network + JPL SBDB + CAD enabled (for connector/API tests)."""
+    return Settings(
+        database_url=f"sqlite:///{(tmp_path / 'jpl.db').as_posix()}",
+        artifacts_dir=tmp_path / "artifacts",
+        cache_dir=tmp_path / "cache",
+        network_enabled=True,
+        jpl_sbdb_enabled=True,
+        jpl_cad_enabled=True,
+        env="test",
+    )
+
+
+@pytest.fixture
+def jpl_db(jpl_settings: Settings) -> Database:
+    db = Database(jpl_settings.database_url)
+    db.create_all()
+    return db
+
+
+@pytest.fixture
+def jpl_store(jpl_settings: Settings) -> SourceCacheStore:
+    return SourceCacheStore(jpl_settings.resolved_cache_dir())
+
+
+@pytest.fixture
+def jpl_catalog(jpl_settings: Settings) -> SourceCatalog:
+    return SourceCatalog(jpl_settings)
+
+
+@pytest.fixture
+def jpl_client_factory(
+    jpl_settings: Settings,
+) -> Callable[[httpx.MockTransport], TestClient]:
+    """Factory: a TestClient whose JPL connectors use the given transport."""
+
+    def build(transport: httpx.MockTransport) -> TestClient:
+        container = AppContainer(jpl_settings, jpl_transport=transport, jpl_sleep=lambda _: None)
+        return TestClient(create_app(container))
+
+    return build
 
 
 @pytest.fixture
