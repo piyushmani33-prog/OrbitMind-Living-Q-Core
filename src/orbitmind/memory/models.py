@@ -81,6 +81,8 @@ class GraphEdgeKind(StrEnum):
     PRODUCED = "produced"
     DERIVES_FROM = "derives-from"
     CITES = "cites"
+    SOLVED_BY = "solved-by"  # Phase 4A
+    COMPARED_AGAINST = "compared-against"  # Phase 4A
 
 
 class EntityKind(StrEnum):
@@ -97,6 +99,13 @@ class EntityKind(StrEnum):
     SOURCE_POLICY = "source-policy"
     VERIFICATION_FINDING = "verification-finding"
     VISUAL_ARTIFACT = "visual-artifact"
+    # Phase 4A — optimization
+    OPTIMIZATION_PROBLEM = "optimization-problem"
+    SOLVER_RUN = "solver-run"
+    QUANTUM_EXPERIMENT = "quantum-experiment"
+    BENCHMARK_COMPARISON = "benchmark-comparison"
+    OPTIMIZATION_ARTIFACT = "optimization-artifact"
+    SCHEDULE = "schedule"
 
 
 class IngestionStatus(StrEnum):
