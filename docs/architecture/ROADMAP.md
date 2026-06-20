@@ -43,10 +43,17 @@ visual artifacts (model-estimate; ADR-0017), full provenance/freshness/audit. As
 and comets use heliocentric models — **never SGP4**. SQLite remains the store for this
 bounded phase.
 
-### Phase 3B — Scientific memory & PostgreSQL foundation (planned)
-PostgreSQL as system of record; full-text retrieval; optional pgvector; documents,
-chunks, concepts, claims, evidence; citation/provenance evaluation. The Phase 3A object
-model is the entity foundation a knowledge graph will index.
+### Phase 3B — Scientific memory & PostgreSQL foundation ✅ (this build)
+PostgreSQL as production system-of-record (SQLite retained for offline tests; ADR-0018);
+deterministic allowlisted ingestion with dedup + versioning; reproducible structure-aware
+chunking; concepts/terminology; typed claims + evidence + version-pinned citations
+(ADR-0020); a lightweight relational knowledge graph (bounded, cycle-safe); deterministic
+retrieval — PostgreSQL full-text candidate selection with an explicit ranking formula,
+SQLite labelled lexical fallback (ADR-0021); offline gold retrieval evaluation; memory
+APIs. Embeddings/pgvector are **optional and disabled by default** (ADR-0022). **No
+generative answer synthesis, no LLM, no network.** The Phase 3A object model is the entity
+foundation the knowledge graph indexes. See
+[SCIENTIFIC_MEMORY.md](SCIENTIFIC_MEMORY.md).
 
 ### Later Phase-3 family work (planned, deferred)
 JPL Horizons live ephemerides; planetary/lunar ephemerides; debris collision risk;

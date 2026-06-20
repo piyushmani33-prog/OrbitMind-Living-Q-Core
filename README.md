@@ -184,6 +184,35 @@ computed**. JPL data rights are labelled *requires review*. See
 [UNIFIED_SPACE_OBJECT_MODEL.md](docs/architecture/UNIFIED_SPACE_OBJECT_MODEL.md), and
 [JPL_SOURCE_OPERATIONS.md](docs/operations/JPL_SOURCE_OPERATIONS.md).
 
+## Scientific memory (Phase 3B)
+
+Durable, queryable memory for scientific documents, concepts, claims, evidence,
+citations, lightweight graph relations, and **deterministic retrieval**. **Memory is
+not truth and retrieval is not verification**: outputs are ranked, version-pinned
+**evidence passages — never a generated answer** (answer synthesis is deferred).
+
+- **PostgreSQL** is the production system-of-record; **SQLite** remains the default for
+  fast offline tests (ADR-0018/0023). Only `ORBITMIND_DATABASE_URL` changes between them.
+- Allowlisted, secret-rejecting, deterministic ingestion (no execution, no network);
+  content-checksum dedup + immutable versioning; reproducible structure-aware chunking.
+- Retrieval: PostgreSQL full-text (GIN `tsvector`) candidate selection with an explicit,
+  identical ranking formula on both dialects; SQLite uses a labelled deterministic
+  lexical fallback (ADR-0021). Embeddings/`pgvector` are **optional and disabled by
+  default** (ADR-0022).
+
+### Endpoints
+`POST /api/v1/memory/ingestion-runs`, `GET /api/v1/memory/ingestion-runs/{id}`,
+`GET /api/v1/memory/documents[/{id}][/chunks]`, `POST /api/v1/memory/search`,
+`POST|GET /api/v1/memory/concepts[/{id}]`, `POST|GET /api/v1/memory/claims[/{id}]`,
+`POST /api/v1/memory/evidence`, `GET /api/v1/memory/graph/{entity_id}/neighbors`,
+`POST /api/v1/memory/evaluations`.
+
+See [SCIENTIFIC_MEMORY.md](docs/architecture/SCIENTIFIC_MEMORY.md),
+[CLAIMS_AND_EVIDENCE.md](docs/architecture/CLAIMS_AND_EVIDENCE.md),
+[DETERMINISTIC_RETRIEVAL.md](docs/architecture/DETERMINISTIC_RETRIEVAL.md),
+[POSTGRESQL_ARCHITECTURE.md](docs/architecture/POSTGRESQL_ARCHITECTURE.md), and
+[POSTGRESQL_LOCAL_OPERATIONS.md](docs/operations/POSTGRESQL_LOCAL_OPERATIONS.md).
+
 ## Testing
 
 ```bash
@@ -231,7 +260,8 @@ status, checksum). Binary images are never stored in the database.
 
 ## Roadmap
 
-Phase 2 real connectors → Phase 3 memory/retrieval (PostgreSQL/pgvector) →
+Phase 2 real connectors → Phase 3A small-body intelligence → **Phase 3B scientific
+memory + deterministic retrieval (PostgreSQL; pgvector deferred/optional)** →
 Phase 4 bounded quantum-vs-classical optimization → Phase 5 advanced visuals →
 Phase 6 Tool Forge → Phase 7 Research Autopilot → Phase 8 cloud hardening.
 See [`docs/architecture/ROADMAP.md`](docs/architecture/ROADMAP.md).
