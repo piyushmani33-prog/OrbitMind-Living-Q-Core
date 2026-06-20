@@ -1,6 +1,23 @@
-# Development convenience only. For the Phase 0/1 slice the app uses SQLite and
-# needs no other services. A commented PostgreSQL service shows the future path
-# (ADR-0003); it is intentionally NOT enabled now.
+# Local development services for OrbitMind.
+#
+# The default `api` service uses SQLite and needs no other services. PostgreSQL is the
+# Phase 3B production system-of-record (ADR-0018) and is OPTIONAL for local work — it is
+# gated behind the `postgres` profile and never starts automatically. SQLite remains the
+# default for unit tests and basic development.
+#
+# Start PostgreSQL only when you want to exercise PostgreSQL full-text retrieval:
+#
+#     docker compose --profile postgres up -d
+#
+# The container's PostgreSQL is published on host port 55432 (NOT 5432) so it cannot
+# collide with, or be confused for, any PostgreSQL already running on the host. Point the
+# app at it (LOCAL-ONLY, throwaway development password; no real secret is committed):
+#
+#     ORBITMIND_DATABASE_URL=postgresql+psycopg://orbitmind:orbitmind@localhost:55432/orbitmind
+#
+# Run migrations with:  alembic upgrade head
+# Tear it down (without deleting source files) with:  docker compose --profile postgres down
+# Destroy the data volume too with:                   docker compose --profile postgres down -v
 
 services:
   api:
@@ -16,18 +33,25 @@ services:
       - ./data:/app/data
       - ./artifacts:/app/artifacts
 
-  # --- Future PostgreSQL target (Phase 8). Do NOT enable without owner approval. ---
-  # db:
-  #   image: postgres:16
-  #   environment:
-  #     POSTGRES_USER: orbitmind
-  #     POSTGRES_PASSWORD: change-me-in-a-secret-manager
-  #     POSTGRES_DB: orbitmind
-  #   ports:
-  #     - "5432:5432"
-  #   volumes:
-  #     - pgdata:/var/lib/postgresql/data
-  # Then set: ORBITMIND_DATABASE_URL=postgresql+psycopg://orbitmind:...@db:5432/orbitmind
-#
-# volumes:
-#   pgdata:
+  # --- Optional PostgreSQL system-of-record (Phase 3B; profile-gated). ---
+  postgres:
+    image: postgres:16
+    profiles: ["postgres"]
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-orbitmind}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-orbitmind}
+      POSTGRES_DB: ${POSTGRES_DB:-orbitmind}
+    ports:
+      # Host 55432 -> container 5432 (avoids any host PostgreSQL on the default 5432).
+      - "127.0.0.1:55432:5432"
+    volumes:
+      - orbitmind_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-orbitmind} -d ${POSTGRES_DB:-orbitmind}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+volumes:
+  orbitmind_pgdata:
+    # Local named volume; never committed. Excluded from VCS by .gitignore.

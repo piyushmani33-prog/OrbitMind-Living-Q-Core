@@ -122,6 +122,7 @@ addopts = "-q --strict-markers --strict-config --import-mode=importlib"
 markers = [
     "integration: end-to-end tests exercising the API/workflow (still fully offline)",
     "quantum: tests that exercise the optional Qiskit adapter",
+    "postgres: live PostgreSQL integration tests (skip cleanly unless ORBITMIND_TEST_POSTGRES_URL is set)",
 ]
 filterwarnings = ["error::DeprecationWarning:orbitmind.*"]
 
