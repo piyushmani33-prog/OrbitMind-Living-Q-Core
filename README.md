@@ -149,6 +149,41 @@ CelesTrak licensing/commercial-use terms are **not confirmed** in this repo and 
 labelled *requires review*; attribution to CelesTrak is recorded. See
 [DATA_RIGHTS_AND_SOURCE_POLICY.md](docs/architecture/DATA_RIGHTS_AND_SOURCE_POLICY.md).
 
+## Small-body intelligence (Phase 3A)
+
+OrbitMind models **space objects of many kinds without treating them all as
+satellites** (ADR-0013/0016): satellites/debris use TLE/GP + SGP4, while **asteroids and
+comets use heliocentric small-body models — never SGP4**. Phase 3A adds asteroid/comet
+intelligence from official **NASA/JPL** APIs (SBDB lookup, SBDB query, CAD), behind the
+same guarded-connector pattern (network off by default).
+
+### Endpoints
+`GET /api/v1/space-objects[/{id}]`, `POST /api/v1/small-bodies/lookup|query|close-approaches`,
+`GET /api/v1/small-bodies/{id}[/close-approaches]`.
+
+### Enabling JPL (local development)
+```bash
+ORBITMIND_NETWORK_ENABLED=true
+ORBITMIND_JPL_SBDB_ENABLED=true   # lookup + constrained query
+ORBITMIND_JPL_CAD_ENABLED=true    # close-approach data
+```
+
+### Example
+```bash
+curl -s http://127.0.0.1:8000/api/v1/small-bodies/lookup \
+  -H "content-type: application/json" -d '{"identifier": "433"}'
+```
+
+### What it is / isn't
+Identifies catalogued asteroids/comets and their **source-reported** orbits, physical
+estimates, classifications, and close approaches. It does **not** observe directly,
+propagate high-fidelity ephemerides (Horizons deferred), or compute impact probability.
+A **close approach is NOT an impact**; NEO/PHA hazard flags are **source-reported, not
+computed**. JPL data rights are labelled *requires review*. See
+[SMALL_BODY_INTELLIGENCE.md](docs/architecture/SMALL_BODY_INTELLIGENCE.md),
+[UNIFIED_SPACE_OBJECT_MODEL.md](docs/architecture/UNIFIED_SPACE_OBJECT_MODEL.md), and
+[JPL_SOURCE_OPERATIONS.md](docs/operations/JPL_SOURCE_OPERATIONS.md).
+
 ## Testing
 
 ```bash

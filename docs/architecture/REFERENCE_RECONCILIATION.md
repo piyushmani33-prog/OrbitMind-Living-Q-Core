@@ -102,6 +102,26 @@ Each item: **Source** (doc · section) · **Interpretation** · **Implementation
   added.
 - Docs: this file, `REFERENCE_MANIFEST.md`, `CELESTRAK_VERIFICATION.md`, derivatives.
 
+## Phase 3A update (2026-06-20)
+Phase 3A (unified space-object model + JPL small-body intelligence; ADR-0012..0017)
+advances several matrix items without contradicting any accepted decision:
+- **Satellite/space intelligence (#4)** → broadened from satellites to **natural small
+  bodies** (asteroids/comets) via official JPL APIs; status remains *partially
+  implemented* (more object classes + Horizons deferred).
+- **Planetary science (#25)** → still *partially implemented*; small bodies are now
+  covered, but planetary/lunar ephemerides remain planned.
+- **Deterministic scientific computation (#5)** and **scientific verification (#6)** →
+  extended with small-body normalization + a dedicated deterministic check suite.
+- **Source rights & licensing (#10)** → a second real source family (JPL) added under the
+  same typed policy/rights framework (`requires_review`); new risk **R-019**.
+- **Universal science cortex (#23)** → the kind-agnostic `SpaceObject` model is the
+  multi-domain foundation the references call for (still *planned* overall).
+- **Memory & knowledge graph (#11) / PostgreSQL (#21)** → unchanged (*planned*),
+  explicitly re-sequenced to **Phase 3B** (ADR-0012); the new object model is the entity
+  shape a future knowledge graph will index.
+The reconciliation matrix above remains valid; these are advances in status, not
+reversals.
+
 ## Items requiring NO change (already aligned)
 ADR-0001 (modular monolith), ADR-0003 (Postgres target via interfaces), ADR-0004
 (Temporal deferred behind an interface), ADR-0005 (bounded quantum), ADR-0006

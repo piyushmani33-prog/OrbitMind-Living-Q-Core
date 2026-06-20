@@ -31,6 +31,19 @@ network-enabled flag, and policy version.
   `CELESTRAK_VERIFICATION.md`); min poll interval floored at the official 2 hours.
   **Legal/commercial rights remain unconfirmed (R-012b open).**
 
+## JPL SSD/CNEOS rights posture (Phase 3A, as recorded)
+- **Sources:** JPL Small-Body Database (`sbdb.api`), SBDB Query (`sbdb_query.api`),
+  Close-Approach Data (`cad.api`) — host `ssd-api.jpl.nasa.gov`.
+- **Attribution:** "Data courtesy NASA/JPL Solar System Dynamics (https://ssd.jpl.nasa.gov)."
+- **License/usage:** marked **REQUIRES REVIEW**. NASA/JPL data is generally U.S.
+  Government work, but exact redistribution, commercial-use, and **rate-limit** terms are
+  **not confirmed** in this repository and must be reviewed against official JPL/CNEOS
+  terms before redistribution or commercial use. `requires_review = true`,
+  `commercial_use_confirmed = false`. **No commercial rights claimed.**
+- **Endpoints/cadence:** verified against JPL SSD docs (inspected 2026-06-20); recorded
+  in each policy's `documentation_reference`. JPL publishes no hard polling cadence →
+  conservative cache (24h TTL) + 1h min refresh; rate limits remain open (R-019).
+
 ## Liveness / freshness honesty
 External data is classified and **never** presented as live when it is not (see
 [CACHE_AND_FRESHNESS.md](../operations/CACHE_AND_FRESHNESS.md), ADR-0010). Bundled
