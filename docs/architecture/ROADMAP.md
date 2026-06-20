@@ -29,9 +29,29 @@ each to follow the same pattern (`docs/development/ADDING_A_SOURCE_CONNECTOR.md`
 source policy, licensing note, rate/cache/freshness policy, schema versioning,
 failure behavior, and **offline test fixtures**.
 
-## Phase 3 — Scientific memory & retrieval
+## Phase 3 — split into 3A and 3B (re-sequenced; ADR-0012)
+The owner prioritized natural-space-object intelligence ahead of broad scientific
+memory. The original Phase 3 (scientific memory + PostgreSQL) is **not cancelled** —
+it becomes Phase 3B.
+
+### Phase 3A — Unified space-object model & JPL small-body intelligence ✅ (this build)
+A kind-agnostic `SpaceObject` model (satellites/asteroids/comets/planets/stars/signals
+kept scientifically separate; ADR-0013/0016); guarded JPL connectors (SBDB lookup, SBDB
+query, CAD) behind the Phase 2 source pattern (network off by default); small-body
+normalization, deterministic verification, persistence (additive tables), bounded
+visual artifacts (model-estimate; ADR-0017), full provenance/freshness/audit. Asteroids
+and comets use heliocentric models — **never SGP4**. SQLite remains the store for this
+bounded phase.
+
+### Phase 3B — Scientific memory & PostgreSQL foundation (planned)
 PostgreSQL as system of record; full-text retrieval; optional pgvector; documents,
-chunks, concepts, claims, evidence; citation/provenance evaluation.
+chunks, concepts, claims, evidence; citation/provenance evaluation. The Phase 3A object
+model is the entity foundation a knowledge graph will index.
+
+### Later Phase-3 family work (planned, deferred)
+JPL Horizons live ephemerides; planetary/lunar ephemerides; debris collision risk;
+space-weather ingestion (NOAA SWPC); astronomy catalogues (stars/galaxies); radio-signal
+and spectral analysis; Sentry/Scout impact-risk; Minor Planet Center / ESA NEOCC.
 
 ## Phase 4 — Optimization & bounded quantum comparison
 Classical baseline first; a QUBO/graph problem; Qiskit Aer experiment;
