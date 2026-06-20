@@ -1,0 +1,212 @@
+"""Fair benchmark orchestration + the deterministic comparison-conclusion policy.
+
+Classical and quantum solvers run on the SAME normalized problem. The conclusion is
+policy-driven and never asserts general quantum advantage: ``quantum-competitive`` means
+only that a feasible quantum result met a defined bounded threshold for this instance.
+"""
+
+from __future__ import annotations
+
+from orbitmind.optimization.evaluation import Evaluator
+from orbitmind.optimization.models import (
+    BenchmarkComparison,
+    BenchmarkRun,
+    BenchmarkThresholds,
+    ComparisonConclusion,
+    ExperimentStatus,
+    OptimalityStatus,
+    QuantumExperiment,
+    SchedulingProblem,
+    SolverConfiguration,
+    SolverKind,
+    SolverResult,
+)
+from orbitmind.optimization.quantum import run_quantum_experiment
+from orbitmind.optimization.solvers import solve_exact, solve_greedy
+from orbitmind.quantum.adapter import quantum_available
+
+
+def _classical_objective(result: SolverResult | None) -> float | None:
+    if result is None or not result.feasible or result.objective_value is None:
+        return None
+    return result.objective_value
+
+
+def conclude(
+    *,
+    exact_result: SolverResult | None,
+    greedy_result: SolverResult | None,
+    quantum_experiment: QuantumExperiment | None,
+    thresholds: BenchmarkThresholds,
+) -> tuple[ComparisonConclusion, str]:
+    """Deterministic comparison policy. Pure function over solver/experiment records."""
+    exact_obj = _classical_objective(exact_result)
+    greedy_obj = _classical_objective(greedy_result)
+    known_optimum = (
+        exact_obj
+        if exact_result is not None and exact_result.optimality_status == OptimalityStatus.OPTIMAL
+        else None
+    )
+    best_classical = max([o for o in (exact_obj, greedy_obj) if o is not None], default=None)
+
+    # No quantum comparison possible.
+    if quantum_experiment is None or quantum_experiment.status == ExperimentStatus.UNSUPPORTED:
+        if known_optimum is not None:
+            return ComparisonConclusion.CLASSICAL_EXACT_BEST, "exact optimum; no quantum comparison"
+        if greedy_obj is not None:
+            return (
+                ComparisonConclusion.CLASSICAL_GREEDY_BEST,
+                "greedy feasible; no quantum comparison",
+            )
+        return ComparisonConclusion.INSUFFICIENT_EVIDENCE, "no feasible classical solution"
+
+    if quantum_experiment.status == ExperimentStatus.FAILED:
+        return ComparisonConclusion.EXPERIMENT_FAILED, f"quantum failed: {quantum_experiment.error}"
+
+    best_feasible = quantum_experiment.best_feasible_sample
+    if best_feasible is None:
+        if quantum_experiment.status == ExperimentStatus.TIMED_OUT:
+            return (
+                ComparisonConclusion.INSUFFICIENT_EVIDENCE,
+                "quantum timed out with no feasible sample",
+            )
+        return ComparisonConclusion.QUANTUM_INFEASIBLE, "no feasible quantum sample observed"
+
+    qobj = best_feasible.objective_value
+    if quantum_experiment.feasible_sample_ratio < thresholds.min_feasible_sample_ratio:
+        return (
+            ComparisonConclusion.INSUFFICIENT_EVIDENCE,
+            f"feasible-sample ratio {quantum_experiment.feasible_sample_ratio:.3f} below "
+            f"threshold {thresholds.min_feasible_sample_ratio}",
+        )
+
+    reference = known_optimum if known_optimum is not None else best_classical
+    if reference is None:
+        return ComparisonConclusion.INSUFFICIENT_EVIDENCE, "no classical reference objective"
+    gap_rel = (reference - qobj) / reference if reference > 0 else (reference - qobj)
+
+    if known_optimum is not None:
+        # Compared against a PROVEN optimum.
+        if gap_rel <= thresholds.competitive_relative_gap:
+            return (
+                ComparisonConclusion.QUANTUM_COMPETITIVE,
+                f"quantum feasible obj={qobj} within rel-gap {gap_rel:.4f} of the proven optimum "
+                f"{reference} (threshold {thresholds.competitive_relative_gap}); bounded-instance "
+                "threshold met, NOT a claim of quantum advantage",
+            )
+        return (
+            ComparisonConclusion.QUANTUM_WORSE,
+            f"quantum obj={qobj} below the proven optimum {reference} (rel-gap {gap_rel:.4f})",
+        )
+    # Optimum NOT proven (exact unavailable/timed out): compare to the best classical heuristic.
+    if best_classical is not None and qobj == best_classical:
+        return (
+            ComparisonConclusion.EQUIVALENT_OBJECTIVE,
+            f"quantum ties the best classical obj={qobj}; optimum not proven for this instance",
+        )
+    if best_classical is not None and qobj > best_classical:
+        return (
+            ComparisonConclusion.QUANTUM_COMPETITIVE,
+            f"quantum obj={qobj} exceeds the best classical heuristic {best_classical} on this "
+            "bounded instance (optimum not proven; NOT a claim of quantum advantage)",
+        )
+    return (
+        ComparisonConclusion.QUANTUM_WORSE,
+        f"quantum obj={qobj} below the best classical {best_classical}",
+    )
+
+
+def run_benchmark(
+    problem: SchedulingProblem,
+    *,
+    seed: int = 1,
+    shots: int = 2048,
+    optimizer_iterations: int = 24,
+    qaoa_layers: int = 1,
+    timeout_seconds: float = 30.0,
+    thresholds: BenchmarkThresholds | None = None,
+    run_quantum: bool = True,
+) -> BenchmarkRun:
+    """Run exact + greedy + (optional) quantum on the same normalized problem instance."""
+    thresholds = thresholds or BenchmarkThresholds()
+    evaluator = Evaluator(problem)
+
+    exact = solve_exact(
+        problem,
+        SolverConfiguration(
+            solver_kind=SolverKind.EXACT, seed=seed, timeout_seconds=timeout_seconds
+        ),
+        evaluator,
+    )
+    greedy = solve_greedy(
+        problem,
+        SolverConfiguration(
+            solver_kind=SolverKind.GREEDY, seed=seed, timeout_seconds=timeout_seconds
+        ),
+        evaluator,
+    )
+    known_optimum = (
+        exact.objective_value if exact.optimality_status == OptimalityStatus.OPTIMAL else None
+    )
+    optimum_selection = (
+        exact.schedule.selected_opportunity_ids
+        if exact.schedule is not None and exact.optimality_status == OptimalityStatus.OPTIMAL
+        else None
+    )
+
+    quantum: QuantumExperiment | None = None
+    if run_quantum:
+        config = SolverConfiguration(
+            solver_kind=SolverKind.QUANTUM_QAOA,
+            seed=seed,
+            timeout_seconds=timeout_seconds,
+            shots=shots,
+            optimizer_iterations=optimizer_iterations,
+            qaoa_layers=qaoa_layers,
+        )
+        if quantum_available():
+            quantum = run_quantum_experiment(
+                problem,
+                config,
+                evaluator,
+                known_optimum=known_optimum,
+                optimum_selection=optimum_selection,
+            )
+        else:
+            quantum = QuantumExperiment(
+                problem_checksum=problem.checksum,
+                status=ExperimentStatus.UNSUPPORTED,
+                configuration=config,
+                seed=seed,
+                error="Aer/Qiskit not installed",
+            )
+
+    conclusion, rationale = conclude(
+        exact_result=exact,
+        greedy_result=greedy,
+        quantum_experiment=quantum,
+        thresholds=thresholds,
+    )
+    comparison = BenchmarkComparison(
+        problem_checksum=problem.checksum,
+        exact_result_id=exact.id,
+        greedy_result_id=greedy.id,
+        quantum_experiment_id=quantum.id if quantum is not None else None,
+        exact_objective=_classical_objective(exact),
+        greedy_objective=_classical_objective(greedy),
+        quantum_objective=(
+            quantum.best_feasible_sample.objective_value
+            if quantum is not None and quantum.best_feasible_sample is not None
+            else None
+        ),
+        known_optimum=known_optimum,
+        conclusion=conclusion,
+        thresholds=thresholds,
+        rationale=rationale,
+    )
+    return BenchmarkRun(
+        problem_checksum=problem.checksum,
+        solver_results=[exact, greedy],
+        quantum_experiment=quantum,
+        comparison=comparison,
+    )
