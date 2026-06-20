@@ -17,13 +17,24 @@ from orbitmind.orchestration.orchestrator import PrimeOrchestrator
 from orbitmind.orchestration.source_resolver import SourceResolver
 from orbitmind.persistence.database import Database
 from orbitmind.persistence.source_repository import SqlAlchemySourceRepository
+from orbitmind.smallbody.service import SmallBodyService
+from orbitmind.smallbody.verification import SmallBodyVerificationService
 from orbitmind.sources.cache import SourceCacheStore
 from orbitmind.sources.celestrak.connector import CelestrakConnector
+from orbitmind.sources.jpl.cad_connector import CadConnector
+from orbitmind.sources.jpl.policies import (
+    JPL_CAD_SOURCE_ID,
+    JPL_SBDB_QUERY_SOURCE_ID,
+    JPL_SBDB_SOURCE_ID,
+)
+from orbitmind.sources.jpl.query_connector import SbdbQueryConnector
+from orbitmind.sources.jpl.sbdb_connector import SbdbConnector
 from orbitmind.sources.policies import CELESTRAK_SOURCE_ID, SourceCatalog
 from orbitmind.sources.registry import SourceRegistry
 from orbitmind.space.propagation import PropagationService
 from orbitmind.verification.checks import VerificationService
 from orbitmind.visualization.charts import VisualizationService
+from orbitmind.visualization.smallbody_charts import SmallBodyVisualizationService
 
 
 class AppContainer:
@@ -35,6 +46,8 @@ class AppContainer:
         *,
         celestrak_transport: httpx.BaseTransport | None = None,
         celestrak_sleep: Callable[[float], None] = time.sleep,
+        jpl_transport: httpx.BaseTransport | None = None,
+        jpl_sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self.settings = settings or get_settings()
         self.database = Database(self.settings.database_url)
@@ -64,6 +77,38 @@ class AppContainer:
             verification=VerificationService(),
             visualization=VisualizationService(self.settings.resolved_artifacts_dir()),
             resolver=self.resolver,
+        )
+
+        # --- Phase 3A: JPL small-body connectors + service ---
+        sbdb = SbdbConnector(
+            self.catalog.require(JPL_SBDB_SOURCE_ID),
+            self.cache_store,
+            transport=jpl_transport,
+            sleep=jpl_sleep,
+        )
+        query = SbdbQueryConnector(
+            self.catalog.require(JPL_SBDB_QUERY_SOURCE_ID),
+            self.cache_store,
+            max_results=self.settings.jpl_max_results,
+            transport=jpl_transport,
+            sleep=jpl_sleep,
+        )
+        cad = CadConnector(
+            self.catalog.require(JPL_CAD_SOURCE_ID),
+            self.cache_store,
+            max_results=self.settings.jpl_max_results,
+            max_query_span_days=self.settings.jpl_max_query_span_days,
+            transport=jpl_transport,
+            sleep=jpl_sleep,
+        )
+        self.small_body_service = SmallBodyService(
+            settings=self.settings,
+            database=self.database,
+            sbdb=sbdb,
+            query=query,
+            cad=cad,
+            verification=SmallBodyVerificationService(),
+            visualization=SmallBodyVisualizationService(self.settings.resolved_artifacts_dir()),
         )
 
     def init_storage(self) -> None:

@@ -11,7 +11,9 @@ from orbitmind.core.config import Settings
 from orbitmind.observability.service import ObservabilityService
 from orbitmind.orchestration.orchestrator import PrimeOrchestrator
 from orbitmind.persistence.repositories import SqlAlchemyMissionRepository
+from orbitmind.persistence.smallbody_repository import SqlAlchemySmallBodyRepository
 from orbitmind.persistence.source_repository import SqlAlchemySourceRepository
+from orbitmind.smallbody.service import SmallBodyService
 
 
 def get_container(request: Request) -> AppContainer:
@@ -47,5 +49,19 @@ def get_source_repository(request: Request) -> Iterator[SqlAlchemySourceReposito
     session = container.database.session()
     try:
         yield SqlAlchemySourceRepository(session)
+    finally:
+        session.close()
+
+
+def get_small_body_service(request: Request) -> SmallBodyService:
+    return get_container(request).small_body_service
+
+
+def get_small_body_repository(request: Request) -> Iterator[SqlAlchemySmallBodyRepository]:
+    """Yield a small-body repository bound to a per-request session."""
+    container = get_container(request)
+    session = container.database.session()
+    try:
+        yield SqlAlchemySmallBodyRepository(session)
     finally:
         session.close()

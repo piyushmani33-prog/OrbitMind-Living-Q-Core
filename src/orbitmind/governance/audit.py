@@ -40,6 +40,21 @@ class AuditAction(StrEnum):
     EXTERNAL_MISSION_COMPLETED = "mission.external_completed"
     EXTERNAL_MISSION_FAILED = "mission.external_failed"
 
+    # Phase 3A — small-body intelligence
+    SMALL_BODY_LOOKUP_REQUESTED = "smallbody.lookup_requested"
+    SBDB_QUERY_REQUESTED = "smallbody.sbdb_query_requested"
+    CAD_QUERY_REQUESTED = "smallbody.cad_query_requested"
+    JPL_REQUEST_STARTED = "smallbody.jpl_request_started"
+    JPL_REQUEST_COMPLETED = "smallbody.jpl_request_completed"
+    JPL_REQUEST_FAILED = "smallbody.jpl_request_failed"
+    SMALL_BODY_NORMALIZED = "smallbody.record_normalized"
+    SMALL_BODY_REJECTED = "smallbody.record_rejected"
+    OBJECT_PERSISTED = "smallbody.object_persisted"
+    CLOSE_APPROACHES_PERSISTED = "smallbody.close_approaches_persisted"
+    SMALL_BODY_ARTIFACT_GENERATED = "smallbody.artifact_generated"
+    RESULT_SET_TRUNCATED = "smallbody.result_truncated"
+    UNSUPPORTED_OBJECT_REJECTED = "smallbody.unsupported_object_rejected"
+
 
 class AuditEvent(BaseModel):
     """An append-only record of a lifecycle transition."""

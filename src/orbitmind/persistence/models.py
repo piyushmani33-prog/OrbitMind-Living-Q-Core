@@ -217,3 +217,147 @@ class OrbitalElementRecordRow(Base):
     policy_version: Mapped[str] = mapped_column(String(16))
     fetched_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime)
+
+
+# --------------------------------------------------------------------------
+# Phase 3A — unified space objects + small-body (asteroid/comet) records
+# --------------------------------------------------------------------------
+class SpaceObjectRow(Base):
+    __tablename__ = "space_objects"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(32), index=True)
+    canonical_name: Mapped[str] = mapped_column(String(255), index=True)
+    primary_catalog: Mapped[str] = mapped_column(String(64))
+    primary_identifier: Mapped[str] = mapped_column(String(128), index=True)
+    designation: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    number: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    source_id: Mapped[str] = mapped_column(String(64), index=True)
+    source_record_id: Mapped[str] = mapped_column(String(128))
+    requested_identifier: Mapped[str] = mapped_column(String(64))
+    data_epoch: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    fetched_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    freshness_state: Mapped[str] = mapped_column(String(16))
+    liveness: Mapped[str] = mapped_column(String(16))
+    cache_status: Mapped[str] = mapped_column(String(16))
+    checksum: Mapped[str] = mapped_column(String(64))
+    schema_version: Mapped[str] = mapped_column(String(32))
+    policy_version: Mapped[str] = mapped_column(String(16))
+    epistemic_status: Mapped[str] = mapped_column(String(32))
+    verification_status: Mapped[str] = mapped_column(String(24))
+    limitations: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, index=True)
+
+
+class SpaceObjectIdentifierRow(Base):
+    __tablename__ = "space_object_identifiers"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    space_object_id: Mapped[str] = mapped_column(ForeignKey("space_objects.id"), index=True)
+    catalog: Mapped[str] = mapped_column(String(64))
+    identifier: Mapped[str] = mapped_column(String(128))
+
+
+class SpaceObjectAliasRow(Base):
+    __tablename__ = "space_object_aliases"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    space_object_id: Mapped[str] = mapped_column(ForeignKey("space_objects.id"), index=True)
+    alias: Mapped[str] = mapped_column(String(255))
+    kind: Mapped[str] = mapped_column(String(32))
+
+
+class SmallBodyOrbitRow(Base):
+    __tablename__ = "small_body_orbits"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    space_object_id: Mapped[str] = mapped_column(ForeignKey("space_objects.id"), index=True)
+    epoch_jd: Mapped[float | None] = mapped_column(Float, nullable=True)
+    eccentricity: Mapped[float | None] = mapped_column(Float, nullable=True)
+    semimajor_axis_au: Mapped[float | None] = mapped_column(Float, nullable=True)
+    perihelion_distance_au: Mapped[float | None] = mapped_column(Float, nullable=True)
+    aphelion_distance_au: Mapped[float | None] = mapped_column(Float, nullable=True)
+    inclination_deg: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ascending_node_deg: Mapped[float | None] = mapped_column(Float, nullable=True)
+    arg_perihelion_deg: Mapped[float | None] = mapped_column(Float, nullable=True)
+    mean_anomaly_deg: Mapped[float | None] = mapped_column(Float, nullable=True)
+    orbital_period_days: Mapped[float | None] = mapped_column(Float, nullable=True)
+    mean_motion_deg_per_day: Mapped[float | None] = mapped_column(Float, nullable=True)
+    time_of_perihelion_jd: Mapped[float | None] = mapped_column(Float, nullable=True)
+    condition_code: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    solution_date: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    moid_au: Mapped[float | None] = mapped_column(Float, nullable=True)
+    rms: Mapped[float | None] = mapped_column(Float, nullable=True)
+    arc_days: Mapped[float | None] = mapped_column(Float, nullable=True)
+    n_obs_used: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    units: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    normalization_version: Mapped[str] = mapped_column(String(16))
+
+
+class SmallBodyPhysicalRow(Base):
+    __tablename__ = "small_body_physical_properties"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    space_object_id: Mapped[str] = mapped_column(ForeignKey("space_objects.id"), index=True)
+    absolute_magnitude_h: Mapped[float | None] = mapped_column(Float, nullable=True)
+    diameter_km: Mapped[float | None] = mapped_column(Float, nullable=True)
+    diameter_min_km: Mapped[float | None] = mapped_column(Float, nullable=True)
+    diameter_max_km: Mapped[float | None] = mapped_column(Float, nullable=True)
+    albedo: Mapped[float | None] = mapped_column(Float, nullable=True)
+    rotation_period_h: Mapped[float | None] = mapped_column(Float, nullable=True)
+    units: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+
+class SmallBodyClassificationRow(Base):
+    __tablename__ = "small_body_classifications"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    space_object_id: Mapped[str] = mapped_column(ForeignKey("space_objects.id"), index=True)
+    orbit_class_code: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    orbit_class_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    near_earth_object_source: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    potentially_hazardous_source: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    spectral_type: Mapped[str | None] = mapped_column(String(16), nullable=True)
+
+
+class SmallBodyQueryRunRow(Base):
+    __tablename__ = "small_body_query_runs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    source_id: Mapped[str] = mapped_column(String(64), index=True)
+    run_type: Mapped[str] = mapped_column(String(24))  # sbdb-query | cad
+    params_key: Mapped[str] = mapped_column(String(512))
+    total_reported: Mapped[int] = mapped_column(Integer)
+    returned: Mapped[int] = mapped_column(Integer)
+    truncated: Mapped[bool] = mapped_column(Boolean)
+    freshness_state: Mapped[str] = mapped_column(String(16))
+    checksum: Mapped[str] = mapped_column(String(64))
+    fetched_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, index=True)
+
+
+class CloseApproachRow(Base):
+    __tablename__ = "close_approaches"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    query_run_id: Mapped[str | None] = mapped_column(
+        ForeignKey("small_body_query_runs.id"), nullable=True, index=True
+    )
+    designation: Mapped[str] = mapped_column(String(64), index=True)
+    full_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    orbit_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    time_utc: Mapped[datetime] = mapped_column(UTCDateTime, index=True)
+    time_jd: Mapped[float | None] = mapped_column(Float, nullable=True)
+    body: Mapped[str] = mapped_column(String(16))
+    dist_nominal_au: Mapped[float | None] = mapped_column(Float, nullable=True)
+    dist_min_au: Mapped[float | None] = mapped_column(Float, nullable=True)
+    dist_max_au: Mapped[float | None] = mapped_column(Float, nullable=True)
+    v_rel_kms: Mapped[float | None] = mapped_column(Float, nullable=True)
+    v_inf_kms: Mapped[float | None] = mapped_column(Float, nullable=True)
+    absolute_magnitude_h: Mapped[float | None] = mapped_column(Float, nullable=True)
+    time_sigma: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    source_id: Mapped[str] = mapped_column(String(64))
+    checksum: Mapped[str] = mapped_column(String(64))
+    schema_version: Mapped[str] = mapped_column(String(32))
+    freshness_state: Mapped[str] = mapped_column(String(16))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime)
