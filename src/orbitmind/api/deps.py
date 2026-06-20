@@ -8,6 +8,8 @@ from fastapi import Request
 
 from orbitmind.api.container import AppContainer
 from orbitmind.core.config import Settings
+from orbitmind.memory.repository import SqlAlchemyMemoryRepository
+from orbitmind.memory.service import MemoryService
 from orbitmind.observability.service import ObservabilityService
 from orbitmind.orchestration.orchestrator import PrimeOrchestrator
 from orbitmind.persistence.repositories import SqlAlchemyMissionRepository
@@ -63,5 +65,19 @@ def get_small_body_repository(request: Request) -> Iterator[SqlAlchemySmallBodyR
     session = container.database.session()
     try:
         yield SqlAlchemySmallBodyRepository(session)
+    finally:
+        session.close()
+
+
+def get_memory_service(request: Request) -> MemoryService:
+    return get_container(request).memory_service
+
+
+def get_memory_repository(request: Request) -> Iterator[SqlAlchemyMemoryRepository]:
+    """Yield a memory repository bound to a per-request session."""
+    container = get_container(request)
+    session = container.database.session()
+    try:
+        yield SqlAlchemyMemoryRepository(session)
     finally:
         session.close()

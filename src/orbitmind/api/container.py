@@ -12,6 +12,7 @@ from collections.abc import Callable
 import httpx
 
 from orbitmind.core.config import Settings, get_settings
+from orbitmind.memory.service import MemoryService
 from orbitmind.observability.service import ObservabilityService
 from orbitmind.orchestration.orchestrator import PrimeOrchestrator
 from orbitmind.orchestration.source_resolver import SourceResolver
@@ -110,6 +111,9 @@ class AppContainer:
             verification=SmallBodyVerificationService(),
             visualization=SmallBodyVisualizationService(self.settings.resolved_artifacts_dir()),
         )
+
+        # --- Phase 3B: scientific memory service ---
+        self.memory_service = MemoryService(settings=self.settings, database=self.database)
 
     def init_storage(self) -> None:
         """Ensure the schema exists and the source catalog is recorded (local/dev)."""

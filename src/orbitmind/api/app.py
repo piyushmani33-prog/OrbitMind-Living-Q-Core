@@ -16,6 +16,7 @@ from fastapi import FastAPI
 from orbitmind import __version__
 from orbitmind.api.container import AppContainer
 from orbitmind.api.errors import register_exception_handlers
+from orbitmind.api.routers.memory import router as memory_router
 from orbitmind.api.routers.missions import router as missions_router
 from orbitmind.api.routers.small_bodies import router as small_bodies_router
 from orbitmind.api.routers.sources import router as sources_router
@@ -54,6 +55,7 @@ def create_app(container: AppContainer | None = None) -> FastAPI:
     app.include_router(sources_router)
     app.include_router(space_objects_router)
     app.include_router(small_bodies_router)
+    app.include_router(memory_router)
     return app
 
 
