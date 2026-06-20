@@ -152,7 +152,7 @@ class MemorySearchService:
 
         backend = RetrievalBackend.DETERMINISTIC_LEXICAL
         if is_postgres and query_terms:
-            fts_ids = repo.fts_candidate_ids(request.query_text, language, _CANDIDATE_CAP)
+            fts_ids = repo.fts_candidate_ids(sorted(query_terms), language, _CANDIDATE_CAP)
             candidates = [c for c in candidates if c.chunk.id in fts_ids]
             backend = RetrievalBackend.POSTGRES_FTS
 

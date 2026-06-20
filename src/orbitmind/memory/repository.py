@@ -72,6 +72,10 @@ class SqlAlchemyMemoryRepository:
     def __init__(self, session: Session) -> None:
         self._s = session
 
+    def flush(self) -> None:
+        """Flush pending inserts so FK parents exist before children (PostgreSQL)."""
+        self._s.flush()
+
     # ---- sources / documents / versions / chunks --------------------------
     def upsert_source(self, source: MemorySource) -> None:
         row = (
@@ -263,15 +267,29 @@ class SqlAlchemyMemoryRepository:
             for c, d, v in self._s.execute(stmt).all()
         ]
 
-    def fts_candidate_ids(self, query: str, language: str, cap: int) -> set[str]:
-        """PostgreSQL FTS candidate chunk ids (only used on the postgresql dialect)."""
+    def fts_candidate_ids(self, terms: list[str], language: str, cap: int) -> set[str]:
+        """PostgreSQL FTS candidate chunk ids (only used on the postgresql dialect).
+
+        Uses OR semantics across terms (per-term ``plainto_tsquery`` OR'd) so the
+        candidate *set* matches the deterministic lexical backend's any-term matching;
+        the only intended difference from SQLite is PostgreSQL stemming. Terms are bound
+        parameters, never interpolated, so this is injection-safe.
+        """
         from sqlalchemy import text
 
+        if not terms:
+            return set()
+        params: dict[str, object] = {"lang": language, "cap": cap}
+        clauses: list[str] = []
+        for i, term in enumerate(terms):
+            params[f"t{i}"] = term
+            clauses.append(f"plainto_tsquery(:lang, :t{i})")
+        tsquery = " || ".join(clauses)  # '||' ORs tsqueries
         sql = text(
             "SELECT id FROM document_chunks "
-            "WHERE to_tsvector(:lang, search_text) @@ plainto_tsquery(:lang, :q) LIMIT :cap"
+            f"WHERE to_tsvector(:lang, search_text) @@ ({tsquery}) LIMIT :cap"
         )
-        rows = self._s.execute(sql, {"lang": language, "q": query, "cap": cap}).all()
+        rows = self._s.execute(sql, params).all()
         return {r[0] for r in rows}
 
     def add_retrieval_run(
@@ -304,6 +322,7 @@ class SqlAlchemyMemoryRepository:
                 parent_concept_id=concept.parent_concept_id,
             )
         )
+        self._s.flush()  # concept row must exist before its FK terms/senses
         for term in concept.terms:
             self._s.add(
                 ConceptTermRow(

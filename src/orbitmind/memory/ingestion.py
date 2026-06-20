@@ -193,6 +193,7 @@ class IngestionService:
                 ),
             )
             repo.add_document(document)
+            repo.flush()  # parent must exist before FK children (PostgreSQL enforces FKs)
             document_id = document.id
             version_no = 1
             status = "created"
@@ -205,6 +206,7 @@ class IngestionService:
             original_length=len(text),
         )
         repo.add_version(version)
+        repo.flush()  # version must exist before its sections/chunks reference it
         sections, chunks = chunk_document(
             text,
             document_id=document_id,

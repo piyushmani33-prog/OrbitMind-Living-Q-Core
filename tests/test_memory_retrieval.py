@@ -85,7 +85,7 @@ class _StubRepo:
     def __init__(self, contexts: list[ChunkContext], fts_ids: set[str]) -> None:
         self._contexts = contexts
         self._fts_ids = fts_ids
-        self.fts_called_with: tuple[str, str, int] | None = None
+        self.fts_called_with: tuple[list[str], str, int] | None = None
 
     def get_concept(self, _cid: str):
         return None
@@ -96,8 +96,8 @@ class _StubRepo:
     def search_candidates(self, *, source_ids, document_types, cap):
         return list(self._contexts)
 
-    def fts_candidate_ids(self, query: str, language: str, cap: int) -> set[str]:
-        self.fts_called_with = (query, language, cap)
+    def fts_candidate_ids(self, terms: list[str], language: str, cap: int) -> set[str]:
+        self.fts_called_with = (terms, language, cap)
         return set(self._fts_ids)
 
 
@@ -140,7 +140,7 @@ def test_postgres_backend_uses_fts_filter_and_is_labelled() -> None:
         is_postgres=True,
         language="english",
     )
-    assert stub.fts_called_with == ("heliocentric asteroid", "english", 2000)
+    assert stub.fts_called_with == (["asteroid", "heliocentric"], "english", 2000)
     assert result.backend is RetrievalBackend.POSTGRES_FTS
     # Only the FTS-selected candidate survives.
     assert [r.chunk_id for r in result.results] == ["c1"]

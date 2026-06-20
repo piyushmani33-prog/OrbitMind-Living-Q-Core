@@ -12,9 +12,10 @@ and is never used for heliocentric small bodies such as asteroids and comets.
 
 ## Close approach
 
-A close approach is a source-reported event in which a small body passes near a
-planet within a stated distance. A close approach is NOT an impact. Hazard flags
-are reported by the source (JPL/CNEOS) and are not computed by OrbitMind.
+A close approach is a source-reported event in which a small body (for example the
+comet 1P/Halley) passes near a planet within a stated distance (e.g. ≈ 0.05 au). A
+close approach is NOT an impact. Hazard flags are reported by the source (JPL/CNEOS)
+and are not computed by OrbitMind.
 
 ## Epistemic status
 
