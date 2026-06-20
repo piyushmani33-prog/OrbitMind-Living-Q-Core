@@ -61,6 +61,28 @@ class Settings(BaseSettings):
     celestrak_min_refresh_seconds: int = 7200  # 2h official minimum (CelesTrak guidance)
     celestrak_max_response_bytes: int = 1_048_576  # 1 MiB response-size cap
 
+    # --- JPL Solar System Dynamics connectors (Phase 3A). DISABLED by default. ---
+    # A live JPL request requires the global switch AND the applicable source switch.
+    jpl_sbdb_enabled: bool = False  # SBDB lookup + constrained query
+    jpl_cad_enabled: bool = False  # Close-Approach Data
+
+    # Official JPL SSD/CNEOS API endpoints (configurable, not hard-coded). All share
+    # host ssd-api.jpl.nasa.gov. Verified against JPL SSD/CNEOS docs on 2026-06-19.
+    jpl_sbdb_base_url: str = "https://ssd-api.jpl.nasa.gov/sbdb.api"
+    jpl_sbdb_query_base_url: str = "https://ssd-api.jpl.nasa.gov/sbdb_query.api"
+    jpl_cad_base_url: str = "https://ssd-api.jpl.nasa.gov/cad.api"
+    jpl_connect_timeout_seconds: float = 5.0
+    jpl_read_timeout_seconds: float = 15.0  # JPL responses can be larger/slower
+    jpl_max_retries: int = 2
+    # JPL does not publish a hard polling cadence; use conservative defaults and treat
+    # rate limits as "requires review" in the source policy. Small-body orbit solutions
+    # change slowly, so cache aggressively.
+    jpl_cache_ttl_seconds: int = 86_400  # 24h
+    jpl_min_refresh_seconds: int = 3_600  # 1h minimum between live fetches
+    jpl_max_response_bytes: int = 5_242_880  # 5 MiB (query/CAD can be larger)
+    jpl_max_results: int = 200  # hard cap on returned rows (query + CAD)
+    jpl_max_query_span_days: int = 366  # max CAD date-range span
+
     # Controlled cache directory for raw source payloads (metadata lives in the DB).
     cache_dir: Path = PROJECT_ROOT / "cache"
 

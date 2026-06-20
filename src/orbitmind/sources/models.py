@@ -16,10 +16,13 @@ from orbitmind.core.timeutils import utcnow
 
 
 class SourceKind(StrEnum):
-    """Where a mission's orbital data comes from."""
+    """Where data comes from (source connector kind)."""
 
     SAMPLE = "sample"  # bundled offline fixture (Phase 1 default)
     CELESTRAK = "celestrak"  # CelesTrak General Perturbations (Phase 2)
+    JPL_SBDB = "jpl-sbdb"  # JPL Small-Body Database lookup (Phase 3A)
+    JPL_SBDB_QUERY = "jpl-sbdb-query"  # JPL SBDB constrained query (Phase 3A)
+    JPL_CAD = "jpl-cad"  # JPL/CNEOS Close-Approach Data (Phase 3A)
 
 
 class SchemaFormat(StrEnum):
@@ -27,6 +30,7 @@ class SchemaFormat(StrEnum):
 
     JSON_OMM = "json-omm"  # structured GP / OMM JSON (preferred)
     TLE = "tle"  # two-line element text
+    JSON = "json"  # generic structured JSON (e.g. JPL SBDB/CAD)
 
 
 class FreshnessState(StrEnum):
@@ -138,6 +142,8 @@ class SourcePolicy(BaseModel):
     failure_behavior: str = "fail-safe-no-fallback"
     network_enabled: bool = False  # effective switch (global AND source)
     policy_version: str = "1"
+    # Documentation version / inspection date this policy was verified against.
+    documentation_reference: str = ""
 
 
 class SourceDefinition(BaseModel):

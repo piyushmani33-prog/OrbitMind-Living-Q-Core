@@ -10,6 +10,7 @@ from __future__ import annotations
 from urllib.parse import urlsplit
 
 from orbitmind.core.config import Settings
+from orbitmind.sources.jpl.policies import jpl_definitions
 from orbitmind.sources.models import (
     SchemaFormat,
     SourceDefinition,
@@ -126,9 +127,18 @@ class SourceCatalog:
             SAMPLE_SOURCE_ID: _sample_definition(),
             CELESTRAK_SOURCE_ID: _celestrak_definition(settings),
         }
+        for definition in jpl_definitions(settings):
+            self._defs[definition.source_id] = definition
 
     def get(self, source_id: str) -> SourceDefinition | None:
         return self._defs.get(source_id)
+
+    def require(self, source_id: str) -> SourceDefinition:
+        """Return a registered source definition or raise ``KeyError``."""
+        definition = self._defs.get(source_id)
+        if definition is None:  # pragma: no cover - registered sources always exist
+            raise KeyError(f"unknown source: {source_id}")
+        return definition
 
     def list(self) -> list[SourceDefinition]:
         return list(self._defs.values())

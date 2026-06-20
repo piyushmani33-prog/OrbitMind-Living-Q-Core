@@ -38,3 +38,17 @@ class DisallowedRequestError(SourceError):
 
     code = "disallowed_request"
     http_status = 400
+
+
+class ObjectNotFoundError(SourceError):
+    """The requested object was not found in the source catalogue."""
+
+    code = "object_not_found"
+    http_status = 404
+
+
+class AmbiguousIdentifierError(SourceError):
+    """The requested identifier matched multiple objects."""
+
+    code = "ambiguous_identifier"
+    http_status = 409
