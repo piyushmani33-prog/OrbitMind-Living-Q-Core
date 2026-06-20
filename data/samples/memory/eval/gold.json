@@ -1,0 +1,25 @@
+{
+  "description": "Offline gold retrieval dataset for the scientific-memory slice. Each item maps a query to content markers expected in a relevant chunk. Relevance is judged deterministically (no LLM). Assumes the bundled glossary + Phase 3 architecture docs are ingested.",
+  "items": [
+    {
+      "query": "why is SGP4 not used for asteroids and comets",
+      "relevant_markers": ["SGP4", "heliocentric"]
+    },
+    {
+      "query": "is a close approach the same as an impact",
+      "relevant_markers": ["close approach is NOT an impact", "Hazard flags"]
+    },
+    {
+      "query": "what does an epistemic status label mean",
+      "relevant_markers": ["epistemic status", "verified fact"]
+    },
+    {
+      "query": "what is a two line element set TLE",
+      "relevant_markers": ["Two-Line Element", "orbital elements"]
+    },
+    {
+      "query": "how is provenance recorded for sample data",
+      "relevant_markers": ["Provenance", "not live data"]
+    }
+  ]
+}

@@ -259,6 +259,26 @@ def jpl_client_factory(
 
 
 @pytest.fixture
+def memory_corpus(container: AppContainer) -> AppContainer:
+    """A container with a known scientific-memory corpus ingested (offline repo docs)."""
+    from orbitmind.memory.ingestion import IngestionRequest
+
+    container.memory_service.ingest(
+        IngestionRequest(
+            source_id="repo-docs",
+            paths=[
+                "docs/architecture/decisions/ADR-0005-quantum-boundary.md",
+                "docs/architecture/decisions/ADR-0016-small-body-orbit-representation.md",
+            ],
+        )
+    )
+    container.memory_service.ingest(
+        IngestionRequest(source_id="samples", paths=["data/samples/memory/glossary.md"])
+    )
+    return container
+
+
+@pytest.fixture
 def iss_request() -> dict[str, object]:
     """A valid, deterministic orbit-propagation request near the TLE epoch."""
     return {
