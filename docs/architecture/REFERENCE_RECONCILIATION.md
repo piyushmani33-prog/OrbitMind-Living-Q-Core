@@ -126,3 +126,12 @@ reversals.
 ADR-0001 (modular monolith), ADR-0003 (Postgres target via interfaces), ADR-0004
 (Temporal deferred behind an interface), ADR-0005 (bounded quantum), ADR-0006
 (epistemic status), ADR-0007 (orbital slice). The references validate all of these.
+
+## Phase 4A advance (2026-06-21) — bounded quantum optimization
+The references describe quantum as a **bounded, comparison-oriented capability**, never the
+core cognition engine. Phase 4A implements exactly that: a simulator-only QAOA experiment
+for satellite observation scheduling with **mandatory classical baselines**, independent
+verification, and an explicit no-quantum-advantage policy (ADR-0024–0029). The quantum
+layer remains an experimental adapter off the production mission path (ADR-0005), so this is
+a status advance ("bounded quantum" → "bounded quantum *exercised*"), not a reversal. The
+reconciliation matrix above remains valid.

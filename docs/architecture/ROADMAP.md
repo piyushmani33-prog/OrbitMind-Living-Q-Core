@@ -69,9 +69,19 @@ space-weather ingestion (NOAA SWPC); astronomy catalogues (stars/galaxies); radi
 and spectral analysis; Sentry/Scout impact-risk; Minor Planet Center / ESA NEOCC.
 
 ## Phase 4 — Optimization & bounded quantum comparison
-Classical baseline first; a QUBO/graph problem; Qiskit Aer experiment;
-reproducible seeds/shots; wall-clock + objective comparison; **no unsupported
-quantum-advantage claim**.
+
+### Phase 4A — Satellite observation scheduling benchmark ✅ (this build)
+Bounded satellite observation scheduling: mandatory deterministic classical baselines
+(exact exhaustive ground truth + greedy heuristic) and a **simulator-only** QAOA on the
+**same normalized instance**. Manual QUBO with `QUBO energy == −penalized_objective`
+**exhaustively verified**; Aer-only with fixed seeds/bounded shots/iterations/timeout and
+full circuit metadata; every schedule independently re-verified; policy-driven comparison
+conclusions; bounded scientific-memory entity links; visual artifacts + sidecars.
+**No quantum-advantage claim; quantum never controls a production mission** (ADR-0024–0029).
+See [QUANTUM_OPTIMIZATION_BOUNDARY.md](QUANTUM_OPTIMIZATION_BOUNDARY.md).
+
+### Phase 4B+ (planned)
+Larger instances / additional solvers, still classical-baseline-first and bounded.
 
 ## Phase 5 — Advanced visual intelligence
 Interactive charts, maps (Leaflet), CesiumJS orbit view, D3 provenance graph,
