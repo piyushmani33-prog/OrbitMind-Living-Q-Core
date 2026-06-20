@@ -25,6 +25,15 @@ class FindingStatus(StrEnum):
     SKIPPED = "skipped"
 
 
+class CheckCategory(StrEnum):
+    """What aspect a check validates."""
+
+    STRUCTURE = "structure"
+    MATHEMATICS = "mathematics"
+    PROVENANCE = "provenance"
+    POLICY = "policy"
+
+
 class VerificationFinding(BaseModel):
     """Result of a single deterministic verification check."""
 
@@ -35,6 +44,8 @@ class VerificationFinding(BaseModel):
     status: FindingStatus
     explanation: str
     values: dict[str, Any] = Field(default_factory=dict)
+    category: CheckCategory | None = None
+    units: str = ""
 
     @property
     def passed(self) -> bool:
