@@ -55,6 +55,25 @@ class AuditAction(StrEnum):
     RESULT_SET_TRUNCATED = "smallbody.result_truncated"
     UNSUPPORTED_OBJECT_REJECTED = "smallbody.unsupported_object_rejected"
 
+    # Phase 3B — scientific memory
+    INGESTION_REQUESTED = "memory.ingestion_requested"
+    INGESTION_STARTED = "memory.ingestion_started"
+    FILE_ACCEPTED = "memory.file_accepted"
+    FILE_REJECTED = "memory.file_rejected"
+    DUPLICATE_DETECTED = "memory.duplicate_detected"
+    DOCUMENT_VERSION_CREATED = "memory.document_version_created"
+    CHUNKING_COMPLETED = "memory.chunking_completed"
+    INGESTION_COMPLETED = "memory.ingestion_completed"
+    INGESTION_FAILED = "memory.ingestion_failed"
+    CLAIM_REGISTERED = "memory.claim_registered"
+    EVIDENCE_LINKED = "memory.evidence_linked"
+    CONCEPT_REGISTERED = "memory.concept_registered"
+    RETRIEVAL_REQUESTED = "memory.retrieval_requested"
+    RETRIEVAL_COMPLETED = "memory.retrieval_completed"
+    RETRIEVAL_FAILED = "memory.retrieval_failed"
+    MEMORY_RESULT_TRUNCATED = "memory.result_truncated"
+    GRAPH_TRAVERSAL_REQUESTED = "memory.graph_traversal_requested"
+
 
 class AuditEvent(BaseModel):
     """An append-only record of a lifecycle transition."""
