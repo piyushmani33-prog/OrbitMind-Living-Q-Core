@@ -69,7 +69,14 @@ def solve_exact(
 
     runtime = time.perf_counter() - start
     if best_eval is None:
+        # No feasible schedule recorded. Only claim INFEASIBLE if the search COMPLETED;
+        # a timeout (incl. an immediate timeout before any candidate) is UNKNOWN, not a
+        # statement that no feasible solution exists (review finding #17).
         status = ExperimentStatus.TIMED_OUT if timed_out else ExperimentStatus.COMPLETED
+        optimality = OptimalityStatus.UNKNOWN if timed_out else OptimalityStatus.INFEASIBLE
+        limitations = _LIMITS + (
+            " (timed out before proving feasibility/infeasibility)" if timed_out else ""
+        )
         return build_result(
             solver_kind=config.solver_kind,
             solver_name=_NAME,
@@ -78,11 +85,11 @@ def solve_exact(
             config=config,
             evaluation=None,
             status=status,
-            optimality=OptimalityStatus.INFEASIBLE,
+            optimality=optimality,
             known_optimum=None,
             runtime_seconds=runtime,
             evaluated_candidates=evaluated,
-            limitations=_LIMITS,
+            limitations=limitations,
         )
     optimality = OptimalityStatus.FEASIBLE if timed_out else OptimalityStatus.OPTIMAL
     status = ExperimentStatus.TIMED_OUT if timed_out else ExperimentStatus.COMPLETED

@@ -209,10 +209,11 @@ class ScheduleEvaluation(BaseModel):
     problem_checksum: str
     selected_opportunity_ids: tuple[str, ...]
     feasible: bool
-    raw_mission_value: float
+    raw_mission_value: float  # unweighted sum of selected mission values
+    weighted_mission_value: float  # sum of mission_value * mission_value_weight
     constraint_penalty: float  # penalty for QUBO-encoded (pairwise/mandatory) violations
-    penalized_objective: float  # raw_mission_value - constraint_penalty (== -QUBO energy)
-    objective_value: float  # mission value used for ranking feasible schedules
+    penalized_objective: float  # weighted_mission_value - constraint_penalty (== -QUBO energy)
+    objective_value: float  # weighted mission value used for ranking feasible schedules
     total_energy: float
     total_storage: float
     violations: tuple[ConstraintViolation, ...]
@@ -294,6 +295,35 @@ class SolverResult(BaseModel):
 # --------------------------------------------------------------------------
 # Quantum experiment
 # --------------------------------------------------------------------------
+class QuantumEvidence(BaseModel):
+    """Self-describing record so a quantum result cannot appear to optimize constraints it
+    did not encode (review finding #13). Resource/cardinality constraints listed under
+    ``unencoded_constraints`` are enforced ONLY by deterministic post-verification."""
+
+    model_config = ConfigDict(frozen=True)
+
+    problem_checksum: str
+    qubo_checksum: str
+    variable_mapping: tuple[str, ...]  # qubit index i -> opportunity id
+    qubit_to_variable: dict[int, str]
+    bit_order: str
+    encoded_constraints: tuple[str, ...]
+    unencoded_constraints: tuple[str, ...]
+    penalty_value: float
+    penalty_source: str
+    penalty_sufficient: bool
+    penalty_satisfying_assignment_exists: bool
+    post_verification_required: bool = True
+    simulator_backend: str = "AerSimulator"
+    seeds: dict[str, int] = Field(default_factory=dict)
+    software_versions: dict[str, str] = Field(default_factory=dict)
+    limitations: str = (
+        "Only conflict + mandatory constraints are encoded in the QUBO; resource and "
+        "cardinality constraints are enforced solely by deterministic post-verification. "
+        "Simulator-only; not evidence of hardware advantage."
+    )
+
+
 class QuantumCircuitMetadata(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -329,6 +359,7 @@ class QuantumExperiment(BaseModel):
     status: ExperimentStatus
     configuration: SolverConfiguration
     circuit_metadata: QuantumCircuitMetadata | None = None
+    evidence: QuantumEvidence | None = None
     total_shots: int = 0
     distinct_samples: int = 0
     feasible_sample_ratio: float = 0.0

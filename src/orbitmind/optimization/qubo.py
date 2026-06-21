@@ -26,15 +26,16 @@ def build_qubo(problem: SchedulingProblem) -> QuboModel:
     order = variable_order(problem)
     index = {opp_id: i for i, opp_id in enumerate(order)}
     penalty = resolved_penalty(problem)
-    value = {opp.id: opp.mission_value for opp in problem.opportunities}
+    weight = problem.objective.mission_value_weight
+    value = {opp.id: opp.mission_value * weight for opp in problem.opportunities}  # weighted
     mandatory = set(problem.constraints.mandatory)
     conflicts = generate_conflicts(problem)
 
     linear: dict[int, float] = {}
     quadratic: dict[str, float] = {}
 
-    # E(x) = -penalized_objective(x):
-    #   linear_i  = -value_i - P*[i in mandatory]
+    # E(x) = -penalized_objective(x), with weighted mission value:
+    #   linear_i  = -(value_i * weight) - P*[i in mandatory]
     #   quad_ij   = +P  for each conflict pair
     #   offset    = +P * |mandatory|
     for opp_id, i in index.items():

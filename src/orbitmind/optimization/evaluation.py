@@ -31,6 +31,7 @@ class Evaluator:
         self.order = variable_order(problem)
         self.index = {opp_id: i for i, opp_id in enumerate(self.order)}
         self.penalty = resolved_penalty(problem)
+        self.weight = problem.objective.mission_value_weight
         self._opp = {opp.id: opp for opp in problem.opportunities}
         self._conflicts = generate_conflicts(problem)
         self._mandatory = set(problem.constraints.mandatory)
@@ -39,6 +40,7 @@ class Evaluator:
     def evaluate(self, selected: frozenset[str] | set[str]) -> ScheduleEvaluation:
         selected = frozenset(selected) & set(self.order)
         raw_value = sum(self._opp[i].mission_value for i in selected)
+        weighted_value = raw_value * self.weight
         total_energy = sum(self._opp[i].energy_cost for i in selected)
         total_storage = sum(self._opp[i].storage_cost for i in selected)
 
@@ -98,36 +100,42 @@ class Evaluator:
                             magnitude=float(count - constraints.per_target_limit),
                         )
                     )
-        # Minimum mission value (hard only).
-        if constraints.min_mission_value is not None and raw_value < constraints.min_mission_value:
+        # Minimum mission value (hard only; compared against the weighted objective).
+        if (
+            constraints.min_mission_value is not None
+            and weighted_value < constraints.min_mission_value
+        ):
             violations.append(
                 ConstraintViolation(
                     kind=ConstraintKind.MIN_MISSION_VALUE,
-                    detail=f"value {raw_value} < min {constraints.min_mission_value}",
-                    magnitude=constraints.min_mission_value - raw_value,
+                    detail=f"value {weighted_value} < min {constraints.min_mission_value}",
+                    magnitude=constraints.min_mission_value - weighted_value,
                 )
             )
 
         constraint_penalty = self.penalty * penalized_count
-        penalized_objective = raw_value - constraint_penalty
+        penalized_objective = weighted_value - constraint_penalty
         feasible = len(violations) == 0
         return ScheduleEvaluation(
             problem_checksum=self.problem.checksum,
             selected_opportunity_ids=tuple(sorted(selected)),
             feasible=feasible,
             raw_mission_value=raw_value,
+            weighted_mission_value=weighted_value,
             constraint_penalty=constraint_penalty,
             penalized_objective=penalized_objective,
-            objective_value=raw_value,
+            objective_value=weighted_value,
             total_energy=total_energy,
             total_storage=total_storage,
             violations=tuple(violations),
         )
 
     def evaluate_bitstring(self, bits: str) -> ScheduleEvaluation:
-        """Decode an MSB-or-index string in variable_order (index 0 = first char)."""
+        """Decode a string in variable_order (index 0 = first char). Validates binary width."""
         if len(bits) != len(self.order):
             raise ValueError(f"bitstring length {len(bits)} != num vars {len(self.order)}")
+        if any(c not in "01" for c in bits):
+            raise ValueError("bitstring must contain only '0' and '1'")
         selected = {self.order[i] for i, b in enumerate(bits) if b == "1"}
         return self.evaluate(selected)
 

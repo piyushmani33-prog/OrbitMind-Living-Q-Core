@@ -42,20 +42,41 @@ def solve_greedy(
     evaluator = evaluator or Evaluator(problem)
     start = time.perf_counter()
     mandatory = set(problem.constraints.mandatory)
-    rest = sorted((o for o in problem.opportunities if o.id not in mandatory), key=_ordering_key)
-    ordered_ids = [*sorted(mandatory), *(o.id for o in rest)]
-
-    selected: set[str] = set()
     evaluated = 0
-    for opp_id in ordered_ids:
-        candidate = selected | {opp_id}
+
+    # The complete mandatory set is considered ATOMICALLY: seed the schedule with all of
+    # it together (review finding #8). If the mandatory set itself is infeasible, return a
+    # clearly-infeasible result rather than greedily testing each mandatory in isolation.
+    selected: set[str] = set(mandatory)
+    if mandatory:
+        seed_eval = evaluator.evaluate(selected)
+        evaluated += 1
+        if not seed_eval.feasible:
+            runtime = time.perf_counter() - start
+            return build_result(
+                solver_kind=config.solver_kind,
+                solver_name=_NAME,
+                solver_version=_VERSION,
+                problem_checksum=problem.checksum,
+                config=config,
+                evaluation=seed_eval,
+                status=ExperimentStatus.COMPLETED,
+                optimality=OptimalityStatus.INFEASIBLE,
+                known_optimum=None,
+                runtime_seconds=runtime,
+                evaluated_candidates=evaluated,
+                limitations=_LIMITS + " (mandatory set is jointly infeasible)",
+            )
+
+    rest = sorted((o for o in problem.opportunities if o.id not in mandatory), key=_ordering_key)
+    for opp in rest:
+        candidate = selected | {opp.id}
         evaluated += 1
         if evaluator.evaluate(candidate).feasible:
             selected = candidate
 
     ev = evaluator.evaluate(selected)
     runtime = time.perf_counter() - start
-    # If mandatory could not all be placed feasibly, report infeasibility honestly.
     optimality = OptimalityStatus.FEASIBLE if ev.feasible else OptimalityStatus.INFEASIBLE
     return build_result(
         solver_kind=config.solver_kind,
