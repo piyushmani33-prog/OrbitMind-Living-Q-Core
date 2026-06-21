@@ -9,7 +9,7 @@ verified, and compared only.
 from __future__ import annotations
 
 from orbitmind.core.config import Settings
-from orbitmind.core.errors import NotFoundError
+from orbitmind.core.errors import NotFoundError, ValidationError
 from orbitmind.core.logging import get_logger
 from orbitmind.governance.audit import AuditAction, AuditEvent
 from orbitmind.memory.models import (
@@ -23,7 +23,6 @@ from orbitmind.optimization.benchmark import proven_optimum, run_benchmark
 from orbitmind.optimization.evaluation import Evaluator
 from orbitmind.optimization.models import (
     BenchmarkRun,
-    BenchmarkThresholds,
     ComparisonConclusion,
     ExperimentStatus,
     QuantumExperiment,
@@ -32,6 +31,7 @@ from orbitmind.optimization.models import (
     SolverKind,
     SolverResult,
 )
+from orbitmind.optimization.policy import DEFAULT_POLICY_ID, get_policy
 from orbitmind.optimization.problem import normalize_problem
 from orbitmind.optimization.quantum import run_quantum_experiment
 from orbitmind.optimization.solvers import solve_exact, solve_greedy
@@ -211,9 +211,12 @@ class OptimizationService:
         timeout_seconds: float = 30.0,
         run_quantum: bool = True,
         generate_artifacts: bool = False,
-        thresholds: BenchmarkThresholds | None = None,
+        policy_id: str = DEFAULT_POLICY_ID,
     ) -> tuple[BenchmarkRun, list[VerificationFinding]]:
         problem = self._require_problem(problem_id)
+        policy = get_policy(policy_id)
+        if policy is None:
+            raise ValidationError(f"unknown comparison policy id '{policy_id}'")
         run = run_benchmark(
             problem,
             seed=seed,
@@ -221,7 +224,7 @@ class OptimizationService:
             optimizer_iterations=optimizer_iterations,
             qaoa_layers=qaoa_layers,
             timeout_seconds=timeout_seconds,
-            thresholds=thresholds,
+            policy=policy,
             run_quantum=run_quantum,
         )
         artifacts_root = self._settings.resolved_artifacts_dir()

@@ -6,7 +6,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from orbitmind.api.container import AppContainer
-from orbitmind.optimization.models import BenchmarkThresholds
 
 pytestmark = pytest.mark.integration
 
@@ -225,17 +224,22 @@ def test_comparison_config_round_trips(container: AppContainer) -> None:
     from orbitmind.persistence.optimization_repository import SqlAlchemyOptimizationRepository
 
     problem = container.optimization_service.create_problem(fixtures.fixture("default"))
-    thresholds = BenchmarkThresholds(competitive_relative_gap=0.25, min_feasible_sample_ratio=0.33)
+    # Thresholds are server-owned: select the registered 'lenient-v1' policy (0.25 / 0.33).
     run, _ = container.optimization_service.benchmark(
-        problem.id, seed=7, run_quantum=False, thresholds=thresholds
+        problem.id, seed=7, run_quantum=False, policy_id="lenient-v1"
     )
     session = container.database.session()
     stored = SqlAlchemyOptimizationRepository(session).get_comparison(run.id)
     session.close()
     assert stored is not None
-    # Stored thresholds round-trip EXACTLY (not silently replaced by defaults; finding #12).
+    # Stored thresholds + policy metadata + associations round-trip EXACTLY (findings #12/#17).
     assert stored.thresholds.competitive_relative_gap == 0.25
     assert stored.thresholds.min_feasible_sample_ratio == 0.33
+    assert stored.policy_id == "lenient-v1" and stored.policy_version == "1"
+    assert stored.policy_checksum == run.comparison.policy_checksum
+    assert stored.exact_result_id == run.comparison.exact_result_id
+    assert stored.greedy_result_id == run.comparison.greedy_result_id
+    assert stored.objective_gap == run.comparison.objective_gap
     assert stored.epistemic_status == run.comparison.epistemic_status
     assert stored.limitations == run.comparison.limitations
     assert stored.conclusion == run.comparison.conclusion

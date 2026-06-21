@@ -23,7 +23,8 @@ from orbitmind.optimization.benchmark import conclude, proven_optimum
 from orbitmind.optimization.evaluation import Evaluator
 from orbitmind.optimization.models import (
     BenchmarkRun,
-    BenchmarkThresholds,
+    ExperimentStatus,
+    OptimalityStatus,
     PenaltyProofStatus,
     QuantumExperiment,
     SchedulingProblem,
@@ -32,6 +33,7 @@ from orbitmind.optimization.models import (
     SolverResult,
 )
 from orbitmind.optimization.penalties import penalty_policy
+from orbitmind.optimization.policy import authenticate_policy, default_policy
 from orbitmind.optimization.problem import problem_checksum, variable_order
 from orbitmind.optimization.qubo import build_qubo, qubo_energy
 from orbitmind.optimization.solvers import solve_exact, solve_greedy
@@ -171,6 +173,9 @@ def verify_benchmark(
     )
     trusted = {SolverKind.EXACT: trusted_exact, SolverKind.GREEDY: trusted_greedy}
     findings.extend(_verify_solvers(run, trusted, evaluator, valid_ids))
+    findings.extend(
+        _verify_baselines(run, problem, trusted_exact, trusted_greedy, len(order))
+    )
 
     # 12-22. Quantum experiment recomputation.
     if run.quantum_experiment is not None:
@@ -293,8 +298,6 @@ def _verify_quantum(
     trusted_exact: SolverResult,
 ) -> list[VerificationFinding]:
     out: list[VerificationFinding] = []
-    from orbitmind.optimization.models import ExperimentStatus
-
     # Quantum EVIDENCE checks apply only to a COMPLETED experiment. A non-completed run
     # (unsupported / failed / timed-out / cancelled) carries no positive evidence and is
     # handled as non-positive by the comparison policy; there is nothing to re-verify.
@@ -514,27 +517,149 @@ def _verify_quantum(
     return out
 
 
+def _verify_baselines(
+    run: BenchmarkRun,
+    problem: SchedulingProblem,
+    trusted_exact: SolverResult,
+    trusted_greedy: SolverResult,
+    n: int,
+) -> list[VerificationFinding]:
+    """Authenticate the classical baseline cardinality + the exact/greedy records (High #2)."""
+    out: list[VerificationFinding] = []
+    exact_results = [r for r in run.solver_results if r.solver_kind == SolverKind.EXACT]
+    greedy_results = [r for r in run.solver_results if r.solver_kind == SolverKind.GREEDY]
+    ids = [r.id for r in run.solver_results]
+    out.append(
+        _f(
+            "opt.baseline_cardinality",
+            len(run.solver_results) == 2
+            and len(exact_results) == 1
+            and len(greedy_results) == 1
+            and len(set(ids)) == len(ids),
+            "exactly one exact + one greedy classical baseline (no duplicates / extra kinds)",
+            category=CheckCategory.STRUCTURE,
+            severity=Severity.CRITICAL,
+            values={
+                "exact": len(exact_results),
+                "greedy": len(greedy_results),
+                "total": len(run.solver_results),
+            },
+        )
+    )
+    # When the trusted re-solve proves an optimum (tiny instances always complete), the reported
+    # exact/greedy baselines must themselves be COMPLETED — a failed/timed-out/cancelled record
+    # with otherwise-consistent fields must not pass (review findings #7/#8).
+    trusted_exact_proven = (
+        trusted_exact.status == ExperimentStatus.COMPLETED
+        and trusted_exact.optimality_status == OptimalityStatus.OPTIMAL
+    )
+    if exact_results and trusted_exact_proven:
+        ex0 = exact_results[0]
+        out.append(
+            _f(
+                "opt.exact_status_completed",
+                ex0.status == ExperimentStatus.COMPLETED
+                and ex0.optimality_status == OptimalityStatus.OPTIMAL
+                and ex0.feasible,
+                "exact baseline is completed, proven-optimal, and feasible",
+                category=CheckCategory.STRUCTURE,
+                severity=Severity.CRITICAL,
+                values={"status": ex0.status.value, "optimality": ex0.optimality_status.value},
+            )
+        )
+    if greedy_results and trusted_greedy.status == ExperimentStatus.COMPLETED:
+        g0 = greedy_results[0]
+        out.append(
+            _f(
+                "opt.greedy_status_completed",
+                g0.status == ExperimentStatus.COMPLETED,
+                "greedy baseline status is completed",
+                category=CheckCategory.STRUCTURE,
+                severity=Severity.CRITICAL,
+                values={"status": g0.status.value},
+            )
+        )
+    # Authenticate the exact baseline's exhaustive candidate count (2^n) for a proven optimum.
+    if exact_results:
+        ex = exact_results[0]
+        proven = (
+            ex.status == ExperimentStatus.COMPLETED
+            and ex.optimality_status == OptimalityStatus.OPTIMAL
+        )
+        if proven and n <= problem.limits.exact_max_variables:
+            out.append(
+                _f(
+                    "opt.exact_exhaustive_candidate_count",
+                    ex.resource_usage.evaluated_candidates == (1 << n),
+                    f"a proven-optimal exhaustive exact solve must evaluate 2^{n} candidates",
+                    category=CheckCategory.MATHEMATICS,
+                    severity=Severity.CRITICAL,
+                    values={
+                        "evaluated": ex.resource_usage.evaluated_candidates,
+                        "expected": 1 << n,
+                    },
+                )
+            )
+    # Authenticate the greedy baseline against a deterministic rerun.
+    if greedy_results and greedy_results[0].schedule is not None and trusted_greedy.schedule:
+        g = greedy_results[0]
+        assert g.schedule is not None
+        out.append(
+            _f(
+                "opt.greedy_matches_rerun",
+                set(g.schedule.selected_opportunity_ids)
+                == set(trusted_greedy.schedule.selected_opportunity_ids)
+                and g.feasible == trusted_greedy.feasible,
+                "greedy schedule + feasibility match a deterministic server rerun",
+                category=CheckCategory.MATHEMATICS,
+                severity=Severity.CRITICAL,
+            )
+        )
+    return out
+
+
 def _verify_comparison(
     run: BenchmarkRun, trusted_exact: SolverResult, trusted_greedy: SolverResult
 ) -> list[VerificationFinding]:
     out: list[VerificationFinding] = []
     if run.comparison is None:
         return out
-    thresholds = run.comparison.thresholds or BenchmarkThresholds()
+    c = run.comparison
+    # Authenticate the comparison policy against the SERVER registry; never trust the persisted
+    # thresholds as proof of themselves (review finding #9). The conclusion is then re-derived
+    # using the authoritative server thresholds, so coherently changing both a persisted
+    # threshold and the conclusion is rejected.
+    authoritative, policy_ok, policy_msg = authenticate_policy(
+        policy_id=c.policy_id,
+        policy_version=c.policy_version,
+        policy_checksum_value=c.policy_checksum,
+        thresholds=c.thresholds,
+    )
+    out.append(
+        _f(
+            "opt.policy_authenticated",
+            policy_ok,
+            f"comparison policy authenticated against the server registry ({policy_msg})",
+            category=CheckCategory.POLICY,
+            severity=Severity.CRITICAL,
+            values={"policy_id": c.policy_id, "policy_version": c.policy_version},
+        )
+    )
+    server_thresholds = (authoritative or default_policy()).thresholds()
     expected, _rationale = conclude(
         exact_result=trusted_exact,
         greedy_result=trusted_greedy,
         quantum_experiment=run.quantum_experiment,
-        thresholds=thresholds,
+        thresholds=server_thresholds,
     )
     out.append(
         _f(
             "opt.conclusion_policy",
-            run.comparison.conclusion == expected,
-            "conclusion re-derived from the trusted re-solve + observed samples matches the report",
+            c.conclusion == expected,
+            "conclusion re-derived from the trusted re-solve + SERVER thresholds matches report",
             category=CheckCategory.POLICY,
             severity=Severity.CRITICAL,
-            values={"reported": run.comparison.conclusion.value, "expected": expected.value},
+            values={"reported": c.conclusion.value, "expected": expected.value},
         )
     )
     # Comparison objective fields must equal the recomputed trusted values.

@@ -198,8 +198,9 @@ class BenchmarkRequest(_Strict):
     timeout_seconds: float = Field(default=30.0, gt=0.0, le=60.0)
     run_quantum: bool = True
     generate_artifacts: bool = False
-    competitive_relative_gap: float = Field(default=0.0, ge=0.0, le=1.0)
-    min_feasible_sample_ratio: float = Field(default=0.05, ge=0.0, le=1.0)
+    # Thresholds are server-owned (review finding #9): a client selects a registered policy
+    # id, never raw thresholds that would then be trusted at verification time.
+    policy_id: str = Field(default="strict-v1", min_length=1, max_length=64)
 
 
 class ProblemListResponse(BaseModel):

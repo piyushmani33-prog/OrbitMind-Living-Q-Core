@@ -21,6 +21,7 @@ from orbitmind.optimization.models import (
     SolverKind,
     SolverResult,
 )
+from orbitmind.optimization.policy import ComparisonPolicy, default_policy
 from orbitmind.optimization.quantum import run_quantum_experiment
 from orbitmind.optimization.solvers import solve_exact, solve_greedy
 from orbitmind.quantum.adapter import quantum_available
@@ -160,11 +161,16 @@ def run_benchmark(
     optimizer_iterations: int = 24,
     qaoa_layers: int = 1,
     timeout_seconds: float = 30.0,
-    thresholds: BenchmarkThresholds | None = None,
+    policy: ComparisonPolicy | None = None,
     run_quantum: bool = True,
 ) -> BenchmarkRun:
-    """Run exact + greedy + (optional) quantum on the same normalized problem instance."""
-    thresholds = thresholds or BenchmarkThresholds()
+    """Run exact + greedy + (optional) quantum on the same normalized problem instance.
+
+    The comparison thresholds come from the SERVER-owned ``policy`` (review finding #9), never
+    from client input trusted at verification time.
+    """
+    policy = policy or default_policy()
+    thresholds = policy.thresholds()
     evaluator = Evaluator(problem)
 
     exact = solve_exact(
@@ -216,6 +222,16 @@ def run_benchmark(
         quantum_experiment=quantum,
         thresholds=thresholds,
     )
+    quantum_objective = (
+        quantum.best_feasible_sample.objective_value
+        if quantum is not None and quantum.best_feasible_sample is not None
+        else None
+    )
+    objective_gap = (
+        known_optimum - quantum_objective
+        if known_optimum is not None and quantum_objective is not None
+        else None
+    )
     comparison = BenchmarkComparison(
         problem_checksum=problem.checksum,
         exact_result_id=exact.id,
@@ -223,14 +239,14 @@ def run_benchmark(
         quantum_experiment_id=quantum.id if quantum is not None else None,
         exact_objective=_classical_objective(exact),
         greedy_objective=_classical_objective(greedy),
-        quantum_objective=(
-            quantum.best_feasible_sample.objective_value
-            if quantum is not None and quantum.best_feasible_sample is not None
-            else None
-        ),
+        quantum_objective=quantum_objective,
         known_optimum=known_optimum,
+        objective_gap=objective_gap,
         conclusion=conclusion,
         thresholds=thresholds,
+        policy_id=policy.policy_id,
+        policy_version=policy.policy_version,
+        policy_checksum=policy.checksum,
         rationale=rationale,
     )
     return BenchmarkRun(

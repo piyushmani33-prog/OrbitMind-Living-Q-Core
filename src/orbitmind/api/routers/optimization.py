@@ -22,7 +22,6 @@ from orbitmind.api.optimization_schemas import (
 from orbitmind.core.errors import NotFoundError, ValidationError
 from orbitmind.optimization import fixtures
 from orbitmind.optimization.models import (
-    BenchmarkThresholds,
     QuantumExperiment,
     SchedulingProblem,
     SolverKind,
@@ -106,10 +105,7 @@ def benchmark(problem_id: str, payload: BenchmarkRequest, service: ServiceDep) -
         timeout_seconds=payload.timeout_seconds,
         run_quantum=payload.run_quantum,
         generate_artifacts=payload.generate_artifacts,
-        thresholds=BenchmarkThresholds(
-            competitive_relative_gap=payload.competitive_relative_gap,
-            min_feasible_sample_ratio=payload.min_feasible_sample_ratio,
-        ),
+        policy_id=payload.policy_id,
     )
     verified = all(f.passed for f in findings)
     return BenchmarkResponse(run=run, findings=findings, verified=verified)
