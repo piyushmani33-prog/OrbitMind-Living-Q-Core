@@ -45,7 +45,7 @@ def create_problem(payload: CreateProblemRequest, service: ServiceDep) -> Schedu
             raise ValidationError(str(exc)) from exc
     else:
         assert payload.problem is not None
-        problem = payload.problem
+        problem = payload.problem.to_domain()  # strict DTO -> server-stamped domain model
     return service.create_problem(problem)
 
 
