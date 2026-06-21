@@ -6,6 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from orbitmind.api.container import AppContainer
+from orbitmind.optimization.models import BenchmarkThresholds
 
 pytestmark = pytest.mark.integration
 
@@ -116,3 +117,85 @@ def test_benchmark_registers_bounded_memory_links(container: AppContainer) -> No
     neighbors = container.memory_service.graph_neighbors(problem.id, depth=1, limit=50)
     edge_kinds = {n.edge_kind.value for n in neighbors.neighbors}
     assert "solved-by" in edge_kinds  # problem -> solved-by -> solver run
+
+
+_VALID_PROBLEM = {
+    "name": "client-problem",
+    "opportunities": [
+        {
+            "id": "OPP-1",
+            "satellite_id": "SAT-A",
+            "target_id": "T1",
+            "start": "2026-06-21T10:00:00Z",
+            "end": "2026-06-21T10:30:00Z",
+            "mission_value": 5.0,
+            "duration_seconds": 1800.0,
+            "energy_cost": 2.0,
+            "storage_cost": 1.0,
+        }
+    ],
+    "satellites": [{"id": "SAT-A", "energy_capacity": 100.0, "storage_capacity": 100.0}],
+    "targets": [{"id": "T1"}],
+}
+
+
+def test_dto_create_server_stamps_fields(client: TestClient) -> None:
+    resp = client.post("/api/v1/optimization/problems", json={"problem": _VALID_PROBLEM})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["source"] == "api"  # server-stamped
+    assert body["epistemic_status"] == "deterministic-calculation"  # server-stamped
+    assert body["checksum"]  # server-stamped
+    assert body["opportunities"][0]["provenance"].startswith("client-submitted")
+
+
+def test_dto_rejects_server_owned_and_custom_penalty(client: TestClient) -> None:
+    for field, value in [
+        ("epistemic_status", "verified-fact"),
+        ("created_at", "2020-01-01T00:00:00Z"),
+        ("problem_checksum", "deadbeef"),
+        ("checksum", "x"),
+        ("id", "client-hijack"),
+        ("source", "trusted"),
+        ("limits", {"max_variables": 999}),
+        ("verification_status", "verified"),
+    ]:
+        bad = {"problem": {**_VALID_PROBLEM, field: value}}
+        assert client.post("/api/v1/optimization/problems", json=bad).status_code == 422, field
+    # Custom penalty coefficients are not accepted via the API (finding #6).
+    badp = {
+        "problem": {
+            **_VALID_PROBLEM,
+            "objective": {"mission_value_weight": 1.0, "penalty_coefficient": 5.0},
+        }
+    }
+    assert client.post("/api/v1/optimization/problems", json=badp).status_code == 422
+
+
+def test_duplicate_problem_creation_is_idempotent(client: TestClient) -> None:
+    a = client.post("/api/v1/optimization/problems", json={"fixture": "default"}).json()
+    b = client.post("/api/v1/optimization/problems", json={"fixture": "default"}).json()
+    assert a["id"] == b["id"] and a["checksum"] == b["checksum"]
+    got = client.get(f"/api/v1/optimization/problems/{a['id']}")
+    assert got.status_code == 200
+
+
+def test_comparison_config_round_trips(container: AppContainer) -> None:
+    from orbitmind.optimization import fixtures
+    from orbitmind.persistence.optimization_repository import SqlAlchemyOptimizationRepository
+
+    problem = container.optimization_service.create_problem(fixtures.fixture("default"))
+    thresholds = BenchmarkThresholds(competitive_relative_gap=0.25, min_feasible_sample_ratio=0.33)
+    run, _ = container.optimization_service.benchmark(
+        problem.id, seed=7, run_quantum=False, thresholds=thresholds
+    )
+    session = container.database.session()
+    stored = SqlAlchemyOptimizationRepository(session).get_comparison(run.id)
+    session.close()
+    assert stored is not None
+    # Stored thresholds round-trip EXACTLY (not silently replaced by defaults; finding #12).
+    assert stored.thresholds.competitive_relative_gap == 0.25
+    assert stored.thresholds.min_feasible_sample_ratio == 0.33
+    assert stored.epistemic_status == run.comparison.epistemic_status
+    assert stored.limitations == run.comparison.limitations
+    assert stored.conclusion == run.comparison.conclusion

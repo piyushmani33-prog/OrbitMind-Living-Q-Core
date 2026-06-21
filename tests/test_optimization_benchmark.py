@@ -22,6 +22,8 @@ _THRESH = BenchmarkThresholds(competitive_relative_gap=0.0, min_feasible_sample_
 
 
 def _solver(kind: SolverKind, obj: float | None, feasible: bool, optimal: bool) -> SolverResult:
+    from orbitmind.optimization.models import CandidateSchedule
+
     return SolverResult(
         solver_kind=kind,
         solver_name=kind.value,
@@ -32,6 +34,10 @@ def _solver(kind: SolverKind, obj: float | None, feasible: bool, optimal: bool) 
         optimality_status=OptimalityStatus.OPTIMAL if optimal else OptimalityStatus.FEASIBLE,
         objective_value=obj,
         feasible=feasible,
+        # A proven optimum must carry a schedule (proven_optimum requires one; finding #10).
+        schedule=CandidateSchedule(problem_checksum="x", selected_opportunity_ids=("OPP-2",))
+        if feasible
+        else None,
     )
 
 

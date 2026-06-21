@@ -1,8 +1,11 @@
-"""Live PostgreSQL integration for Phase 4A optimization persistence + migration.
+"""Live PostgreSQL integration for Phase 4A optimization (migration-first; review #14).
 
-Skips cleanly unless ORBITMIND_TEST_POSTGRES_URL points at a disposable, migrated DB
-(see tests/integration/test_postgres_memory.py for setup). Uses run_quantum=False so the
-PostgreSQL runner needs no Aer.
+Skips unless ORBITMIND_TEST_POSTGRES_URL points at a disposable DB that has been migrated
+to head (see test_postgres_memory.py for setup). These tests deliberately do NOT call
+``create_all()`` — they rely on the Alembic-created schema so a migration defect cannot be
+masked. They verify foreign keys + the unique checksum constraint, FK enforcement +
+rollback, idempotent/race-safe creation, quantum/sample/comparison/artifact persistence,
+and preservation of existing memory / mission / space-object rows.
 """
 
 from __future__ import annotations
@@ -16,15 +19,14 @@ from sqlalchemy import text
 from orbitmind.api.container import AppContainer
 from orbitmind.core.config import Settings
 from orbitmind.optimization import fixtures
+from orbitmind.persistence.optimization_repository import SqlAlchemyOptimizationRepository
 
 _PG_URL = os.environ.get("ORBITMIND_TEST_POSTGRES_URL")
 
 pytestmark = [
     pytest.mark.integration,
     pytest.mark.postgres,
-    pytest.mark.skipif(
-        not _PG_URL, reason="set ORBITMIND_TEST_POSTGRES_URL (disposable DB) to run"
-    ),
+    pytest.mark.skipif(not _PG_URL, reason="set ORBITMIND_TEST_POSTGRES_URL (disposable DB)"),
 ]
 
 _TABLES = (
@@ -43,64 +45,138 @@ _TABLES = (
 
 @pytest.fixture
 def pg_container(tmp_path: Path) -> AppContainer:
+    """A container on the MIGRATED PostgreSQL schema. Does NOT call init_storage/create_all."""
     settings = Settings(
         database_url=_PG_URL,
         artifacts_dir=tmp_path / "art",
         cache_dir=tmp_path / "cache",
         env="test",
     )
-    container = AppContainer(settings=settings)
-    container.init_storage()
+    container = AppContainer(settings=settings)  # no init_storage(): use the migrated schema
     assert container.database.is_postgres
     with container.database.engine.begin() as conn:
         conn.execute(text("TRUNCATE " + ", ".join(_TABLES) + " RESTART IDENTITY CASCADE"))
     return container
 
 
-def _count(container: AppContainer, table: str) -> int:
+def _exec(container: AppContainer, sql: str) -> list:
     with container.database.engine.connect() as conn:
-        return int(conn.execute(text(f"SELECT count(*) FROM {table}")).scalar_one())
+        return list(conn.execute(text(sql)))
 
 
-def test_optimization_tables_and_fts_index_present(pg_container: AppContainer) -> None:
-    head = _count(pg_container, "optimization_problems")  # table exists + queryable
-    assert head == 0
-    with pg_container.database.engine.connect() as conn:
-        present = {
-            r[0]
-            for r in conn.execute(
-                text("SELECT table_name FROM information_schema.tables WHERE table_schema='public'")
+def test_schema_is_at_corrective_head_with_constraints(pg_container: AppContainer) -> None:
+    head = _exec(pg_container, "SELECT version_num FROM alembic_version")[0][0]
+    assert head == "d63d75f51b9d"
+    # Foreign keys created by the corrective migration are present.
+    fks = {
+        r[0]
+        for r in _exec(
+            pg_container,
+            "SELECT constraint_name FROM information_schema.table_constraints "
+            "WHERE table_schema='public' AND constraint_type='FOREIGN KEY' "
+            "AND table_name IN ('benchmark_runs','solver_runs','quantum_experiments',"
+            "'benchmark_comparisons','optimization_artifacts')",
+        )
+    }
+    assert any("benchmark_runs" in f for f in fks)
+    # Unique constraint/index on the canonical checksum.
+    uniques = _exec(
+        pg_container,
+        "SELECT indexdef FROM pg_indexes WHERE indexname='ix_optimization_problems_checksum'",
+    )
+    assert uniques and "UNIQUE" in uniques[0][0].upper()
+
+
+def test_foreign_key_rejects_orphan_and_transaction_recovers(pg_container: AppContainer) -> None:
+    from sqlalchemy.exc import IntegrityError
+
+    engine = pg_container.database.engine
+    with engine.connect() as conn:
+        trans = conn.begin()
+        with pytest.raises(IntegrityError):
+            conn.execute(
+                text(
+                    "INSERT INTO solver_runs (id, benchmark_id, problem_checksum, solver_kind, "
+                    "solver_name, solver_version, status, optimality_status, feasible, seed, "
+                    "runtime_seconds, config_json, result_json, software_versions, created_at) "
+                    "VALUES ('orphan','NO-SUCH-BENCHMARK','x','exact','x','1','completed',"
+                    "'optimal',true,1,0.0,'{}','{}','{}', now())"
+                )
             )
-        }
-    for table in _TABLES:
-        assert table in present
+        trans.rollback()
+    # The connection/transaction is usable afterwards.
+    assert _exec(pg_container, "SELECT 1")[0][0] == 1
+    assert _exec(pg_container, "SELECT count(*) FROM solver_runs")[0][0] == 0
 
 
-def test_benchmark_persists_and_reads_back_on_postgres(pg_container: AppContainer) -> None:
+def test_benchmark_persists_and_reads_back(pg_container: AppContainer) -> None:
     svc = pg_container.optimization_service
     problem = svc.create_problem(fixtures.fixture("default"))
-    assert _count(pg_container, "observation_opportunities") == 4
-    assert _count(pg_container, "scheduling_constraints") >= 1
+    assert _exec(pg_container, "SELECT count(*) FROM observation_opportunities")[0][0] == 4
 
     run, findings = svc.benchmark(problem.id, seed=7, run_quantum=False)
-    assert run.comparison.conclusion.value == "classical-exact-best"
     assert all(f.passed for f in findings)
-    assert _count(pg_container, "benchmark_runs") == 1
-    assert _count(pg_container, "solver_runs") == 2
-    assert _count(pg_container, "benchmark_comparisons") == 1
+    assert _exec(pg_container, "SELECT count(*) FROM benchmark_runs")[0][0] == 1
+    assert _exec(pg_container, "SELECT count(*) FROM solver_runs")[0][0] == 2
+    assert _exec(pg_container, "SELECT count(*) FROM benchmark_comparisons")[0][0] == 1
+    # Comparison config round-trips exactly.
+    session = pg_container.database.session()
+    stored = SqlAlchemyOptimizationRepository(session).get_comparison(run.id)
+    session.close()
+    assert stored is not None and stored.conclusion == run.comparison.conclusion
+    assert (
+        stored.thresholds.competitive_relative_gap
+        == run.comparison.thresholds.competitive_relative_gap
+    )
 
-    # Read back the persisted problem + a solver run.
-    fetched = svc.get_problem(problem.id)
-    assert fetched is not None and fetched.checksum == problem.checksum
-    exact_id = run.solver_results[0].id
-    reread = svc.get_run(exact_id)
-    assert reread is not None
 
-    # Bounded memory links were registered.
-    assert _count(pg_container, "memory_graph_edges") >= 2
+def test_quantum_and_samples_and_artifacts_persist(pg_container: AppContainer) -> None:
+    svc = pg_container.optimization_service
+    problem = svc.create_problem(fixtures.fixture("default"))
+    run, _ = svc.benchmark(
+        problem.id,
+        seed=7,
+        shots=512,
+        optimizer_iterations=12,
+        run_quantum=True,
+        generate_artifacts=True,
+    )
+    if run.quantum_experiment is not None and run.quantum_experiment.status.value == "completed":
+        assert _exec(pg_container, "SELECT count(*) FROM quantum_experiments")[0][0] >= 1
+        assert _exec(pg_container, "SELECT count(*) FROM quantum_sample_results")[0][0] >= 1
+    assert _exec(pg_container, "SELECT count(*) FROM optimization_artifacts")[0][0] >= 5
 
 
-def test_existing_domain_tables_intact_on_postgres(pg_container: AppContainer) -> None:
+def test_duplicate_creation_is_idempotent_and_race_safe(pg_container: AppContainer) -> None:
+    svc = pg_container.optimization_service
+    a = svc.create_problem(fixtures.fixture("default"))
+    b = svc.create_problem(fixtures.fixture("default"))
+    assert a.id == b.id  # idempotent
+    assert _exec(pg_container, "SELECT count(*) FROM optimization_problems")[0][0] == 1
+
+    # Concurrent insert race: two sessions insert the same checksum; one wins, the other
+    # rolls back its savepoint and returns the existing id (transaction stays usable).
+    fresh = pg_container.database.session()
+    other = pg_container.database.session()
+    fresh.execute(text("TRUNCATE optimization_problems CASCADE"))
+    fresh.commit()
+    problem = fixtures.fixture("mutual-exclusion")
+    from orbitmind.optimization.problem import normalize_problem
+
+    norm = normalize_problem(problem)
+    repo_a = SqlAlchemyOptimizationRepository(fresh)
+    repo_b = SqlAlchemyOptimizationRepository(other)
+    id_a = repo_a.save_problem(norm)
+    fresh.commit()
+    id_b = repo_b.save_problem(norm.model_copy(update={"id": "different-uuid"}))  # race loser
+    other.commit()
+    assert id_a == id_b == norm.id  # both return the persisted id
+    fresh.close()
+    other.close()
+    assert _exec(pg_container, "SELECT count(*) FROM optimization_problems")[0][0] == 1
+
+
+def test_existing_domain_rows_preserved(pg_container: AppContainer) -> None:
     pg_container.optimization_service.create_problem(fixtures.fixture("default"))
-    for table in ("missions", "space_objects", "scientific_documents", "source_definitions"):
-        _count(pg_container, table)  # queryable, untouched by optimization
+    for table in ("missions", "space_objects", "scientific_documents", "memory_graph_edges"):
+        _exec(pg_container, f"SELECT count(*) FROM {table}")  # queryable, untouched

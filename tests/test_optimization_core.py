@@ -10,10 +10,10 @@ from orbitmind.core.errors import ValidationError
 from orbitmind.optimization import fixtures
 from orbitmind.optimization.evaluation import Evaluator
 from orbitmind.optimization.models import ConstraintKind
+from orbitmind.optimization.penalties import penalty_is_sufficient
 from orbitmind.optimization.problem import (
     generate_conflicts,
     normalize_problem,
-    penalty_is_sufficient,
     problem_checksum,
     resolved_penalty,
     variable_order,
