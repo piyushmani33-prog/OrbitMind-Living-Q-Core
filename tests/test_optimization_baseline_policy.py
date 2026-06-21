@@ -181,3 +181,43 @@ def test_conclude_both_baselines_failed_is_insufficient() -> None:
         thresholds=default_policy().thresholds(),
     )
     assert conclusion == ComparisonConclusion.INSUFFICIENT_EVIDENCE
+
+
+# ---- pure conclusion-policy: a FAILED-but-feasible-looking record contributes nothing (M4) --
+def test_classical_objective_ignores_failed_feasible_looking_records() -> None:
+    from orbitmind.optimization.benchmark import _classical_objective
+
+    run = _base_run()
+    # status FAILED but feasible=True + a stale objective: must NOT contribute.
+    stale = _greedy(run).model_copy(update={"status": ExperimentStatus.FAILED})
+    assert stale.feasible and stale.objective_value is not None
+    assert _classical_objective(stale) is None
+    # timed-out / nan / wrong-kind also contribute nothing.
+    assert (
+        _classical_objective(_greedy(run).model_copy(update={"status": ExperimentStatus.TIMED_OUT}))
+        is None
+    )
+    assert (
+        _classical_objective(_greedy(run).model_copy(update={"objective_value": float("nan")}))
+        is None
+    )
+    assert (
+        _classical_objective(
+            _greedy(run).model_copy(update={"solver_kind": SolverKind.QUANTUM_QAOA})
+        )
+        is None
+    )
+
+
+def test_conclude_two_failed_feasible_looking_records_is_insufficient() -> None:
+    run = _base_run()
+    # Keep feasible=True + objective intact, only flip status to FAILED (the M4 attack).
+    fe = _exact(run).model_copy(update={"status": ExperimentStatus.FAILED})
+    fg = _greedy(run).model_copy(update={"status": ExperimentStatus.FAILED})
+    conclusion, _ = conclude(
+        exact_result=fe,
+        greedy_result=fg,
+        quantum_experiment=None,
+        thresholds=default_policy().thresholds(),
+    )
+    assert conclusion == ComparisonConclusion.INSUFFICIENT_EVIDENCE

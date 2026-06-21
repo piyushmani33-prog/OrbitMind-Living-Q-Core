@@ -7,6 +7,8 @@ only that a feasible quantum result met a defined bounded threshold for this ins
 
 from __future__ import annotations
 
+import math
+
 from orbitmind.optimization.evaluation import Evaluator
 from orbitmind.optimization.models import (
     BenchmarkComparison,
@@ -28,7 +30,19 @@ from orbitmind.quantum.adapter import quantum_available
 
 
 def _classical_objective(result: SolverResult | None) -> float | None:
-    if result is None or not result.feasible or result.objective_value is None:
+    """A classical result contributes an objective ONLY when it is a completed, feasible run of
+    an expected solver kind with a finite objective (third review, Medium #4). Failed,
+    timed-out, cancelled, unsupported, pending, running, or inconclusive results — even if they
+    retained a stale ``feasible``/``objective_value`` — contribute nothing.
+    """
+    if (
+        result is None
+        or result.status != ExperimentStatus.COMPLETED
+        or result.solver_kind not in (SolverKind.EXACT, SolverKind.GREEDY)
+        or not result.feasible
+        or result.objective_value is None
+        or not math.isfinite(result.objective_value)
+    ):
         return None
     return result.objective_value
 
