@@ -21,6 +21,7 @@ from orbitmind.core.paths import ensure_within
 from orbitmind.governance.epistemic import EpistemicStatus
 from orbitmind.optimization.benchmark import conclude, proven_optimum
 from orbitmind.optimization.evaluation import Evaluator
+from orbitmind.optimization.evidence import build_evidence_manifest, evidence_matches_manifest
 from orbitmind.optimization.models import (
     BenchmarkRun,
     ExperimentStatus,
@@ -173,9 +174,7 @@ def verify_benchmark(
     )
     trusted = {SolverKind.EXACT: trusted_exact, SolverKind.GREEDY: trusted_greedy}
     findings.extend(_verify_solvers(run, trusted, evaluator, valid_ids))
-    findings.extend(
-        _verify_baselines(run, problem, trusted_exact, trusted_greedy, len(order))
-    )
+    findings.extend(_verify_baselines(run, problem, trusted_exact, trusted_greedy, len(order)))
 
     # 12-22. Quantum experiment recomputation.
     if run.quantum_experiment is not None:
@@ -315,9 +314,34 @@ def _verify_quantum(
     qubo = build_qubo(problem)
     n = len(variable_order(problem))
 
+    # Authenticate the persisted evidence against the server-derived manifest (review #1):
+    # the manifest is rebuilt from the trusted problem + config, NOT read back from the record.
+    manifest = build_evidence_manifest(problem, qexp.configuration)
+    ev_claim = qexp.evidence
+    ev_ok, ev_reason = (
+        evidence_matches_manifest(ev_claim, manifest)
+        if ev_claim is not None
+        else (False, "missing")
+    )
+    out.append(
+        _f(
+            "opt.quantum_evidence_authentic",
+            ev_ok,
+            f"persisted quantum evidence matches the server-derived manifest ({ev_reason})",
+            category=CheckCategory.POLICY,
+            severity=Severity.CRITICAL,
+            values={"manifest_checksum": manifest.manifest_checksum},
+        )
+    )
+
+    # The authoritative shot count comes from the server configuration, not the persisted
+    # total_shots — so doubling counts AND total_shots together is still rejected.
+    expected_shots = min(qexp.configuration.shots, problem.limits.max_shots)
+
     # Per-sample independent re-evaluation + binary/width validity.
     sample_ok = True
     prob_ok = True
+    counts_positive = True
     total = 0
     feasible_shots = 0
     recomputed_best_feasible = None
@@ -326,6 +350,8 @@ def _verify_quantum(
     for s in qexp.samples:
         total += s.count
         seen_bitstrings.add(s.bitstring)
+        if not isinstance(s.count, int) or s.count <= 0:  # reject negative/zero-count samples
+            counts_positive = False
         if len(s.bitstring) != n or any(c not in "01" for c in s.bitstring):
             sample_ok = False
             continue
@@ -376,12 +402,41 @@ def _verify_quantum(
     )
     out.append(
         _f(
-            "opt.quantum_shot_total",
-            total == qexp.total_shots,
-            "sum of sample counts equals total_shots",
+            "opt.quantum_counts_positive",
+            counts_positive,
+            "every stored sample has a positive integer count (no negative/zero-count samples)",
             category=CheckCategory.STRUCTURE,
             severity=Severity.CRITICAL,
-            values={"sum": total, "reported": qexp.total_shots},
+        )
+    )
+    out.append(
+        _f(
+            "opt.quantum_bitstrings_unique",
+            len(seen_bitstrings) == len(qexp.samples),
+            "stored sample bitstrings are unique after canonical normalization",
+            category=CheckCategory.STRUCTURE,
+            severity=Severity.CRITICAL,
+            values={"distinct": len(seen_bitstrings), "stored": len(qexp.samples)},
+        )
+    )
+    out.append(
+        _f(
+            "opt.quantum_shot_total",
+            total == qexp.total_shots == expected_shots > 0,
+            "sample counts sum to total_shots AND to the server-configured shot count (>0)",
+            category=CheckCategory.STRUCTURE,
+            severity=Severity.CRITICAL,
+            values={"sum": total, "reported": qexp.total_shots, "expected": expected_shots},
+        )
+    )
+    out.append(
+        _f(
+            "opt.quantum_metadata_shots",
+            qexp.circuit_metadata is not None and qexp.circuit_metadata.shots == expected_shots,
+            "circuit-metadata shot count equals the server-configured shot count",
+            category=CheckCategory.STRUCTURE,
+            severity=Severity.CRITICAL,
+            values={"metadata": qexp.circuit_metadata.shots if qexp.circuit_metadata else None},
         )
     )
     out.append(
@@ -470,8 +525,10 @@ def _verify_quantum(
         )
         opt_bits = evaluator.evaluate(set(opt_sel)).selected_opportunity_ids if opt_sel else None
         observed_opt = any(
-            evaluator.evaluate_bitstring(s.bitstring).selected_opportunity_ids == opt_bits
+            len(s.bitstring) == n
+            and all(ch in "01" for ch in s.bitstring)
             and s.feasible
+            and evaluator.evaluate_bitstring(s.bitstring).selected_opportunity_ids == opt_bits
             for s in qexp.samples
         )
         out.append(
@@ -760,3 +817,15 @@ def all_critical_passed(findings: list[VerificationFinding]) -> bool:
         f.status == FindingStatus.FAILED and f.severity in (Severity.CRITICAL, Severity.ERROR)
         for f in findings
     )
+
+
+def benchmark_verified_for_evidence(findings: list[VerificationFinding]) -> bool:
+    """Authoritative evidence-release gate (review finding #5).
+
+    True only when no CRITICAL/ERROR finding failed across ALL categories — problem checksum,
+    classical baseline cardinality/authentication, quantum evidence + samples, comparison
+    policy authentication, and artifacts/sidecars. When false the benchmark must not retain a
+    positive conclusion, must not be marked verified, and must not create scientific-memory
+    edges or be persisted as accepted evidence.
+    """
+    return all_critical_passed(findings)

@@ -326,6 +326,8 @@ class QuantumEvidence(BaseModel):
     penalty_satisfying_assignment_exists: bool
     penalty_proof_status: str = PenaltyProofStatus.PROVEN_SUFFICIENT.value
     penalty_proof_method: str = ""
+    # Deterministic checksum over the authoritative server-derived fields (review finding #1).
+    manifest_checksum: str = ""
     post_verification_required: bool = True
     simulator_backend: str = "AerSimulator"
     seeds: dict[str, int] = Field(default_factory=dict)

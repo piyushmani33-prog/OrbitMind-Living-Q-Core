@@ -28,6 +28,7 @@ from orbitmind.optimization.models import (
     SolverResult,
 )
 from orbitmind.optimization.service import OptimizationService
+from orbitmind.optimization.verification import benchmark_verified_for_evidence
 
 router = APIRouter(prefix="/api/v1/optimization", tags=["optimization"])
 
@@ -107,7 +108,7 @@ def benchmark(problem_id: str, payload: BenchmarkRequest, service: ServiceDep) -
         generate_artifacts=payload.generate_artifacts,
         policy_id=payload.policy_id,
     )
-    verified = all(f.passed for f in findings)
+    verified = benchmark_verified_for_evidence(findings)
     return BenchmarkResponse(run=run, findings=findings, verified=verified)
 
 

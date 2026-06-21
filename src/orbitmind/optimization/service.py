@@ -35,7 +35,7 @@ from orbitmind.optimization.policy import DEFAULT_POLICY_ID, get_policy
 from orbitmind.optimization.problem import normalize_problem
 from orbitmind.optimization.quantum import run_quantum_experiment
 from orbitmind.optimization.solvers import solve_exact, solve_greedy
-from orbitmind.optimization.verification import all_critical_passed, verify_benchmark
+from orbitmind.optimization.verification import benchmark_verified_for_evidence, verify_benchmark
 from orbitmind.persistence.database import Database
 from orbitmind.persistence.optimization_repository import SqlAlchemyOptimizationRepository
 from orbitmind.persistence.repositories import SqlAlchemyMissionRepository
@@ -234,7 +234,7 @@ class OptimizationService:
             run = run.model_copy(update={"artifacts": artifacts})
             # Re-verify INCLUDING the artifact files + sidecars on disk.
             findings = verify_benchmark(problem, run, artifacts_root=artifacts_root)
-        verified = all_critical_passed(findings)
+        verified = benchmark_verified_for_evidence(findings)
         # A benchmark that fails any material verification can never present a positive
         # conclusion (review findings #2/#19): downgrade to non-positive before persistence.
         if not verified and run.comparison is not None:

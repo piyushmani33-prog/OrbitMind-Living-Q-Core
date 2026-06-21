@@ -19,10 +19,10 @@ from queue import Empty
 from typing import Any
 
 from orbitmind.optimization.evaluation import Evaluator
+from orbitmind.optimization.evidence import build_evidence_manifest
 from orbitmind.optimization.models import (
     ExperimentStatus,
     QuantumCircuitMetadata,
-    QuantumEvidence,
     QuantumExperiment,
     QuantumSampleResult,
     SchedulingProblem,
@@ -74,58 +74,6 @@ def _maybe_test_sleep() -> None:
     delay = os.environ.get("ORBITMIND_QUANTUM_TEST_SLEEP")
     if delay:
         time.sleep(float(delay))
-
-
-def _build_evidence(
-    problem: SchedulingProblem, qubo: Any, config: SolverConfiguration
-) -> QuantumEvidence:
-    """Self-describing quantum evidence: which constraints are encoded vs verifier-only (#13)."""
-    from orbitmind.optimization.penalties import penalty_policy
-
-    pol = penalty_policy(problem)
-    c = problem.constraints
-    encoded: list[str] = []
-    if c.enforce_no_overlap:
-        encoded.append("no-overlap (same-satellite time conflicts)")
-    if c.mutually_exclusive:
-        encoded.append("mutual-exclusion")
-    if c.mandatory:
-        encoded.append("mandatory")
-    unencoded: list[str] = []
-    if c.max_observations is not None:
-        unencoded.append("max-observations")
-    if c.enforce_energy_capacity:
-        unencoded.append("energy-capacity")
-    if c.enforce_storage_capacity:
-        unencoded.append("storage-capacity")
-    if c.per_target_limit is not None:
-        unencoded.append("per-target-limit")
-    if c.min_mission_value is not None:
-        unencoded.append("min-mission-value")
-    return QuantumEvidence(
-        problem_checksum=problem.checksum,
-        qubo_checksum=qubo.checksum,
-        variable_mapping=qubo.variable_opportunities,
-        qubit_to_variable=dict(enumerate(qubo.variable_opportunities)),
-        bit_order=(
-            "qubit i == variable_mapping[i] (index 0 first); Aer measurement strings have "
-            "qubit 0 as the RIGHTMOST char and are reversed before decoding"
-        ),
-        encoded_constraints=tuple(encoded),
-        unencoded_constraints=tuple(unencoded),
-        penalty_value=pol.penalty,
-        penalty_source=pol.source,
-        penalty_sufficient=pol.sufficient,
-        penalty_satisfying_assignment_exists=pol.satisfying_encoded_assignment_exists,
-        penalty_proof_status=pol.proof_status.value,
-        penalty_proof_method=pol.method,
-        seeds={
-            "seed": config.seed,
-            "seed_simulator": config.seed,
-            "seed_transpiler": config.seed,
-        },
-        software_versions=_software_versions(),
-    )
 
 
 def _quantum_worker(
@@ -431,7 +379,7 @@ def _run(
         update={
             "status": ExperimentStatus.COMPLETED,
             "circuit_metadata": metadata,
-            "evidence": _build_evidence(problem, qubo, config),
+            "evidence": build_evidence_manifest(problem, config),
             "total_shots": total_shots,
             "distinct_samples": len(samples),
             "feasible_sample_ratio": feasible_shots / total_shots if total_shots else 0.0,
