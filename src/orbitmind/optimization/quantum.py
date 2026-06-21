@@ -11,13 +11,18 @@ character; we reverse to the canonical variable order (index 0 first) before dec
 
 from __future__ import annotations
 
+import contextlib
+import multiprocessing as mp
+import os
 import time
+from queue import Empty
 from typing import Any
 
 from orbitmind.optimization.evaluation import Evaluator
 from orbitmind.optimization.models import (
     ExperimentStatus,
     QuantumCircuitMetadata,
+    QuantumEvidence,
     QuantumExperiment,
     QuantumSampleResult,
     SchedulingProblem,
@@ -25,6 +30,13 @@ from orbitmind.optimization.models import (
 )
 from orbitmind.optimization.qubo import build_qubo, qubo_energy, qubo_to_ising
 from orbitmind.quantum.adapter import quantum_available
+
+_TIMED_OUT_LIMITATIONS = (
+    "Partial/no evidence: the WHOLE quantum experiment (QUBO prep, circuit build, "
+    "transpilation, parameter search, sampling, decoding) exceeded the wall-clock timeout "
+    "and the isolated worker was terminated. No completed quantum solution; this run is "
+    "non-positive by policy and is not registered as competitive evidence."
+)
 
 
 def _software_versions() -> dict[str, str]:
@@ -57,6 +69,107 @@ def _candidate_params(layers: int, iterations: int, seed: int) -> list[list[floa
     return candidates
 
 
+def _maybe_test_sleep() -> None:
+    """Test-only hook to simulate an expensive operation (gated by an env var; no prod use)."""
+    delay = os.environ.get("ORBITMIND_QUANTUM_TEST_SLEEP")
+    if delay:
+        time.sleep(float(delay))
+
+
+def _build_evidence(
+    problem: SchedulingProblem, qubo: Any, config: SolverConfiguration
+) -> QuantumEvidence:
+    """Self-describing quantum evidence: which constraints are encoded vs verifier-only (#13)."""
+    from orbitmind.optimization.penalties import penalty_policy
+
+    pol = penalty_policy(problem)
+    c = problem.constraints
+    encoded: list[str] = []
+    if c.enforce_no_overlap:
+        encoded.append("no-overlap (same-satellite time conflicts)")
+    if c.mutually_exclusive:
+        encoded.append("mutual-exclusion")
+    if c.mandatory:
+        encoded.append("mandatory")
+    unencoded: list[str] = []
+    if c.max_observations is not None:
+        unencoded.append("max-observations")
+    if c.enforce_energy_capacity:
+        unencoded.append("energy-capacity")
+    if c.enforce_storage_capacity:
+        unencoded.append("storage-capacity")
+    if c.per_target_limit is not None:
+        unencoded.append("per-target-limit")
+    if c.min_mission_value is not None:
+        unencoded.append("min-mission-value")
+    return QuantumEvidence(
+        problem_checksum=problem.checksum,
+        qubo_checksum=qubo.checksum,
+        variable_mapping=qubo.variable_opportunities,
+        qubit_to_variable=dict(enumerate(qubo.variable_opportunities)),
+        bit_order=(
+            "qubit i == variable_mapping[i] (index 0 first); Aer measurement strings have "
+            "qubit 0 as the RIGHTMOST char and are reversed before decoding"
+        ),
+        encoded_constraints=tuple(encoded),
+        unencoded_constraints=tuple(unencoded),
+        penalty_value=pol.penalty,
+        penalty_source=pol.source,
+        penalty_sufficient=pol.sufficient,
+        penalty_satisfying_assignment_exists=pol.satisfying_encoded_assignment_exists,
+        seeds={
+            "seed": config.seed,
+            "seed_simulator": config.seed,
+            "seed_transpiler": config.seed,
+        },
+        software_versions=_software_versions(),
+    )
+
+
+def _quantum_worker(
+    problem_json: dict[str, Any],
+    config_json: dict[str, Any],
+    known_optimum: float | None,
+    optimum_selection: list[str] | None,
+    queue: Any,
+) -> None:
+    """Runs the bounded quantum computation in an isolated child process (review finding #3)."""
+    try:
+        problem = SchedulingProblem.model_validate(problem_json)
+        config = SolverConfiguration.model_validate(config_json)
+        evaluator = Evaluator(problem)
+        base = QuantumExperiment(
+            problem_checksum=problem.checksum,
+            status=ExperimentStatus.PENDING,
+            configuration=config,
+            seed=config.seed,
+            software_versions=_software_versions(),
+        )
+        result = _run(
+            problem,
+            config,
+            evaluator,
+            base,
+            known_optimum,
+            tuple(optimum_selection) if optimum_selection else None,
+        )
+        queue.put(result.model_dump(mode="json"))
+    except Exception as exc:  # pragma: no cover - surfaced to the parent as FAILED
+        queue.put({"__error__": f"{type(exc).__name__}: {exc}"})
+
+
+def _terminate(proc: Any) -> None:
+    """Terminate and reap a worker process; never leave an orphan."""
+    if proc.is_alive():
+        proc.terminate()
+        proc.join(5)
+    if proc.is_alive():  # pragma: no cover - escalation path
+        proc.kill()
+        proc.join(5)
+    with contextlib.suppress(Exception):  # pragma: no cover - already closed
+        proc.close()
+
+
 def run_quantum_experiment(
     problem: SchedulingProblem,
     config: SolverConfiguration,
@@ -65,8 +178,11 @@ def run_quantum_experiment(
     known_optimum: float | None = None,
     optimum_selection: tuple[str, ...] | None = None,
 ) -> QuantumExperiment:
-    """Run a bounded Aer QAOA experiment; returns a fully-diagnosed experiment record."""
-    evaluator = evaluator or Evaluator(problem)
+    """Run a bounded Aer QAOA experiment in an ISOLATED child process with a hard,
+    whole-experiment wall-clock timeout (review finding #3). On expiry the worker is
+    terminated, no final sampling completes, and the status is ``timed-out`` (never a
+    positive conclusion). Runtime is measured from before the first experiment operation.
+    """
     base = QuantumExperiment(
         problem_checksum=problem.checksum,
         status=ExperimentStatus.PENDING,
@@ -78,12 +194,50 @@ def run_quantum_experiment(
         return base.model_copy(
             update={"status": ExperimentStatus.UNSUPPORTED, "error": "Aer/Qiskit not installed"}
         )
+
+    ctx = mp.get_context("spawn")
+    queue: Any = ctx.Queue()
+    proc = ctx.Process(
+        target=_quantum_worker,
+        args=(
+            problem.model_dump(mode="json"),
+            config.model_dump(mode="json"),
+            known_optimum,
+            list(optimum_selection) if optimum_selection else None,
+            queue,
+        ),
+        daemon=True,
+    )
+    started = time.perf_counter()
+    proc.start()
+    payload: Any = None
+    timed_out = False
     try:
-        return _run(problem, config, evaluator, base, known_optimum, optimum_selection)
-    except Exception as exc:  # pragma: no cover - defensive; surfaced as FAILED status
+        payload = queue.get(timeout=config.timeout_seconds)
+    except Empty:
+        timed_out = True
+    _terminate(proc)  # single cleanup; never leaves an orphan
+    runtime = time.perf_counter() - started
+
+    if timed_out:
         return base.model_copy(
-            update={"status": ExperimentStatus.FAILED, "error": f"{type(exc).__name__}: {exc}"}
+            update={
+                "status": ExperimentStatus.TIMED_OUT,
+                "runtime_seconds": runtime,
+                "error": "quantum experiment exceeded the timeout and was terminated",
+                "limitations": _TIMED_OUT_LIMITATIONS,
+            }
         )
+    if isinstance(payload, dict) and "__error__" in payload:
+        return base.model_copy(
+            update={
+                "status": ExperimentStatus.FAILED,
+                "error": str(payload["__error__"]),
+                "runtime_seconds": runtime,
+            }
+        )
+    experiment = QuantumExperiment.model_validate(payload)
+    return experiment.model_copy(update={"runtime_seconds": runtime})
 
 
 def build_qaoa_circuit(problem: SchedulingProblem, layers: int) -> tuple[Any, Any, Any]:
@@ -152,21 +306,18 @@ def _run(
         return float(sum(c * qubo_energy(qubo, k[::-1]) for k, c in counts.items()) / total)
 
     start = time.perf_counter()
-    deadline = start + config.timeout_seconds
     candidates = _candidate_params(p, iterations, config.seed)
     best_params = candidates[0]
     best_energy = float("inf")
     evaluated_iters = 0
-    timed_out = False
     for values in candidates:
-        if time.perf_counter() > deadline:
-            timed_out = True
-            break
         energy = expected_energy(values)
         evaluated_iters += 1
         if energy < best_energy:
             best_energy = energy
             best_params = values
+
+    _maybe_test_sleep()  # test hook: simulate expensive work so the parent timeout can fire
 
     # Final high-shot sampling at the best parameters.
     final = tqc.assign_parameters(
@@ -249,11 +400,13 @@ def _run(
             **{f"beta_{i}": best_params[p + i] for i in range(p)},
         },
     )
-    status = ExperimentStatus.TIMED_OUT if timed_out else ExperimentStatus.COMPLETED
+    # The worker always runs to completion; the timeout is enforced by the parent process
+    # which terminates this worker (so a worker-produced result is always COMPLETED).
     return base.model_copy(
         update={
-            "status": status,
+            "status": ExperimentStatus.COMPLETED,
             "circuit_metadata": metadata,
+            "evidence": _build_evidence(problem, qubo, config),
             "total_shots": total_shots,
             "distinct_samples": len(samples),
             "feasible_sample_ratio": feasible_shots / total_shots if total_shots else 0.0,
