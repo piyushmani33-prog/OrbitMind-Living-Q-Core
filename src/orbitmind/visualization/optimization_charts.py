@@ -66,30 +66,32 @@ class OptimizationVisualizationService:
             "failed": sum(1 for f in findings if not f.passed),
             "passed": all(f.passed for f in findings),
         }
+        # Self-describing quantum evidence carried into the summary + quantum sidecars (#16/#17).
+        evidence = run.quantum_experiment.evidence if run.quantum_experiment is not None else None
+        evidence_json = evidence.model_dump(mode="json") if evidence is not None else None
         artifacts: list[dict[str, str]] = []
 
         def emit(name: str, art_type: str, solver: str) -> None:
             path = scope / name
             checksum = sha256_file(path)
             sidecar = path.with_suffix(path.suffix + ".json")
-            sidecar.write_text(
-                json.dumps(
-                    {
-                        "artifact_type": art_type,
-                        "problem_checksum": problem.checksum,
-                        "solver": solver,
-                        "created_at": utcnow().isoformat(),
-                        "software_versions": software,
-                        "seed": seed,
-                        "epistemic_status": "model-estimate",
-                        "verification_summary": verification,
-                        "checksum": checksum,
-                        "limitations": _DISCLAIMER,
-                    },
-                    indent=2,
-                ),
-                encoding="utf-8",
-            )
+            body: dict[str, object] = {
+                "artifact_type": art_type,
+                "problem_checksum": problem.checksum,
+                "solver": solver,
+                "created_at": utcnow().isoformat(),
+                "software_versions": software,
+                "seed": seed,
+                "epistemic_status": "model-estimate",
+                "verification_summary": verification,
+                "checksum": checksum,
+                "limitations": _DISCLAIMER,
+            }
+            if solver == "quantum-qaoa" and evidence_json is not None:
+                # Bit-order, QUBO checksum, variable mapping, penalty + proof status, manifest
+                # checksum, post-verification requirement, seeds, versions (review #16/#17).
+                body["quantum_evidence"] = evidence_json
+            sidecar.write_text(json.dumps(body, indent=2), encoding="utf-8")
             artifacts.append(
                 {
                     "type": art_type,
@@ -115,7 +117,8 @@ class OptimizationVisualizationService:
 
         summary_path = scope / "benchmark_summary.json"
         summary_path.write_text(
-            json.dumps(self._summary(problem, run, verification), indent=2), encoding="utf-8"
+            json.dumps(self._summary(problem, run, verification, evidence_json), indent=2),
+            encoding="utf-8",
         )
         emit("benchmark_summary.json", "benchmark_summary_json", "all")
         return artifacts
@@ -241,7 +244,11 @@ class OptimizationVisualizationService:
                 return None
 
     def _summary(
-        self, problem: SchedulingProblem, run: BenchmarkRun, verification: Mapping[str, object]
+        self,
+        problem: SchedulingProblem,
+        run: BenchmarkRun,
+        verification: Mapping[str, object],
+        evidence_json: dict[str, object] | None = None,
     ) -> dict[str, object]:
         comp = run.comparison
         qe = run.quantum_experiment
@@ -251,6 +258,8 @@ class OptimizationVisualizationService:
                 "checksum": problem.checksum,
                 "num_variables": len(problem.opportunities),
             },
+            # Authoritative, self-describing quantum evidence manifest (review finding #17).
+            "quantum_evidence": evidence_json,
             "conclusion": comp.conclusion.value if comp else None,
             "rationale": comp.rationale if comp else None,
             "known_optimum": comp.known_optimum if comp else None,

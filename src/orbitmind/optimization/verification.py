@@ -749,29 +749,56 @@ def _verify_comparison(
     return out
 
 
+# Scientifically misleading CLAIMS that must never appear in an artifact sidecar (review #16).
+# These are affirmative overclaims; a negated mention ("NOT evidence of quantum advantage") is
+# legitimate and must not match, so the phrases are specific.
+_FORBIDDEN_PHRASES = (
+    "quantum advantage verified",
+    "quantum advantage demonstrated",
+    "proven quantum advantage",
+    "achieves quantum advantage",
+    "quantum superiority",
+    "production-ready quantum",
+    "faster than classical",
+    "outperforms classical",
+)
+
+
+def _contained(root: Path, rel: str) -> Path | None:
+    """Resolve ``root/rel`` and require it to stay within ``root`` (rejects ../, abs, symlink)."""
+    try:
+        return ensure_within(root, root / rel)
+    except Exception:
+        return None
+
+
 def _verify_artifacts(
     run: BenchmarkRun, artifacts_root: Path, problem_checksum_value: str
 ) -> list[VerificationFinding]:
     out: list[VerificationFinding] = []
     for art in run.artifacts:
         rel = art.get("path", "")
-        contained = True
-        try:
-            target = ensure_within(artifacts_root, artifacts_root / rel)
-        except Exception:
-            contained = False
-            target = artifacts_root / rel
-        exists = contained and target.is_file()
+        # Derive the EXPECTED sidecar path from the artifact record + convention; never trust a
+        # persisted sidecar path (review finding #15).
+        expected_sidecar_rel = f"{rel}.json"
+        target = _contained(artifacts_root, rel)
+        sidecar_target = _contained(artifacts_root, expected_sidecar_rel)
+        # The persisted sidecar_path (if any) must match the derived one exactly.
+        sidecar_name_ok = art.get("sidecar_path", expected_sidecar_rel) == expected_sidecar_rel
+        exists = target is not None and target.is_file()
         out.append(
             _f(
                 f"opt.artifact_containment[{rel}]",
-                contained and exists,
-                "artifact path is contained in the artifacts root and the file exists",
+                target is not None
+                and sidecar_target is not None
+                and sidecar_name_ok
+                and exists,
+                "artifact + derived sidecar paths are contained in the root, named by convention",
                 category=CheckCategory.PROVENANCE,
                 severity=Severity.CRITICAL,
             )
         )
-        if not exists:
+        if not exists or target is None or sidecar_target is None:
             continue
         actual = sha256_file(target)
         out.append(
@@ -784,28 +811,40 @@ def _verify_artifacts(
                 values={"actual": actual, "recorded": art.get("checksum")},
             )
         )
-        sidecar = artifacts_root / art.get("sidecar_path", "")
-        side_ok = False
         meta_ok = False
-        if sidecar.is_file():
+        no_forbidden = True
+        if sidecar_target.is_file():
             try:
-                meta = json.loads(sidecar.read_text("utf-8"))
-                side_ok = meta.get("checksum") == actual
+                raw = sidecar_target.read_text("utf-8")
+                meta = json.loads(raw)
                 meta_ok = (
-                    meta.get("problem_checksum") == problem_checksum_value
+                    meta.get("checksum") == actual
+                    and meta.get("problem_checksum") == problem_checksum_value
+                    and meta.get("artifact_type") == art.get("type")
                     and str(meta.get("epistemic_status")) in _BOUNDED_EPISTEMIC
                     and bool(str(meta.get("limitations", "")).strip())
                     and "software_versions" in meta
                     and "seed" in meta
                 )
+                low = raw.lower()
+                no_forbidden = not any(p in low for p in _FORBIDDEN_PHRASES)
             except Exception:
-                side_ok = False
+                meta_ok = False
         out.append(
             _f(
                 f"opt.artifact_sidecar[{rel}]",
-                side_ok and meta_ok,
-                "sidecar checksum matches the file and required bounded metadata is present",
+                meta_ok,
+                "sidecar independently matches type/checksum/problem + carries bounded metadata",
                 category=CheckCategory.PROVENANCE,
+                severity=Severity.CRITICAL,
+            )
+        )
+        out.append(
+            _f(
+                f"opt.artifact_no_overclaim[{rel}]",
+                no_forbidden,
+                "sidecar contains no scientifically misleading quantum-advantage language",
+                category=CheckCategory.POLICY,
                 severity=Severity.CRITICAL,
             )
         )
