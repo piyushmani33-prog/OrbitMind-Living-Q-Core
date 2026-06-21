@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from orbitmind.core.ids import new_id
@@ -12,6 +13,7 @@ from orbitmind.core.timeutils import utcnow
 from orbitmind.optimization.models import (
     BenchmarkComparison,
     BenchmarkRun,
+    BenchmarkThresholds,
     QuantumExperiment,
     SchedulingProblem,
     SolverResult,
@@ -44,43 +46,58 @@ class SqlAlchemyOptimizationRepository:
         )
 
     def save_problem(self, problem: SchedulingProblem) -> str:
+        """Idempotent, race-safe get-or-create keyed by the canonical checksum (finding #9).
+
+        Returns the EXISTING persisted id when the same problem already exists (incl. when a
+        concurrent transaction wins the unique-checksum race). The outer transaction remains
+        usable after a conflict (the insert is wrapped in a SAVEPOINT).
+        """
         existing = self.find_problem_by_checksum(problem.checksum)
         if existing is not None:
             return existing.id
-        self._s.add(
-            OptimizationProblemRow(
-                id=problem.id,
-                name=problem.name,
-                checksum=problem.checksum,
-                num_variables=len(problem.opportunities),
-                source=problem.source,
-                provenance=problem.provenance,
-                epistemic_status=problem.epistemic_status.value,
-                limitations=problem.limitations,
-                problem_json=problem.model_dump(mode="json"),
-                created_at=problem.created_at,
-            )
-        )
-        self._s.flush()  # parent must exist before FK children (PostgreSQL enforces FKs)
-        for opp in problem.opportunities:
-            self._s.add(
-                ObservationOpportunityRow(
-                    id=new_id(),
-                    problem_id=problem.id,
-                    opportunity_id=opp.id,
-                    satellite_id=opp.satellite_id,
-                    target_id=opp.target_id,
-                    start_at=opp.window.start,
-                    end_at=opp.window.end,
-                    mission_value=opp.mission_value,
-                    duration_seconds=opp.duration_seconds,
-                    energy_cost=opp.energy_cost,
-                    storage_cost=opp.storage_cost,
-                    pointing_cost=opp.pointing_cost,
-                    priority=opp.priority,
+        try:
+            with self._s.begin_nested():  # SAVEPOINT
+                self._s.add(
+                    OptimizationProblemRow(
+                        id=problem.id,
+                        name=problem.name,
+                        checksum=problem.checksum,
+                        num_variables=len(problem.opportunities),
+                        source=problem.source,
+                        provenance=problem.provenance,
+                        epistemic_status=problem.epistemic_status.value,
+                        limitations=problem.limitations,
+                        problem_json=problem.model_dump(mode="json"),
+                        created_at=problem.created_at,
+                    )
                 )
-            )
-        self._add_constraint_rows(problem)
+                self._s.flush()  # parent must exist before FK children (PostgreSQL FKs)
+                for opp in problem.opportunities:
+                    self._s.add(
+                        ObservationOpportunityRow(
+                            id=new_id(),
+                            problem_id=problem.id,
+                            opportunity_id=opp.id,
+                            satellite_id=opp.satellite_id,
+                            target_id=opp.target_id,
+                            start_at=opp.window.start,
+                            end_at=opp.window.end,
+                            mission_value=opp.mission_value,
+                            duration_seconds=opp.duration_seconds,
+                            energy_cost=opp.energy_cost,
+                            storage_cost=opp.storage_cost,
+                            pointing_cost=opp.pointing_cost,
+                            priority=opp.priority,
+                        )
+                    )
+                self._add_constraint_rows(problem)
+        except IntegrityError:
+            # A concurrent insert won the unique-checksum race; re-query and return its id.
+            self._s.expire_all()
+            won = self.find_problem_by_checksum(problem.checksum)
+            if won is None:  # pragma: no cover - re-raise if it was a different integrity error
+                raise
+            return won.id
         return problem.id
 
     def _add_constraint_rows(self, problem: SchedulingProblem) -> None:
@@ -305,6 +322,7 @@ class SqlAlchemyOptimizationRepository:
         )
         if row is None:
             return None
+        # Exact round-trip incl. thresholds, epistemic status, limitations (finding #12).
         return BenchmarkComparison(
             id=row.id,
             problem_checksum=row.problem_checksum,
@@ -313,7 +331,10 @@ class SqlAlchemyOptimizationRepository:
             greedy_objective=row.greedy_objective,
             quantum_objective=row.quantum_objective,
             known_optimum=row.known_optimum,
+            thresholds=BenchmarkThresholds.model_validate(row.thresholds_json),
             rationale=row.rationale,
+            epistemic_status=row.epistemic_status,  # type: ignore[arg-type]
+            limitations=row.limitations,
             created_at=row.created_at,
         )
 
