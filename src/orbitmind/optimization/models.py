@@ -330,6 +330,11 @@ class QuantumEvidence(BaseModel):
     manifest_checksum: str = ""
     post_verification_required: bool = True
     simulator_backend: str = "AerSimulator"
+    # Requested configuration knobs, anchored in the manifest (third review, Medium #1).
+    shots: int = 0
+    optimizer_iterations: int = 0
+    qaoa_layers: int = 0
+    transpile_level: int = 0
     seeds: dict[str, int] = Field(default_factory=dict)
     software_versions: dict[str, str] = Field(default_factory=dict)
     limitations: str = (

@@ -64,7 +64,7 @@ def _encoded_inventory(problem: SchedulingProblem) -> tuple[list[str], list[str]
 
 
 def manifest_checksum(evidence: QuantumEvidence) -> str:
-    """Deterministic checksum over the authoritative evidence fields (excludes itself)."""
+    """Deterministic checksum over EVERY material authoritative field (excludes itself)."""
     return sha256_canonical_json(
         {
             "problem_checksum": evidence.problem_checksum,
@@ -80,11 +80,17 @@ def manifest_checksum(evidence: QuantumEvidence) -> str:
             "penalty_satisfying_assignment_exists": evidence.penalty_satisfying_assignment_exists,
             "penalty_proof_status": evidence.penalty_proof_status,
             "penalty_proof_method": evidence.penalty_proof_method,
+            "post_verification_required": evidence.post_verification_required,
             "simulator_backend": evidence.simulator_backend,
+            "shots": evidence.shots,
+            "optimizer_iterations": evidence.optimizer_iterations,
+            "qaoa_layers": evidence.qaoa_layers,
+            "transpile_level": evidence.transpile_level,
             "seeds": {k: evidence.seeds[k] for k in sorted(evidence.seeds)},
             "software_versions": {
                 k: evidence.software_versions[k] for k in sorted(evidence.software_versions)
             },
+            "limitations": evidence.limitations,
         }
     )
 
@@ -111,6 +117,10 @@ def build_evidence_manifest(
         penalty_proof_status=pol.proof_status.value,
         penalty_proof_method=pol.method,
         simulator_backend=ALLOWED_BACKEND,
+        shots=config.shots,
+        optimizer_iterations=config.optimizer_iterations,
+        qaoa_layers=config.qaoa_layers,
+        transpile_level=config.transpile_level,
         seeds={
             "seed": config.seed,
             "seed_simulator": config.seed,
@@ -139,11 +149,27 @@ def evidence_matches_manifest(
         "penalty_value": claim.penalty_value == manifest.penalty_value,
         "penalty_source": claim.penalty_source == manifest.penalty_source,
         "penalty_sufficient": claim.penalty_sufficient == manifest.penalty_sufficient,
+        "penalty_satisfying_assignment_exists": (
+            claim.penalty_satisfying_assignment_exists
+            == manifest.penalty_satisfying_assignment_exists
+        ),
         "penalty_proof_status": claim.penalty_proof_status == manifest.penalty_proof_status,
+        "penalty_proof_method": claim.penalty_proof_method == manifest.penalty_proof_method,
+        "post_verification_required": (
+            claim.post_verification_required == manifest.post_verification_required
+        ),
         "simulator_backend": claim.simulator_backend == manifest.simulator_backend,
+        "shots": claim.shots == manifest.shots,
+        "optimizer_iterations": claim.optimizer_iterations == manifest.optimizer_iterations,
+        "qaoa_layers": claim.qaoa_layers == manifest.qaoa_layers,
+        "transpile_level": claim.transpile_level == manifest.transpile_level,
         "seeds": dict(claim.seeds) == dict(manifest.seeds),
         "software_versions": dict(claim.software_versions) == dict(manifest.software_versions),
+        "limitations": claim.limitations == manifest.limitations,
+        # The claim's stored checksum must match BOTH the authoritative manifest and a fresh
+        # recomputation over the claim's own fields (rejects an internally inconsistent claim).
         "manifest_checksum": claim.manifest_checksum == manifest.manifest_checksum,
+        "manifest_checksum_self": claim.manifest_checksum == manifest_checksum(claim),
     }
     failed = sorted(k for k, ok in checks.items() if not ok)
     return (not failed), ("authentic" if not failed else f"mismatch: {', '.join(failed)}")

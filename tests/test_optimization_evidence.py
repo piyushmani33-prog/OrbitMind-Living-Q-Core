@@ -51,9 +51,20 @@ def test_manifest_is_self_consistent_and_detects_field_tampering() -> None:
         ("qubo_checksum", "deadbeef"),
         ("variable_mapping", ("X", "Y", "Z", "W")),
         ("penalty_value", manifest.penalty_value + 1.0),
+        ("penalty_source", "tampered-source"),
         ("penalty_proof_status", "unproven"),
+        ("penalty_proof_method", "tampered-method"),
+        ("penalty_satisfying_assignment_exists", not manifest.penalty_satisfying_assignment_exists),
+        ("post_verification_required", not manifest.post_verification_required),
         ("simulator_backend", "IBMQ"),
         ("bit_order", "tampered"),
+        ("shots", manifest.shots + 1),
+        ("optimizer_iterations", manifest.optimizer_iterations + 1),
+        ("qaoa_layers", manifest.qaoa_layers + 1),
+        ("transpile_level", manifest.transpile_level + 1),
+        ("encoded_constraints", ("nonsense",)),
+        ("unencoded_constraints", ("nonsense",)),
+        ("limitations", "tampered limitations"),
         ("seeds", {"seed": 1, "seed_simulator": 1, "seed_transpiler": 1}),
         ("software_versions", {"qiskit": "0.0", "qiskit-aer": "0.0"}),
         ("manifest_checksum", "00"),
@@ -61,6 +72,10 @@ def test_manifest_is_self_consistent_and_detects_field_tampering() -> None:
         forged = manifest.model_copy(update={field: value})
         matched, _reason = evidence_matches_manifest(forged, manifest)
         assert not matched, f"tampering {field} should be detected"
+    # A claim whose stored checksum is internally inconsistent with its own fields is rejected,
+    # even when compared field-by-field against an equally-forged manifest.
+    forged_pair = manifest.model_copy(update={"shots": 9999})
+    assert not evidence_matches_manifest(forged_pair, forged_pair)[0]
 
 
 # --------------------------------------------------------------------------------------------
@@ -168,6 +183,34 @@ def _malformed_bitstring(run: BenchmarkRun) -> BenchmarkRun:
     return _with_qexp(run, q.model_copy(update={"samples": samples}))
 
 
+def _bool_count(run: BenchmarkRun) -> BenchmarkRun:
+    q = _qexp(run)
+    samples = [*q.samples]
+    samples[0] = samples[0].model_copy(update={"count": True})  # bool is not a strict int
+    return _with_qexp(run, q.model_copy(update={"samples": samples}))
+
+
+def _nan_probability(run: BenchmarkRun) -> BenchmarkRun:
+    q = _qexp(run)
+    samples = [*q.samples]
+    samples[0] = samples[0].model_copy(update={"probability": float("nan")})
+    return _with_qexp(run, q.model_copy(update={"samples": samples}))
+
+
+def _inf_energy(run: BenchmarkRun) -> BenchmarkRun:
+    q = _qexp(run)
+    samples = [*q.samples]
+    samples[0] = samples[0].model_copy(update={"qubo_energy": float("inf")})
+    return _with_qexp(run, q.model_copy(update={"samples": samples}))
+
+
+def _nan_objective(run: BenchmarkRun) -> BenchmarkRun:
+    q = _qexp(run)
+    samples = [*q.samples]
+    samples[0] = samples[0].model_copy(update={"objective_value": float("nan")})
+    return _with_qexp(run, q.model_copy(update={"samples": samples}))
+
+
 @pytestmark_quantum
 def test_untampered_quantum_run_verifies(quantum_run: BenchmarkRun) -> None:
     assert all_critical_passed(verify_benchmark(_PROBLEM, quantum_run))
@@ -185,6 +228,10 @@ _EVIDENCE_TAMPERS = [
     ("negative_count", _negative_count),
     ("duplicate_sample", _duplicate_sample),
     ("malformed_bitstring", _malformed_bitstring),
+    ("bool_count", _bool_count),
+    ("nan_probability", _nan_probability),
+    ("inf_energy", _inf_energy),
+    ("nan_objective", _nan_objective),
 ]
 
 

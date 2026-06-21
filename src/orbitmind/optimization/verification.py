@@ -342,16 +342,28 @@ def _verify_quantum(
     sample_ok = True
     prob_ok = True
     counts_positive = True
+    scalars_finite = True
     total = 0
     feasible_shots = 0
     recomputed_best_feasible = None
     recomputed_best_infeasible = None
     seen_bitstrings: set[str] = set()
     for s in qexp.samples:
-        total += s.count
         seen_bitstrings.add(s.bitstring)
-        if not isinstance(s.count, int) or s.count <= 0:  # reject negative/zero-count samples
+        # Strict scalar typing (third review, Medium #1): the count must be a real int (a bool
+        # is rejected because ``type(True) is int`` is False), positive, never a float.
+        if type(s.count) is not int or s.count <= 0:
             counts_positive = False
+            total += s.count if isinstance(s.count, int) else 0
+        else:
+            total += s.count
+        # Every persisted scalar must be finite (reject NaN/inf in probability/objective/energy/
+        # raw mission value); these produce findings, never exceptions.
+        if not all(
+            math.isfinite(x)
+            for x in (s.probability, s.objective_value, s.qubo_energy, s.raw_mission_value)
+        ):
+            scalars_finite = False
         if len(s.bitstring) != n or any(c not in "01" for c in s.bitstring):
             sample_ok = False
             continue
@@ -404,8 +416,24 @@ def _verify_quantum(
         _f(
             "opt.quantum_counts_positive",
             counts_positive,
-            "every stored sample has a positive integer count (no negative/zero-count samples)",
+            "every stored sample has a strict positive int count (no bool/float/zero/negative)",
             category=CheckCategory.STRUCTURE,
+            severity=Severity.CRITICAL,
+        )
+    )
+    # Finiteness of every persisted scalar (samples + circuit params + runtime). NaN/inf -> finding.
+    meta_params_finite = qexp.circuit_metadata is None or all(
+        math.isfinite(v) for v in qexp.circuit_metadata.best_parameters.values()
+    )
+    out.append(
+        _f(
+            "opt.quantum_scalars_finite",
+            scalars_finite
+            and meta_params_finite
+            and math.isfinite(qexp.runtime_seconds)
+            and (qexp.objective_gap is None or math.isfinite(qexp.objective_gap)),
+            "all sample/parameter/runtime scalars are finite (no NaN or infinity)",
+            category=CheckCategory.MATHEMATICS,
             severity=Severity.CRITICAL,
         )
     )
@@ -422,8 +450,10 @@ def _verify_quantum(
     out.append(
         _f(
             "opt.quantum_shot_total",
-            total == qexp.total_shots == expected_shots > 0,
-            "sample counts sum to total_shots AND to the server-configured shot count (>0)",
+            type(qexp.total_shots) is int
+            and total == qexp.total_shots == expected_shots
+            and expected_shots > 0,
+            "sample counts sum to a positive-int total_shots AND the server-configured shots",
             category=CheckCategory.STRUCTURE,
             severity=Severity.CRITICAL,
             values={"sum": total, "reported": qexp.total_shots, "expected": expected_shots},
