@@ -47,6 +47,15 @@ _TOL = 1e-9
 _BOUNDED_EPISTEMIC = {EpistemicStatus.MODEL_ESTIMATE.value, EpistemicStatus.HYPOTHESIS.value}
 
 
+def _num(value: float | None) -> float:
+    """None -> NaN for tolerance comparisons; a genuine 0.0 stays 0.0 (review finding #18).
+
+    ``value or math.nan`` is wrong because ``0.0 or math.nan`` evaluates to NaN, corrupting a
+    valid zero objective. Use an explicit ``is None`` check.
+    """
+    return value if value is not None else math.nan
+
+
 def _f(
     check_id: str,
     ok: bool,
@@ -186,6 +195,21 @@ def _verify_solvers(
     out: list[VerificationFinding] = []
     for result in run.solver_results:
         kind = result.solver_kind
+        # An unsupported/unknown classical solver kind (e.g. a fabricated or quantum kind in the
+        # classical results) yields a deterministic CRITICAL finding instead of a KeyError on the
+        # trusted-baseline lookup (review finding #18).
+        trusted_result = trusted.get(kind)
+        if trusted_result is None:
+            out.append(
+                _f(
+                    f"opt.unsupported_solver_kind.{kind.value}",
+                    False,
+                    f"comparison contains an unsupported classical solver kind '{kind.value}'",
+                    category=CheckCategory.STRUCTURE,
+                    severity=Severity.CRITICAL,
+                )
+            )
+            continue
         if result.schedule is None or result.evaluation is None:
             continue
         selected = set(result.schedule.selected_opportunity_ids)
@@ -201,7 +225,7 @@ def _verify_solvers(
         # Independent re-evaluation of the reported schedule (raw/weighted/penalty/objective).
         recomputed = evaluator.evaluate(selected)
         consistent = (
-            abs(recomputed.objective_value - (result.objective_value or math.nan)) < _TOL
+            abs(recomputed.objective_value - _num(result.objective_value)) < _TOL
             and recomputed.feasible == result.feasible
         )
         out.append(
@@ -221,17 +245,17 @@ def _verify_solvers(
         )
         # The reported result must match an INDEPENDENT re-solve (catches tampered
         # selected-schedule / objective / optimality status).
-        t = trusted[kind]
+        t = trusted_result
         truth_obj = t.objective_value if t.feasible else None
         if kind == SolverKind.EXACT:
             opt_truth, _sel = proven_optimum(t)
             matches_truth = (
                 result.feasible == t.feasible
-                and abs((result.objective_value or math.nan) - (truth_obj or math.nan)) < _TOL
+                and abs(_num(result.objective_value) - _num(truth_obj)) < _TOL
                 and result.optimality_status == t.optimality_status
                 and (
                     result.known_optimum is None
-                    or abs(result.known_optimum - (opt_truth or math.nan)) < _TOL
+                    or abs(result.known_optimum - _num(opt_truth)) < _TOL
                 )
             )
             out.append(
@@ -517,10 +541,10 @@ def _verify_comparison(
     opt_value, _sel = proven_optimum(trusted_exact)
     fields_ok = (
         run.comparison.known_optimum is None
-        or abs(run.comparison.known_optimum - (opt_value or math.nan)) < _TOL
+        or abs(run.comparison.known_optimum - _num(opt_value)) < _TOL
     ) and (
         run.comparison.exact_objective is None
-        or abs(run.comparison.exact_objective - (trusted_exact.objective_value or math.nan)) < _TOL
+        or abs(run.comparison.exact_objective - _num(trusted_exact.objective_value)) < _TOL
     )
     out.append(
         _f(
