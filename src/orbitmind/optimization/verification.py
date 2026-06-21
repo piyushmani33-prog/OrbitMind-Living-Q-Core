@@ -789,10 +789,7 @@ def _verify_artifacts(
         out.append(
             _f(
                 f"opt.artifact_containment[{rel}]",
-                target is not None
-                and sidecar_target is not None
-                and sidecar_name_ok
-                and exists,
+                target is not None and sidecar_target is not None and sidecar_name_ok and exists,
                 "artifact + derived sidecar paths are contained in the root, named by convention",
                 category=CheckCategory.PROVENANCE,
                 severity=Severity.CRITICAL,

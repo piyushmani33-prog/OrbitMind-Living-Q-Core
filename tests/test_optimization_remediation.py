@@ -207,9 +207,7 @@ def test_validation_canonicalizes_to_utc_and_dedups_mutex() -> None:
 def test_duration_is_canonicalized_to_window_and_nonfinite_rejected() -> None:
     # Duration is server-canonical = the window length (review finding #21): a conflicting
     # client value is normalized away, not rejected.
-    mismatched = _opp("OPP-1", "SAT-A", "T1", 0, 30).model_copy(
-        update={"duration_seconds": 5400.0}
-    )
+    mismatched = _opp("OPP-1", "SAT-A", "T1", 0, 30).model_copy(update={"duration_seconds": 5400.0})
     normalized = normalize_problem(_problem(opportunities=[mismatched]))
     assert normalized.opportunities[0].duration_seconds == 30 * 60.0  # window length, not 5400
     inf_obj = SchedulingObjective(mission_value_weight=float("inf"))

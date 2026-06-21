@@ -42,9 +42,7 @@ def upgrade() -> None:
         for name, col_type in _NULLABLE:
             batch_op.add_column(sa.Column(name, col_type, nullable=True))
         for name, col_type, default in _POLICY:
-            batch_op.add_column(
-                sa.Column(name, col_type, nullable=False, server_default=default)
-            )
+            batch_op.add_column(sa.Column(name, col_type, nullable=False, server_default=default))
 
 
 def downgrade() -> None:
