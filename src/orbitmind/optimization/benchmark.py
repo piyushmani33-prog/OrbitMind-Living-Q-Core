@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 
+from orbitmind.core.ids import new_id
 from orbitmind.optimization.evaluation import Evaluator
 from orbitmind.optimization.models import (
     BenchmarkComparison,
@@ -186,6 +187,8 @@ def run_benchmark(
     policy = policy or default_policy()
     thresholds = policy.thresholds()
     evaluator = Evaluator(problem)
+    benchmark_id = new_id()  # generated up front so children carry the ownership anchor (High #2)
+    problem_id = problem.id
 
     exact = solve_exact(
         problem,
@@ -230,6 +233,13 @@ def run_benchmark(
                 error="Aer/Qiskit not installed",
             )
 
+    # Stamp the server-side ownership anchors on every result before comparison/persistence.
+    anchor = {"benchmark_id": benchmark_id, "problem_id": problem_id}
+    exact = exact.model_copy(update=anchor)
+    greedy = greedy.model_copy(update=anchor)
+    if quantum is not None:
+        quantum = quantum.model_copy(update=anchor)
+
     conclusion, rationale = conclude(
         exact_result=exact,
         greedy_result=greedy,
@@ -247,6 +257,8 @@ def run_benchmark(
         else None
     )
     comparison = BenchmarkComparison(
+        benchmark_id=benchmark_id,
+        problem_id=problem_id,
         problem_checksum=problem.checksum,
         exact_result_id=exact.id,
         greedy_result_id=greedy.id,
@@ -264,6 +276,8 @@ def run_benchmark(
         rationale=rationale,
     )
     return BenchmarkRun(
+        id=benchmark_id,
+        problem_id=problem_id,
         problem_checksum=problem.checksum,
         solver_results=[exact, greedy],
         quantum_experiment=quantum,

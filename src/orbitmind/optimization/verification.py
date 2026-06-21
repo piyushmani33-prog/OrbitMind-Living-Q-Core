@@ -175,6 +175,7 @@ def verify_benchmark(
     trusted = {SolverKind.EXACT: trusted_exact, SolverKind.GREEDY: trusted_greedy}
     findings.extend(_verify_solvers(run, trusted, evaluator, valid_ids))
     findings.extend(_verify_baselines(run, problem, trusted_exact, trusted_greedy, len(order)))
+    findings.extend(_verify_ownership(run, problem))
 
     # 12-22. Quantum experiment recomputation.
     if run.quantum_experiment is not None:
@@ -700,6 +701,73 @@ def _verify_baselines(
                 "greedy schedule + feasibility match a deterministic server rerun",
                 category=CheckCategory.MATHEMATICS,
                 severity=Severity.CRITICAL,
+            )
+        )
+    return out
+
+
+def _verify_ownership(run: BenchmarkRun, problem: SchedulingProblem) -> list[VerificationFinding]:
+    """Cross-benchmark / cross-problem ownership (third review, High #2).
+
+    Every result must carry this benchmark's id + problem id, and the comparison's association
+    ids must resolve to the benchmark's own exact/greedy/quantum records of the correct kind.
+    Checksum equality alone is NOT accepted as problem identity — the internal problem id must
+    match too, so two different problems with an identical checksum are rejected.
+    """
+    out: list[VerificationFinding] = []
+    bid = run.id
+    pid = run.problem_id
+    children: list[object] = [*run.solver_results]
+    if run.quantum_experiment is not None:
+        children.append(run.quantum_experiment)
+    if run.comparison is not None:
+        children.append(run.comparison)
+    same_owner = pid == problem.id and all(
+        getattr(c, "benchmark_id", None) == bid and getattr(c, "problem_id", None) == pid
+        for c in children
+    )
+    out.append(
+        _f(
+            "opt.ownership_anchors",
+            same_owner,
+            "every result carries this benchmark's id + internal problem id (not checksum alone)",
+            category=CheckCategory.STRUCTURE,
+            severity=Severity.CRITICAL,
+            values={"benchmark_id": bid, "problem_id": pid},
+        )
+    )
+    c = run.comparison
+    if c is not None:
+        by_id = {r.id: r for r in run.solver_results}
+        exact = by_id.get(c.exact_result_id or "")
+        greedy = by_id.get(c.greedy_result_id or "")
+        exact_ok = (
+            exact is not None
+            and exact.solver_kind == SolverKind.EXACT
+            and exact.benchmark_id == bid
+        )
+        greedy_ok = (
+            greedy is not None
+            and greedy.solver_kind == SolverKind.GREEDY
+            and greedy.benchmark_id == bid
+        )
+        q = run.quantum_experiment
+        quantum_ok = (c.quantum_experiment_id is None and q is None) or (
+            q is not None and c.quantum_experiment_id == q.id and q.benchmark_id == bid
+        )
+        out.append(
+            _f(
+                "opt.comparison_associations_resolve",
+                exact_ok and greedy_ok and quantum_ok,
+                "comparison association ids resolve to this benchmark's exact/greedy/quantum "
+                "records of the correct solver kind",
+                category=CheckCategory.STRUCTURE,
+                severity=Severity.CRITICAL,
+                values={
+                    "exact_ok": exact_ok,
+                    "greedy_ok": greedy_ok,
+                    "quantum_ok": quantum_ok,
+                },
             )
         )
     return out

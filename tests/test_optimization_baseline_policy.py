@@ -124,6 +124,30 @@ def _forged_policy_id(run: BenchmarkRun) -> BenchmarkRun:
     return run.model_copy(update={"comparison": comp})
 
 
+def _cross_benchmark_exact(run: BenchmarkRun) -> BenchmarkRun:
+    # Exact result spliced in from another benchmark (its ownership anchor differs).
+    ex = _exact(run).model_copy(update={"benchmark_id": "other-benchmark"})
+    return run.model_copy(update={"solver_results": [ex, _greedy(run)]})
+
+
+def _cross_problem_same_checksum(run: BenchmarkRun) -> BenchmarkRun:
+    # Different internal problem id but identical checksum: checksum equality is not identity.
+    ex = _exact(run).model_copy(update={"problem_id": "other-problem"})
+    return run.model_copy(update={"solver_results": [ex, _greedy(run)]})
+
+
+def _comparison_points_to_wrong_kind(run: BenchmarkRun) -> BenchmarkRun:
+    assert run.comparison is not None
+    comp = run.comparison.model_copy(update={"exact_result_id": _greedy(run).id})
+    return run.model_copy(update={"comparison": comp})
+
+
+def _comparison_nonexistent_assoc(run: BenchmarkRun) -> BenchmarkRun:
+    assert run.comparison is not None
+    comp = run.comparison.model_copy(update={"exact_result_id": "no-such-result"})
+    return run.model_copy(update={"comparison": comp})
+
+
 _TAMPERS: list[tuple[str, Callable[[BenchmarkRun], BenchmarkRun]]] = [
     ("missing_exact", _missing_exact),
     ("missing_greedy", _missing_greedy),
@@ -138,6 +162,10 @@ _TAMPERS: list[tuple[str, Callable[[BenchmarkRun], BenchmarkRun]]] = [
     ("solver_from_another_problem", _solver_from_another_problem),
     ("forged_threshold_and_conclusion", _forged_threshold_and_conclusion),
     ("forged_policy_id", _forged_policy_id),
+    ("cross_benchmark_exact", _cross_benchmark_exact),
+    ("cross_problem_same_checksum", _cross_problem_same_checksum),
+    ("comparison_points_to_wrong_kind", _comparison_points_to_wrong_kind),
+    ("comparison_nonexistent_assoc", _comparison_nonexistent_assoc),
 ]
 
 

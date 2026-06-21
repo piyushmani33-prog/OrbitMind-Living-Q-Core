@@ -195,7 +195,7 @@ class OptimizationService:
                         },
                     )
                 )
-            repo.save_quantum_experiment(experiment, benchmark_id=None)
+            repo.save_quantum_experiment(experiment, benchmark_id=None, problem_id=problem.id)
             session.commit()
         return experiment
 
@@ -364,14 +364,21 @@ class OptimizationService:
             return SqlAlchemyOptimizationRepository(session).list_runs(limit, offset)
 
     def get_artifacts(self, scope_id: str) -> list[dict[str, str]]:
+        """Return safe, path-free artifact metadata (third review, Medium #2). Internal
+        filesystem paths (path/sidecar_path/root/tmp) never leave the service."""
+        media = {".png": "image/png", ".json": "application/json", ".txt": "text/plain"}
         with self._db.session() as session:
             rows = SqlAlchemyOptimizationRepository(session).get_artifacts(scope_id)
             return [
                 {
+                    "id": r.id,
                     "type": r.artifact_type,
-                    "path": r.path,
-                    "sidecar_path": r.sidecar_path,
                     "checksum": r.checksum,
+                    "created_at": r.created_at.isoformat(),
+                    "media_type": next(
+                        (m for ext, m in media.items() if r.path.endswith(ext)),
+                        "application/octet-stream",
+                    ),
                 }
                 for r in rows
             ]

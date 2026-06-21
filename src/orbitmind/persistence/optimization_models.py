@@ -9,7 +9,17 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    Float,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from orbitmind.persistence.database import Base, UTCDateTime
@@ -74,11 +84,15 @@ class BenchmarkRunRow(Base):
 
 class SolverRunRow(Base):
     __tablename__ = "solver_runs"
+    # Composite uniqueness lets the comparison reference (benchmark_id, id) via a composite FK
+    # so a result cannot be spliced in from another benchmark (third review, High #2).
+    __table_args__ = (UniqueConstraint("benchmark_id", "id", name="uq_solver_runs_owner"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     benchmark_id: Mapped[str | None] = mapped_column(
         ForeignKey("benchmark_runs.id"), nullable=True, index=True
     )
+    problem_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     problem_checksum: Mapped[str] = mapped_column(String(64), index=True)
     solver_kind: Mapped[str] = mapped_column(String(24), index=True)
     solver_name: Mapped[str] = mapped_column(String(64))
@@ -99,11 +113,13 @@ class SolverRunRow(Base):
 
 class QuantumExperimentRow(Base):
     __tablename__ = "quantum_experiments"
+    __table_args__ = (UniqueConstraint("benchmark_id", "id", name="uq_quantum_experiments_owner"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     benchmark_id: Mapped[str | None] = mapped_column(
         ForeignKey("benchmark_runs.id"), nullable=True, index=True
     )
+    problem_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     problem_checksum: Mapped[str] = mapped_column(String(64), index=True)
     status: Mapped[str] = mapped_column(String(16))
     qubits: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -141,11 +157,30 @@ class QuantumSampleResultRow(Base):
 
 class BenchmarkComparisonRow(Base):
     __tablename__ = "benchmark_comparisons"
+    # Composite FKs bind each association id to a row OWNED BY THE SAME benchmark (High #2).
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["benchmark_id", "exact_result_id"],
+            ["solver_runs.benchmark_id", "solver_runs.id"],
+            name="fk_comparison_exact_owner",
+        ),
+        ForeignKeyConstraint(
+            ["benchmark_id", "greedy_result_id"],
+            ["solver_runs.benchmark_id", "solver_runs.id"],
+            name="fk_comparison_greedy_owner",
+        ),
+        ForeignKeyConstraint(
+            ["benchmark_id", "quantum_experiment_id"],
+            ["quantum_experiments.benchmark_id", "quantum_experiments.id"],
+            name="fk_comparison_quantum_owner",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     benchmark_id: Mapped[str | None] = mapped_column(
         ForeignKey("benchmark_runs.id"), nullable=True, index=True
     )
+    problem_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     problem_checksum: Mapped[str] = mapped_column(String(64), index=True)
     conclusion: Mapped[str] = mapped_column(String(32))
     exact_objective: Mapped[float | None] = mapped_column(Float, nullable=True)

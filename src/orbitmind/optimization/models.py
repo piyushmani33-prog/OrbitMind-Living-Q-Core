@@ -282,6 +282,9 @@ class SolverResult(BaseModel):
     solver_kind: SolverKind
     solver_name: str
     solver_version: str
+    # Ownership anchors set server-side when constructing the benchmark (third review, High #2).
+    benchmark_id: str | None = None
+    problem_id: str | None = None
     problem_checksum: str
     configuration: SolverConfiguration
     status: ExperimentStatus
@@ -375,6 +378,9 @@ class QuantumSampleResult(BaseModel):
 
 class QuantumExperiment(BaseModel):
     id: str = Field(default_factory=new_id)
+    # Ownership anchors set server-side when constructing the benchmark (third review, High #2).
+    benchmark_id: str | None = None
+    problem_id: str | None = None
     problem_checksum: str
     status: ExperimentStatus
     configuration: SolverConfiguration
@@ -416,6 +422,8 @@ class BenchmarkThresholds(BaseModel):
 
 class BenchmarkComparison(BaseModel):
     id: str = Field(default_factory=new_id)
+    benchmark_id: str | None = None
+    problem_id: str | None = None
     problem_checksum: str
     exact_result_id: str | None = None
     greedy_result_id: str | None = None
@@ -441,6 +449,7 @@ class BenchmarkComparison(BaseModel):
 
 class BenchmarkRun(BaseModel):
     id: str = Field(default_factory=new_id)
+    problem_id: str | None = None
     problem_checksum: str
     solver_results: list[SolverResult] = Field(default_factory=list)
     quantum_experiment: QuantumExperiment | None = None

@@ -156,6 +156,7 @@ class SqlAlchemyOptimizationRepository:
             SolverRunRow(
                 id=result.id,
                 benchmark_id=benchmark_id,
+                problem_id=problem_id,
                 problem_checksum=result.problem_checksum,
                 solver_kind=result.solver_kind.value,
                 solver_name=result.solver_name,
@@ -176,13 +177,14 @@ class SqlAlchemyOptimizationRepository:
         )
 
     def save_quantum_experiment(
-        self, experiment: QuantumExperiment, *, benchmark_id: str | None
+        self, experiment: QuantumExperiment, *, benchmark_id: str | None, problem_id: str | None
     ) -> None:
         meta = experiment.circuit_metadata
         self._s.add(
             QuantumExperimentRow(
                 id=experiment.id,
                 benchmark_id=benchmark_id,
+                problem_id=problem_id,
                 problem_checksum=experiment.problem_checksum,
                 status=experiment.status.value,
                 qubits=meta.qubits if meta else None,
@@ -225,6 +227,7 @@ class SqlAlchemyOptimizationRepository:
             BenchmarkComparisonRow(
                 id=comparison.id,
                 benchmark_id=benchmark_id,
+                problem_id=comparison.problem_id,
                 problem_checksum=comparison.problem_checksum,
                 conclusion=comparison.conclusion.value,
                 exact_objective=comparison.exact_objective,
@@ -267,7 +270,12 @@ class SqlAlchemyOptimizationRepository:
         for result in run.solver_results:
             self.save_solver_result(result, benchmark_id=run.id, problem_id=problem_id)
         if run.quantum_experiment is not None:
-            self.save_quantum_experiment(run.quantum_experiment, benchmark_id=run.id)
+            self.save_quantum_experiment(
+                run.quantum_experiment, benchmark_id=run.id, problem_id=problem_id
+            )
+        # The comparison's composite ownership FKs reference (benchmark_id, id) on solver_runs and
+        # quantum_experiments, so those rows must exist before the comparison is inserted.
+        self._s.flush()
         if run.comparison is not None:
             self.save_comparison(run.comparison, benchmark_id=run.id)
         for art in run.artifacts:
@@ -338,6 +346,8 @@ class SqlAlchemyOptimizationRepository:
         # epistemic status, limitations (review findings #12/#17).
         return BenchmarkComparison(
             id=row.id,
+            benchmark_id=row.benchmark_id,
+            problem_id=row.problem_id,
             problem_checksum=row.problem_checksum,
             exact_result_id=row.exact_result_id,
             greedy_result_id=row.greedy_result_id,

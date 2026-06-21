@@ -64,9 +64,38 @@ def _exec(container: AppContainer, sql: str) -> list:
         return list(conn.execute(text(sql)))
 
 
+def test_cross_benchmark_comparison_update_is_rejected(pg_container: AppContainer) -> None:
+    """A comparison association id cannot be repointed to a result OWNED BY ANOTHER benchmark:
+    the composite ownership FK rejects the update (third review, High #2)."""
+    from sqlalchemy.exc import IntegrityError
+
+    svc = pg_container.optimization_service
+    p1 = svc.create_problem(fixtures.fixture("default"))
+    p2 = svc.create_problem(fixtures.fixture("resource-bound"))
+    run1, _ = svc.benchmark(p1.id, seed=7, run_quantum=False)
+    run2, _ = svc.benchmark(p2.id, seed=7, run_quantum=False)
+    # An exact solver id that belongs to run2, not run1.
+    foreign_exact = _exec(
+        pg_container,
+        f"SELECT id FROM solver_runs WHERE benchmark_id='{run2.id}' AND solver_kind='exact'",
+    )[0][0]
+    engine = pg_container.database.engine
+    with engine.connect() as conn:
+        trans = conn.begin()
+        with pytest.raises(IntegrityError):
+            conn.execute(
+                text(
+                    "UPDATE benchmark_comparisons SET exact_result_id=:fx WHERE benchmark_id=:bid"
+                ),
+                {"fx": foreign_exact, "bid": run1.id},
+            )
+        trans.rollback()
+    assert _exec(pg_container, "SELECT 1")[0][0] == 1  # transaction recovers
+
+
 def test_schema_is_at_corrective_head_with_constraints(pg_container: AppContainer) -> None:
     head = _exec(pg_container, "SELECT version_num FROM alembic_version")[0][0]
-    assert head == "c7e1f2a9d3b4"
+    assert head == "a3f8c1d2e4b5"
     # Foreign keys created by the corrective migration are present.
     fks = {
         r[0]
