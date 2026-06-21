@@ -13,7 +13,7 @@ from __future__ import annotations
 import datetime as dt
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from orbitmind.optimization.models import (
     BenchmarkRun,
@@ -67,6 +67,24 @@ class OpportunityRequest(_Strict):
     storage_cost: float = Field(ge=0.0, le=1e12)
     pointing_cost: float = Field(default=0.0, ge=0.0, le=1e12)
     priority: int = Field(default=1, ge=0, le=1000)
+
+    @field_validator("start", "end")
+    @classmethod
+    def _require_aware_utc(cls, value: dt.datetime) -> dt.datetime:
+        """Reject naive timestamps at the request boundary and normalize to UTC (High #3).
+
+        A naive datetime would otherwise raise a domain ``pydantic.ValidationError`` deep in
+        ``to_domain`` and surface as an opaque HTTP 500; rejecting here yields a normal 422.
+        """
+        if value.tzinfo is None or value.tzinfo.utcoffset(value) is None:
+            raise ValueError("timestamps must be timezone-aware (UTC offset required)")
+        return value.astimezone(dt.UTC)
+
+    @model_validator(mode="after")
+    def _check_window(self) -> OpportunityRequest:
+        if self.end <= self.start:
+            raise ValueError("opportunity 'end' must be strictly after 'start'")
+        return self
 
     def to_domain(self) -> ObservationOpportunity:
         return ObservationOpportunity(

@@ -172,6 +172,46 @@ def test_dto_rejects_server_owned_and_custom_penalty(client: TestClient) -> None
     assert client.post("/api/v1/optimization/problems", json=badp).status_code == 422
 
 
+def _problem_with_window(start: str, end: str) -> dict:
+    opp = {**_VALID_PROBLEM["opportunities"][0], "start": start, "end": end}
+    return {"problem": {**_VALID_PROBLEM, "opportunities": [opp]}}
+
+
+def test_naive_start_timestamp_returns_422(client: TestClient) -> None:
+    body = _problem_with_window("2026-06-21T10:00:00", "2026-06-21T10:30:00+00:00")
+    resp = client.post("/api/v1/optimization/problems", json=body)
+    assert resp.status_code == 422  # not 500
+    assert resp.json().get("detail") or resp.json().get("code")  # standard validation envelope
+
+
+def test_naive_end_timestamp_returns_422(client: TestClient) -> None:
+    body = _problem_with_window("2026-06-21T10:00:00+00:00", "2026-06-21T10:30:00")
+    assert client.post("/api/v1/optimization/problems", json=body).status_code == 422
+
+
+def test_both_naive_timestamps_return_422(client: TestClient) -> None:
+    body = _problem_with_window("2026-06-21T10:00:00", "2026-06-21T10:30:00")
+    resp = client.post("/api/v1/optimization/problems", json=body)
+    assert resp.status_code == 422
+    assert resp.json() != {"code": "internal_error", "message": "an internal error occurred"}
+
+
+def test_inverted_window_returns_422(client: TestClient) -> None:
+    body = _problem_with_window("2026-06-21T10:30:00+00:00", "2026-06-21T10:00:00+00:00")
+    assert client.post("/api/v1/optimization/problems", json=body).status_code == 422
+
+
+def test_offset_timestamps_normalized_to_utc(client: TestClient) -> None:
+    # +05:30 input must be accepted and normalized to UTC (15:30+05:30 == 10:00Z).
+    body = _problem_with_window("2026-06-21T15:30:00+05:30", "2026-06-21T16:30:00+05:30")
+    resp = client.post("/api/v1/optimization/problems", json=body)
+    assert resp.status_code == 200, resp.text
+    window = resp.json()["opportunities"][0]["window"]
+    assert window["start"].endswith("+00:00") or window["start"].endswith("Z")
+    assert window["start"].startswith("2026-06-21T10:00:00")
+    assert window["end"].startswith("2026-06-21T11:00:00")
+
+
 def test_duplicate_problem_creation_is_idempotent(client: TestClient) -> None:
     a = client.post("/api/v1/optimization/problems", json={"fixture": "default"}).json()
     b = client.post("/api/v1/optimization/problems", json={"fixture": "default"}).json()
