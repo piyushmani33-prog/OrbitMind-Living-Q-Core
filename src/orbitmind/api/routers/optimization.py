@@ -19,6 +19,12 @@ from orbitmind.api.optimization_schemas import (
     RunListResponse,
     SolverResultResponse,
 )
+from orbitmind.api.optimization_views import (
+    BenchmarkView,
+    ProblemView,
+    QuantumExperimentView,
+    SolverResultView,
+)
 from orbitmind.core.errors import NotFoundError, ValidationError
 from orbitmind.optimization import fixtures
 from orbitmind.optimization.models import (
@@ -35,8 +41,8 @@ router = APIRouter(prefix="/api/v1/optimization", tags=["optimization"])
 ServiceDep = Annotated[OptimizationService, Depends(get_optimization_service)]
 
 
-@router.post("/problems", response_model=SchedulingProblem)
-def create_problem(payload: CreateProblemRequest, service: ServiceDep) -> SchedulingProblem:
+@router.post("/problems", response_model=ProblemView)
+def create_problem(payload: CreateProblemRequest, service: ServiceDep) -> ProblemView:
     """Create a bounded scheduling problem from a bundled fixture or a structured spec."""
     if payload.fixture is not None:
         try:
@@ -46,7 +52,7 @@ def create_problem(payload: CreateProblemRequest, service: ServiceDep) -> Schedu
     else:
         assert payload.problem is not None
         problem = payload.problem.to_domain()  # strict DTO -> server-stamped domain model
-    return service.create_problem(problem)
+    return ProblemView.from_domain(service.create_problem(problem))
 
 
 @router.get("/problems", response_model=ProblemListResponse)
@@ -56,15 +62,20 @@ def list_problems(
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> ProblemListResponse:
     total, items = service.list_problems(limit, offset)
-    return ProblemListResponse(total=total, limit=limit, offset=offset, items=items)
+    return ProblemListResponse(
+        total=total,
+        limit=limit,
+        offset=offset,
+        items=[ProblemView.from_domain(p) for p in items],
+    )
 
 
-@router.get("/problems/{problem_id}", response_model=SchedulingProblem)
-def get_problem(problem_id: str, service: ServiceDep) -> SchedulingProblem:
+@router.get("/problems/{problem_id}", response_model=ProblemView)
+def get_problem(problem_id: str, service: ServiceDep) -> ProblemView:
     problem = service.get_problem(problem_id)
     if problem is None:
         raise NotFoundError("optimization problem not found")
-    return problem
+    return ProblemView.from_domain(problem)
 
 
 @router.post("/problems/{problem_id}/solve/classical", response_model=SolverResultResponse)
@@ -75,7 +86,7 @@ def solve_classical(
     result: SolverResult = service.solve_classical(
         problem_id, solver_kind=kind, seed=payload.seed, timeout_seconds=payload.timeout_seconds
     )
-    return SolverResultResponse(result=result)
+    return SolverResultResponse(result=SolverResultView.from_domain(result))
 
 
 @router.post("/problems/{problem_id}/solve/quantum", response_model=QuantumExperimentResponse)
@@ -91,7 +102,7 @@ def solve_quantum(
         qaoa_layers=payload.qaoa_layers,
         timeout_seconds=payload.timeout_seconds,
     )
-    return QuantumExperimentResponse(experiment=experiment)
+    return QuantumExperimentResponse(experiment=QuantumExperimentView.from_domain(experiment))
 
 
 @router.post("/problems/{problem_id}/benchmark", response_model=BenchmarkResponse)
@@ -109,7 +120,9 @@ def benchmark(problem_id: str, payload: BenchmarkRequest, service: ServiceDep) -
         policy_id=payload.policy_id,
     )
     verified = benchmark_verified_for_evidence(findings)
-    return BenchmarkResponse(run=run, findings=findings, verified=verified)
+    return BenchmarkResponse(
+        run=BenchmarkView.from_domain(run, verified=verified), findings=findings, verified=verified
+    )
 
 
 @router.get("/runs", response_model=RunListResponse)
@@ -121,12 +134,14 @@ def list_runs(
     return RunListResponse(items=service.list_runs(limit, offset))
 
 
-@router.get("/runs/{run_id}")
-def get_run(run_id: str, service: ServiceDep) -> SolverResult | QuantumExperiment:
+@router.get("/runs/{run_id}", response_model=SolverResultView | QuantumExperimentView)
+def get_run(run_id: str, service: ServiceDep) -> SolverResultView | QuantumExperimentView:
     run = service.get_run(run_id)
     if run is None:
         raise NotFoundError("solver run not found")
-    return run
+    if isinstance(run, SolverResult):
+        return SolverResultView.from_domain(run)
+    return QuantumExperimentView.from_domain(run)
 
 
 @router.get("/runs/{run_id}/artifacts", response_model=ArtifactListResponse)

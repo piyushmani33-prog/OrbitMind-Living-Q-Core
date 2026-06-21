@@ -15,16 +15,19 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from orbitmind.api.optimization_views import (
+    BenchmarkView,
+    ProblemView,
+    QuantumExperimentView,
+    SolverResultView,
+)
 from orbitmind.optimization.models import (
-    BenchmarkRun,
     ConstraintSet,
     ObservationOpportunity,
     ObservationTarget,
-    QuantumExperiment,
     SatelliteResource,
     SchedulingObjective,
     SchedulingProblem,
-    SolverResult,
     TimeWindow,
 )
 from orbitmind.verification.models import VerificationFinding
@@ -208,21 +211,21 @@ class ProblemListResponse(BaseModel):
     total: int
     limit: int
     offset: int
-    items: list[SchedulingProblem]
+    items: list[ProblemView]
 
 
 class SolverResultResponse(BaseModel):
-    result: SolverResult
+    result: SolverResultView
     disclaimer: str = OPTIMIZATION_DISCLAIMER
 
 
 class QuantumExperimentResponse(BaseModel):
-    experiment: QuantumExperiment
+    experiment: QuantumExperimentView
     disclaimer: str = OPTIMIZATION_DISCLAIMER
 
 
 class BenchmarkResponse(BaseModel):
-    run: BenchmarkRun
+    run: BenchmarkView
     findings: list[VerificationFinding]
     verified: bool
     disclaimer: str = OPTIMIZATION_DISCLAIMER
