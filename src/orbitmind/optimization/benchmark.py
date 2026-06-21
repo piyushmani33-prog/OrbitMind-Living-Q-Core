@@ -32,6 +32,26 @@ def _classical_objective(result: SolverResult | None) -> float | None:
     return result.objective_value
 
 
+def proven_optimum(
+    exact: SolverResult | None,
+) -> tuple[float | None, tuple[str, ...] | None]:
+    """Return (optimum, selection) ONLY for a completed, proven-optimal, feasible exact run.
+
+    A merely feasible / timed-out / unsupported / failed exact result is NOT a known
+    optimum (review finding #10).
+    """
+    if (
+        exact is not None
+        and exact.status == ExperimentStatus.COMPLETED
+        and exact.optimality_status == OptimalityStatus.OPTIMAL
+        and exact.feasible
+        and exact.objective_value is not None
+        and exact.schedule is not None
+    ):
+        return exact.objective_value, exact.schedule.selected_opportunity_ids
+    return None, None
+
+
 def conclude(
     *,
     exact_result: SolverResult | None,
@@ -42,15 +62,12 @@ def conclude(
     """Deterministic comparison policy. Pure function over solver/experiment records."""
     exact_obj = _classical_objective(exact_result)
     greedy_obj = _classical_objective(greedy_result)
-    known_optimum = (
-        exact_obj
-        if exact_result is not None and exact_result.optimality_status == OptimalityStatus.OPTIMAL
-        else None
-    )
+    known_optimum, _selection = proven_optimum(exact_result)
     best_classical = max([o for o in (exact_obj, greedy_obj) if o is not None], default=None)
 
-    # No quantum comparison possible.
-    if quantum_experiment is None or quantum_experiment.status == ExperimentStatus.UNSUPPORTED:
+    # ---- STATUS GUARDS FIRST (review finding #19): a non-completed / unverifiable
+    # quantum run can NEVER receive a positive conclusion, regardless of any objective. ----
+    def _classical_fallback() -> tuple[ComparisonConclusion, str]:
         if known_optimum is not None:
             return ComparisonConclusion.CLASSICAL_EXACT_BEST, "exact optimum; no quantum comparison"
         if greedy_obj is not None:
@@ -60,16 +77,35 @@ def conclude(
             )
         return ComparisonConclusion.INSUFFICIENT_EVIDENCE, "no feasible classical solution"
 
+    if quantum_experiment is None or quantum_experiment.status == ExperimentStatus.UNSUPPORTED:
+        return _classical_fallback()
     if quantum_experiment.status == ExperimentStatus.FAILED:
         return ComparisonConclusion.EXPERIMENT_FAILED, f"quantum failed: {quantum_experiment.error}"
+    if quantum_experiment.status in (
+        ExperimentStatus.TIMED_OUT,
+        ExperimentStatus.CANCELLED,
+        ExperimentStatus.PENDING,
+        ExperimentStatus.RUNNING,
+        ExperimentStatus.INCONCLUSIVE,
+    ):
+        return (
+            ComparisonConclusion.INSUFFICIENT_EVIDENCE,
+            f"quantum status '{quantum_experiment.status.value}' is non-positive by policy",
+        )
+    if quantum_experiment.status != ExperimentStatus.COMPLETED:
+        return ComparisonConclusion.INSUFFICIENT_EVIDENCE, "quantum run did not complete"
+    # The quantum experiment must be the SAME instance as the classical baselines.
+    if (
+        exact_result is not None
+        and quantum_experiment.problem_checksum != exact_result.problem_checksum
+    ):
+        return (
+            ComparisonConclusion.INSUFFICIENT_EVIDENCE,
+            "quantum experiment ran a different problem checksum",
+        )
 
     best_feasible = quantum_experiment.best_feasible_sample
     if best_feasible is None:
-        if quantum_experiment.status == ExperimentStatus.TIMED_OUT:
-            return (
-                ComparisonConclusion.INSUFFICIENT_EVIDENCE,
-                "quantum timed out with no feasible sample",
-            )
         return ComparisonConclusion.QUANTUM_INFEASIBLE, "no feasible quantum sample observed"
 
     qobj = best_feasible.objective_value
@@ -145,14 +181,7 @@ def run_benchmark(
         ),
         evaluator,
     )
-    known_optimum = (
-        exact.objective_value if exact.optimality_status == OptimalityStatus.OPTIMAL else None
-    )
-    optimum_selection = (
-        exact.schedule.selected_opportunity_ids
-        if exact.schedule is not None and exact.optimality_status == OptimalityStatus.OPTIMAL
-        else None
-    )
+    known_optimum, optimum_selection = proven_optimum(exact)
 
     quantum: QuantumExperiment | None = None
     if run_quantum:

@@ -19,11 +19,12 @@ from orbitmind.memory.models import (
     GraphEdgeKind,
 )
 from orbitmind.memory.repository import SqlAlchemyMemoryRepository
-from orbitmind.optimization.benchmark import run_benchmark
+from orbitmind.optimization.benchmark import proven_optimum, run_benchmark
 from orbitmind.optimization.evaluation import Evaluator
 from orbitmind.optimization.models import (
     BenchmarkRun,
     BenchmarkThresholds,
+    ComparisonConclusion,
     ExperimentStatus,
     QuantumExperiment,
     SchedulingProblem,
@@ -58,7 +59,7 @@ class OptimizationService:
         with self._db.session() as session:
             audit = SqlAlchemyMissionRepository(session)
             repo = SqlAlchemyOptimizationRepository(session)
-            repo.save_problem(normalized)
+            persisted_id = repo.save_problem(normalized)
             audit.add_audit_event(
                 AuditEvent(
                     action=AuditAction.OPTIMIZATION_PROBLEM_CREATED,
@@ -69,6 +70,12 @@ class OptimizationService:
                 )
             )
             session.commit()
+        # Idempotent: if the same canonical problem already existed, return the PERSISTED
+        # entity + its real id, not the freshly-generated (unpersisted) one (finding #9).
+        if persisted_id != normalized.id:
+            existing = self.get_problem(persisted_id)
+            if existing is not None:
+                return existing
         return normalized
 
     def get_problem(self, problem_id: str) -> SchedulingProblem | None:
@@ -170,14 +177,14 @@ class OptimizationService:
                     ),
                     evaluator,
                 )
+                # A known optimum requires a COMPLETED, proven-optimal exact run (finding #10).
+                known_optimum, optimum_selection = proven_optimum(exact)
                 experiment = run_quantum_experiment(
                     problem,
                     config,
                     evaluator,
-                    known_optimum=exact.objective_value if exact.feasible else None,
-                    optimum_selection=exact.schedule.selected_opportunity_ids
-                    if exact.schedule
-                    else None,
+                    known_optimum=known_optimum,
+                    optimum_selection=optimum_selection,
                 )
                 audit.add_audit_event(
                     AuditEvent(
@@ -217,11 +224,28 @@ class OptimizationService:
             thresholds=thresholds,
             run_quantum=run_quantum,
         )
+        artifacts_root = self._settings.resolved_artifacts_dir()
         findings = verify_benchmark(problem, run)
-        verified = all_critical_passed(findings)
         if generate_artifacts:
             artifacts = self._viz.generate(problem, run, findings, seed=seed)
             run = run.model_copy(update={"artifacts": artifacts})
+            # Re-verify INCLUDING the artifact files + sidecars on disk.
+            findings = verify_benchmark(problem, run, artifacts_root=artifacts_root)
+        verified = all_critical_passed(findings)
+        # A benchmark that fails any material verification can never present a positive
+        # conclusion (review findings #2/#19): downgrade to non-positive before persistence.
+        if not verified and run.comparison is not None:
+            run = run.model_copy(
+                update={
+                    "comparison": run.comparison.model_copy(
+                        update={
+                            "conclusion": ComparisonConclusion.INSUFFICIENT_EVIDENCE,
+                            "rationale": "verification failed; conclusion downgraded: "
+                            + run.comparison.rationale,
+                        }
+                    )
+                }
+            )
 
         with self._db.session() as session:
             audit = SqlAlchemyMissionRepository(session)
