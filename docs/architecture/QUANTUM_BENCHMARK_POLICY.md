@@ -57,14 +57,42 @@ parameter search, sampling, decoding, selection). On expiry the worker is **term
 no final sampling completes, the status is `timed-out`, no best solution is presented as
 completed evidence, and the benchmark conclusion is non-positive.
 
-## Tamper-resistant verification (review finding #2)
+## Tamper-resistant verification (review finding #2; second review #1/#2/#5)
 The verifier **recomputes** authoritative values from canonical inputs — it re-solves the
-exact/greedy baselines, re-derives the penalty + QUBO energy (exhaustively), recomputes
-per-sample probability/feasibility/energy and the feasible-sample ratio from the observed
-counts, confirms the selected sample was actually observed, recomputes artifact checksums
-from disk and validates sidecar metadata, and re-derives the conclusion. A persisted value
-is never trusted as proof of itself; any failed material check downgrades the run to
+exact/greedy baselines, re-derives the penalty + QUBO energy (exhaustively on tiny instances),
+recomputes per-sample probability/feasibility/energy and the feasible-sample ratio from the
+observed counts, confirms the selected sample was actually observed, recomputes artifact
+checksums from disk and validates sidecar metadata, and re-derives the conclusion. A persisted
+value is never trusted as proof of itself; any failed material check downgrades the run to
 non-positive and blocks scientific-memory registration.
+
+The second review hardened this further:
+- **Authoritative evidence manifest** (`evidence.py`): the verifier rebuilds a server-derived
+  manifest (problem + QUBO checksums, variable/qubit mapping, bit-order, encoded/unencoded
+  inventory, penalty value + proof status, backend, seeds, package versions) with a
+  deterministic checksum and authenticates the persisted evidence against it — a coordinated,
+  internally-consistent forgery is rejected because the authoritative fields come from the
+  trusted problem, not the persisted block.
+- **Sample validation**: the authoritative shot count comes from the server configuration (so
+  doubling counts *and* `total_shots` together is rejected), counts must be positive integers,
+  bitstrings unique + correct width, and metadata shots must equal the configured shots.
+- **Classical baseline authentication**: exactly one exact + one greedy (no duplicates / reused
+  ids / extra kinds), exact completed + proven-optimal with a `2^n` exhaustive candidate count,
+  greedy completed + matching a deterministic rerun.
+- **Server-owned policy** (`policy.py`): thresholds come from an immutable registry; the verifier
+  reconstructs the expected policy by id and re-derives the conclusion with the SERVER thresholds,
+  so coherently changing both a persisted threshold and the conclusion fails.
+- **Artifact + sidecar containment**: the expected sidecar path is derived from the artifact
+  record (not trusted from it); both paths are checked with `ensure_within`, sidecar semantics are
+  compared independently, and misleading quantum-advantage language is rejected.
+- **Release gate** `benchmark_verified_for_evidence`: true only when every CRITICAL/ERROR check
+  passes; when false the conclusion is non-positive, the benchmark is persisted unaccepted, and no
+  scientific-memory edges are created.
+
+**Remaining limit:** the verifier does not re-execute Aer, so a forgery that *coherently* rewrites
+the configuration seed, the evidence seeds, and the circuit-metadata seeds together is not
+re-derived from fresh sampling (the samples are still independently re-decoded + re-evaluated).
+Re-running the sampler inside verification is out of scope for Phase 4A.
 
 ## Observed bounded results (default fixtures, seed 7)
 - `default` → `quantum-competitive` (matched optimum 10; feasible-sample ratio 1.0).

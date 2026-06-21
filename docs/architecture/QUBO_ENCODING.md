@@ -37,17 +37,28 @@ number of opportunities.
 QAOA cost layer applies `RZ(2γ h_i)` and `RZZ(2γ J_ij)`; the mixer applies `RX(2β)`. The
 round-trip is verified (`test_ising_roundtrip`).
 
-## Penalty policy + proof (review finding #6)
+## Penalty policy + proof (review finding #6; second review #11/#12/#13)
 The penalty is **generated automatically** — `P = (Σ max(0, value_i)·weight) + 1`, i.e.
 **strictly greater than the maximum possible total positive weighted mission value**, so no
 combination of encoded violations can ever beat the best feasible assignment. Externally-
 submitted custom penalties are **not accepted via the API**; an internal explicit penalty
-(research/testing only) must be positive + finite or execution stops with a validation
-error. `penalty_policy` (`penalties.py`) records the value, source, bound formula, and
-**proves sufficiency exhaustively** for tiny instances (the global QUBO minimum must be an
-encoded-feasible assignment, strictly below every encoded-infeasible one). A penalty is
-**never** reported sufficient when no satisfying encoded assignment exists (contradictory
-hard constraints, e.g. two conflicting mandatory opportunities). Larger `P` widens the QAOA
+(research/testing only) must be positive + finite.
+
+`penalty_policy` (`penalties.py`) records the value, source, bound formula, and an **explicit
+proof status** (`PenaltyProofStatus`): `proven-sufficient`, `proven-unsafe`, `contradictory`,
+`unproven`, or `not-applicable`. "Not checked" is **never** treated as sufficient. Encoded
+satisfiability is decided **analytically for all sizes** (not only tiny exhaustive cases): the
+encoded hard constraints are *contradictory* iff a conflict edge joins two mandatory variables
+(e.g. a 17-variable instance with two conflicting mandatory opportunities returns
+`contradictory` and reports no satisfying encoded assignment). Tiny instances additionally get
+an exhaustive proof; larger instances are `proven-sufficient` only via the analytic `P > bound`
+proof, else `unproven`.
+
+**Penalty proof gate (no unsafe Aer run):** `run_quantum_experiment` evaluates the proof status
+*before* building any circuit or spawning the Aer worker. If the status is not executable
+(`contradictory`, `proven-unsafe`, `unproven`, or an invalid zero/negative/NaN/inf penalty) the
+run stops with status `inconclusive` and **no QUBO is built or sampled** — the earlier behaviour
+of reporting "unsafe" but still completing the Aer run is removed. Larger `P` widens the QAOA
 energy scale and can make the variational landscape harder — a documented trade-off.
 
 ## What the QUBO does NOT encode
