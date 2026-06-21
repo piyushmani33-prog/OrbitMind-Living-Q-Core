@@ -279,6 +279,7 @@ def run_benchmark(
         id=benchmark_id,
         problem_id=problem_id,
         problem_checksum=problem.checksum,
+        policy_snapshot=policy.model_dump(mode="json"),  # immutable parent policy anchor (High #3)
         solver_results=[exact, greedy],
         quantum_experiment=quantum,
         comparison=comparison,

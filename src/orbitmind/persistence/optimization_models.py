@@ -79,6 +79,11 @@ class BenchmarkRunRow(Base):
     problem_checksum: Mapped[str] = mapped_column(String(64), index=True)
     conclusion: Mapped[str] = mapped_column(String(32))
     verification_passed: Mapped[bool] = mapped_column(Boolean)
+    # Immutable server-owned policy anchor on the parent (third review, High #3).
+    policy_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    policy_version: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    policy_checksum: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    policy_snapshot_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, index=True)
 
 

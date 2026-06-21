@@ -259,6 +259,14 @@ class SqlAlchemyOptimizationRepository:
                 problem_checksum=run.problem_checksum,
                 conclusion=run.comparison.conclusion.value if run.comparison else "unknown",
                 verification_passed=verification_passed,
+                policy_id=str(run.policy_snapshot["policy_id"]) if run.policy_snapshot else None,
+                policy_version=(
+                    str(run.policy_snapshot["policy_version"]) if run.policy_snapshot else None
+                ),
+                policy_checksum=(
+                    str(run.policy_snapshot["checksum"]) if run.policy_snapshot else None
+                ),
+                policy_snapshot_json=run.policy_snapshot,
                 created_at=run.created_at,
             )
         )

@@ -79,6 +79,26 @@ def default_policy() -> ComparisonPolicy:
     return _REGISTRY[DEFAULT_POLICY_ID]
 
 
+def is_active(policy_id: str) -> bool:
+    """Whether a policy id is still in the active registry (False once retired)."""
+    return policy_id in _REGISTRY
+
+
+def snapshot_is_self_consistent(snapshot: dict[str, object] | None) -> bool:
+    """A persisted policy snapshot validates against ITS OWN checksum (historical anchor).
+
+    This does not require the registry to still contain the policy, so an old benchmark stays
+    verifiable after a controlled policy retirement (third review, High #3 / finding #9).
+    """
+    if not snapshot:
+        return False
+    try:
+        pol = ComparisonPolicy.model_validate(snapshot)
+        return bool(pol.checksum) and pol.checksum == policy_checksum(pol)
+    except Exception:
+        return False
+
+
 def available_policy_ids() -> tuple[str, ...]:
     return tuple(sorted(_REGISTRY))
 

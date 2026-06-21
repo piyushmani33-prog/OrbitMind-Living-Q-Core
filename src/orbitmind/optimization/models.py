@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -451,6 +452,10 @@ class BenchmarkRun(BaseModel):
     id: str = Field(default_factory=new_id)
     problem_id: str | None = None
     problem_checksum: str
+    # Immutable server-owned policy snapshot anchored on the parent (third review, High #3): a
+    # serialized ComparisonPolicy (id/version/checksum/thresholds/algorithm). The comparison must
+    # match this anchor, so a coherent comparison-only policy swap is rejected.
+    policy_snapshot: dict[str, Any] | None = None
     solver_results: list[SolverResult] = Field(default_factory=list)
     quantum_experiment: QuantumExperiment | None = None
     comparison: BenchmarkComparison | None = None

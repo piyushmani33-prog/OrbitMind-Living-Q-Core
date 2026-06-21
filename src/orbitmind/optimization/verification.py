@@ -34,7 +34,11 @@ from orbitmind.optimization.models import (
     SolverResult,
 )
 from orbitmind.optimization.penalties import penalty_policy
-from orbitmind.optimization.policy import authenticate_policy, default_policy
+from orbitmind.optimization.policy import (
+    authenticate_policy,
+    default_policy,
+    snapshot_is_self_consistent,
+)
 from orbitmind.optimization.problem import problem_checksum, variable_order
 from orbitmind.optimization.qubo import build_qubo, qubo_energy
 from orbitmind.optimization.solvers import solve_exact, solve_greedy
@@ -176,6 +180,7 @@ def verify_benchmark(
     findings.extend(_verify_solvers(run, trusted, evaluator, valid_ids))
     findings.extend(_verify_baselines(run, problem, trusted_exact, trusted_greedy, len(order)))
     findings.extend(_verify_ownership(run, problem))
+    findings.extend(_verify_parent_policy(run))
 
     # 12-22. Quantum experiment recomputation.
     if run.quantum_experiment is not None:
@@ -701,6 +706,54 @@ def _verify_baselines(
                 "greedy schedule + feasibility match a deterministic server rerun",
                 category=CheckCategory.MATHEMATICS,
                 severity=Severity.CRITICAL,
+            )
+        )
+    return out
+
+
+def _verify_parent_policy(run: BenchmarkRun) -> list[VerificationFinding]:
+    """The comparison policy must match the immutable parent snapshot (third review, High #3).
+
+    The parent snapshot is self-validating (its own checksum), so it stays verifiable after a
+    controlled policy retirement; the comparison's policy fields must equal it, so a coherent
+    comparison-only swap (e.g. strict-v1 -> lenient-v1) is rejected when the parent says strict.
+    """
+    out: list[VerificationFinding] = []
+    snap = run.policy_snapshot
+    out.append(
+        _f(
+            "opt.parent_policy_snapshot",
+            snapshot_is_self_consistent(snap),
+            "benchmark carries a self-consistent server-owned policy snapshot",
+            category=CheckCategory.POLICY,
+            severity=Severity.CRITICAL,
+        )
+    )
+    c = run.comparison
+    if c is not None and snap is not None:
+        match = (
+            c.policy_id == snap.get("policy_id")
+            and c.policy_version == snap.get("policy_version")
+            and c.policy_checksum == snap.get("checksum")
+            and abs(
+                c.thresholds.competitive_relative_gap
+                - float(snap.get("competitive_relative_gap", -1.0))
+            )
+            < 1e-12
+            and abs(
+                c.thresholds.min_feasible_sample_ratio
+                - float(snap.get("min_feasible_sample_ratio", -1.0))
+            )
+            < 1e-12
+        )
+        out.append(
+            _f(
+                "opt.comparison_matches_parent_policy",
+                match,
+                "comparison policy id/version/checksum/thresholds match the parent anchor",
+                category=CheckCategory.POLICY,
+                severity=Severity.CRITICAL,
+                values={"parent_policy_id": snap.get("policy_id"), "comparison": c.policy_id},
             )
         )
     return out
