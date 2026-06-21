@@ -66,7 +66,7 @@ def _exec(container: AppContainer, sql: str) -> list:
 
 def test_schema_is_at_corrective_head_with_constraints(pg_container: AppContainer) -> None:
     head = _exec(pg_container, "SELECT version_num FROM alembic_version")[0][0]
-    assert head == "d63d75f51b9d"
+    assert head == "c7e1f2a9d3b4"
     # Foreign keys created by the corrective migration are present.
     fks = {
         r[0]
@@ -128,6 +128,41 @@ def test_benchmark_persists_and_reads_back(pg_container: AppContainer) -> None:
         stored.thresholds.competitive_relative_gap
         == run.comparison.thresholds.competitive_relative_gap
     )
+
+
+def test_comparison_associations_and_policy_round_trip_on_postgres(
+    pg_container: AppContainer,
+) -> None:
+    """The new comparison columns (associations, objective gap, server policy metadata) and the
+    benchmark accepted flag round-trip on live PostgreSQL (review findings #9/#17/#23)."""
+    svc = pg_container.optimization_service
+    problem = svc.create_problem(fixtures.fixture("default"))
+    run, _ = svc.benchmark(problem.id, seed=7, run_quantum=False, policy_id="lenient-v1")
+
+    session = pg_container.database.session()
+    stored = SqlAlchemyOptimizationRepository(session).get_comparison(run.id)
+    session.close()
+    assert stored is not None
+    assert stored.exact_result_id == run.comparison.exact_result_id
+    assert stored.greedy_result_id == run.comparison.greedy_result_id
+    assert stored.policy_id == "lenient-v1" and stored.policy_version == "1"
+    assert stored.policy_checksum == run.comparison.policy_checksum
+    assert stored.thresholds.competitive_relative_gap == 0.25
+    assert stored.objective_gap == run.comparison.objective_gap
+    # New columns exist + the verified benchmark is persisted in the ACCEPTED state.
+    cols = {
+        r[0]
+        for r in _exec(
+            pg_container,
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name='benchmark_comparisons'",
+        )
+    }
+    assert {"policy_id", "policy_version", "policy_checksum", "objective_gap"} <= cols
+    accepted = _exec(
+        pg_container, f"SELECT verification_passed FROM benchmark_runs WHERE id='{run.id}'"
+    )[0][0]
+    assert accepted is True
 
 
 def test_save_benchmark_flushes_parent_before_fk_children(pg_container: AppContainer) -> None:

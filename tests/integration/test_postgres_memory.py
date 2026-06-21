@@ -108,7 +108,7 @@ def test_connection_and_dialect(pg_container: AppContainer) -> None:
 
 def test_migrations_at_head_and_memory_tables_exist(pg_container: AppContainer) -> None:
     head = _exec(pg_container, "SELECT version_num FROM alembic_version")[0][0]
-    assert head == "d63d75f51b9d"  # current Alembic head (Phase 4A corrective)
+    assert head == "c7e1f2a9d3b4"  # current Alembic head (Phase 4A comparison associations)
     present = {
         r[0]
         for r in _exec(
