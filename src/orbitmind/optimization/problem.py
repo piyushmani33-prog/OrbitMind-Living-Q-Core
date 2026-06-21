@@ -138,22 +138,21 @@ def normalize_problem(problem: SchedulingProblem) -> SchedulingProblem:
             ("pointing_cost", opp.pointing_cost),
         ):
             _require_finite(val, f"opportunity {opp.id} {name}")
+        # Duration is CANONICAL = the time-window length (review finding #21). Clients do not
+        # independently control a conflicting duration; the same value drives greedy density and
+        # the (window-based) conflict detection, so there is no ambiguity.
         window_seconds = (opp.window.end - opp.window.start).total_seconds()
-        if not (0.0 < opp.duration_seconds <= window_seconds + 1e-9):
-            raise ValidationError(
-                f"opportunity {opp.id} duration ({opp.duration_seconds}s) must be > 0 and fit "
-                f"within its time window ({window_seconds}s)"
-            )
-        # Canonicalize the time window to UTC so the checksum is timezone-stable.
+        # Canonicalize the time window to UTC + set the canonical duration.
         canonical_opps.append(
             opp.model_copy(
                 update={
+                    "duration_seconds": window_seconds,
                     "window": opp.window.model_copy(
                         update={
                             "start": opp.window.start.astimezone(UTC),
                             "end": opp.window.end.astimezone(UTC),
                         }
-                    )
+                    ),
                 }
             )
         )

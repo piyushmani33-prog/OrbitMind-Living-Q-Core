@@ -62,7 +62,6 @@ class OpportunityRequest(_Strict):
     start: dt.datetime
     end: dt.datetime
     mission_value: float = Field(ge=0.0, le=1_000_000.0)
-    duration_seconds: float = Field(gt=0.0, le=1e9)
     energy_cost: float = Field(ge=0.0, le=1e12)
     storage_cost: float = Field(ge=0.0, le=1e12)
     pointing_cost: float = Field(default=0.0, ge=0.0, le=1e12)
@@ -93,7 +92,9 @@ class OpportunityRequest(_Strict):
             target_id=self.target_id,
             window=TimeWindow(start=self.start, end=self.end),
             mission_value=self.mission_value,
-            duration_seconds=self.duration_seconds,
+            # Duration is server-derived from the window (review finding #21); normalize_problem
+            # sets the canonical value. A positive placeholder satisfies the domain validator.
+            duration_seconds=(self.end - self.start).total_seconds(),
             energy_cost=self.energy_cost,
             storage_cost=self.storage_cost,
             pointing_cost=self.pointing_cost,

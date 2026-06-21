@@ -128,7 +128,6 @@ _VALID_PROBLEM = {
             "start": "2026-06-21T10:00:00Z",
             "end": "2026-06-21T10:30:00Z",
             "mission_value": 5.0,
-            "duration_seconds": 1800.0,
             "energy_cost": 2.0,
             "storage_cost": 1.0,
         }
@@ -198,6 +197,22 @@ def test_both_naive_timestamps_return_422(client: TestClient) -> None:
 def test_inverted_window_returns_422(client: TestClient) -> None:
     body = _problem_with_window("2026-06-21T10:30:00+00:00", "2026-06-21T10:00:00+00:00")
     assert client.post("/api/v1/optimization/problems", json=body).status_code == 422
+
+
+def test_duration_is_canonical_window_length(client: TestClient) -> None:
+    # The client cannot supply a duration (server-derived); persisted duration == window length.
+    bad = {
+        "problem": {
+            **_VALID_PROBLEM,
+            "opportunities": [{**_VALID_PROBLEM["opportunities"][0], "duration_seconds": 60.0}],
+        }
+    }
+    assert client.post("/api/v1/optimization/problems", json=bad).status_code == 422  # extra forbid
+
+    resp = client.post("/api/v1/optimization/problems", json={"problem": _VALID_PROBLEM})
+    assert resp.status_code == 200, resp.text
+    opp = resp.json()["opportunities"][0]
+    assert opp["duration_seconds"] == 1800.0  # 30-minute window
 
 
 def test_offset_timestamps_normalized_to_utc(client: TestClient) -> None:
