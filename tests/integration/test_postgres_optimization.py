@@ -130,6 +130,36 @@ def test_benchmark_persists_and_reads_back(pg_container: AppContainer) -> None:
     )
 
 
+def test_save_benchmark_flushes_parent_before_fk_children(pg_container: AppContainer) -> None:
+    """Regression (live-PG closure): save_benchmark must flush the benchmark_runs parent
+    before its FK children (solver runs + comparison). These mappers have no ORM
+    relationship(), so the unit-of-work does NOT order them by the table FK; without an
+    explicit parent flush PostgreSQL rejects the child inserts with a ForeignKeyViolation.
+    SQLite (FKs unenforced) masked this; live PostgreSQL exposes it."""
+    from orbitmind.optimization.benchmark import run_benchmark
+
+    problem = pg_container.optimization_service.create_problem(fixtures.fixture("default"))
+    run = run_benchmark(problem, seed=7, run_quantum=False)
+    session = pg_container.database.session()
+    repo = SqlAlchemyOptimizationRepository(session)
+    repo.save_benchmark(run, problem_id=problem.id, verification_passed=True)
+    session.commit()  # must NOT raise IntegrityError
+    session.close()
+    # Parent and every FK child persisted and correctly linked to the benchmark run.
+    assert _exec(pg_container, "SELECT count(*) FROM benchmark_runs")[0][0] == 1
+    assert (
+        _exec(pg_container, f"SELECT count(*) FROM solver_runs WHERE benchmark_id='{run.id}'")[0][0]
+        == 2
+    )
+    assert (
+        _exec(
+            pg_container,
+            f"SELECT count(*) FROM benchmark_comparisons WHERE benchmark_id='{run.id}'",
+        )[0][0]
+        == 1
+    )
+
+
 def test_quantum_and_samples_and_artifacts_persist(pg_container: AppContainer) -> None:
     svc = pg_container.optimization_service
     problem = svc.create_problem(fixtures.fixture("default"))

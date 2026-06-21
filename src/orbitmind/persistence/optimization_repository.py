@@ -252,6 +252,11 @@ class SqlAlchemyOptimizationRepository:
                 created_at=run.created_at,
             )
         )
+        # The parent benchmark row must exist before its FK children (solver runs, quantum
+        # experiment, comparison, artifacts). These mappers have no ORM relationship(), so the
+        # unit-of-work does not order them by the table FK on its own; flush explicitly, as
+        # save_problem/save_quantum_experiment do, or PostgreSQL rejects the child inserts.
+        self._s.flush()
         for result in run.solver_results:
             self.save_solver_result(result, benchmark_id=run.id, problem_id=problem_id)
         if run.quantum_experiment is not None:
