@@ -20,7 +20,9 @@ class OptimizationProblemRow(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     name: Mapped[str] = mapped_column(String(128))
-    checksum: Mapped[str] = mapped_column(String(64), index=True)
+    # Canonical problem checksum is UNIQUE: creating the same problem twice is idempotent
+    # and concurrency-safe (review finding #9).
+    checksum: Mapped[str] = mapped_column(String(64), index=True, unique=True)
     num_variables: Mapped[int] = mapped_column(Integer)
     source: Mapped[str] = mapped_column(String(64))
     provenance: Mapped[str] = mapped_column(Text)
@@ -61,7 +63,9 @@ class BenchmarkRunRow(Base):
     __tablename__ = "benchmark_runs"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    problem_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    problem_id: Mapped[str | None] = mapped_column(
+        ForeignKey("optimization_problems.id"), nullable=True, index=True
+    )
     problem_checksum: Mapped[str] = mapped_column(String(64), index=True)
     conclusion: Mapped[str] = mapped_column(String(32))
     verification_passed: Mapped[bool] = mapped_column(Boolean)
@@ -72,7 +76,9 @@ class SolverRunRow(Base):
     __tablename__ = "solver_runs"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    benchmark_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    benchmark_id: Mapped[str | None] = mapped_column(
+        ForeignKey("benchmark_runs.id"), nullable=True, index=True
+    )
     problem_checksum: Mapped[str] = mapped_column(String(64), index=True)
     solver_kind: Mapped[str] = mapped_column(String(24), index=True)
     solver_name: Mapped[str] = mapped_column(String(64))
@@ -95,7 +101,9 @@ class QuantumExperimentRow(Base):
     __tablename__ = "quantum_experiments"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    benchmark_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    benchmark_id: Mapped[str | None] = mapped_column(
+        ForeignKey("benchmark_runs.id"), nullable=True, index=True
+    )
     problem_checksum: Mapped[str] = mapped_column(String(64), index=True)
     status: Mapped[str] = mapped_column(String(16))
     qubits: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -135,7 +143,9 @@ class BenchmarkComparisonRow(Base):
     __tablename__ = "benchmark_comparisons"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    benchmark_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    benchmark_id: Mapped[str | None] = mapped_column(
+        ForeignKey("benchmark_runs.id"), nullable=True, index=True
+    )
     problem_checksum: Mapped[str] = mapped_column(String(64), index=True)
     conclusion: Mapped[str] = mapped_column(String(32))
     exact_objective: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -153,7 +163,7 @@ class OptimizationArtifactRow(Base):
     __tablename__ = "optimization_artifacts"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    scope_id: Mapped[str] = mapped_column(String(36), index=True)
+    scope_id: Mapped[str] = mapped_column(ForeignKey("benchmark_runs.id"), index=True)
     artifact_type: Mapped[str] = mapped_column(String(48))
     path: Mapped[str] = mapped_column(Text)
     sidecar_path: Mapped[str] = mapped_column(Text)
