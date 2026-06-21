@@ -202,7 +202,7 @@ not truth and retrieval is not verification**: outputs are ranked, version-pinne
 - **Validated on real PostgreSQL 16.13 / psycopg 3.3.4 (2026-06-20):** fresh-DB migration
   to head, FTS GIN index verified, 13 live `postgres` integration tests, gold eval
   recall@5 = 1.0, `pg_dump`/`pg_restore` smoke test, and a CI service-container job. To
-  exercise it locally: `docker compose --profile postgres up -d` (host port **55432**;
+  exercise it locally: `docker compose --profile postgres up -d postgres` (host port **55432**;
   use `127.0.0.1` on Windows, not `localhost`).
 
 ### Endpoints

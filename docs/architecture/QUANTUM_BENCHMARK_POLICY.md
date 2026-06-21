@@ -42,6 +42,30 @@ noise (finite sampling), optimizer variability across parameter grids, and the f
 matching the optimum on a 3–4 qubit simulator instance is a correctness signal, not a
 performance claim. **No production decision is ever made on quantum output alone.**
 
+## Status guards precede objective comparison (review finding #19)
+The conclusion is decided by checking the quantum **status first**. A run that is
+`timed-out`, `cancelled`, `failed`, `unsupported`, `pending`, `running`, `inconclusive`,
+that lacks a feasible sample, or whose `problem_checksum` differs from the classical
+baselines can **never** receive `quantum-competitive`/`equivalent-objective` — it is forced
+to a non-positive conclusion (`insufficient-evidence` / `experiment-failed` /
+`quantum-infeasible`) before any objective is compared.
+
+## Whole-experiment timeout (review finding #3)
+The quantum experiment runs in an **isolated child process** with a hard, parent-side
+wall-clock deadline covering the entire operation (QUBO prep, circuit build, transpilation,
+parameter search, sampling, decoding, selection). On expiry the worker is **terminated**:
+no final sampling completes, the status is `timed-out`, no best solution is presented as
+completed evidence, and the benchmark conclusion is non-positive.
+
+## Tamper-resistant verification (review finding #2)
+The verifier **recomputes** authoritative values from canonical inputs — it re-solves the
+exact/greedy baselines, re-derives the penalty + QUBO energy (exhaustively), recomputes
+per-sample probability/feasibility/energy and the feasible-sample ratio from the observed
+counts, confirms the selected sample was actually observed, recomputes artifact checksums
+from disk and validates sidecar metadata, and re-derives the conclusion. A persisted value
+is never trusted as proof of itself; any failed material check downgrades the run to
+non-positive and blocks scientific-memory registration.
+
 ## Observed bounded results (default fixtures, seed 7)
 - `default` → `quantum-competitive` (matched optimum 10; feasible-sample ratio 1.0).
 - `resource-bound` → `quantum-competitive` (matched optimum 15; feasible-sample ratio

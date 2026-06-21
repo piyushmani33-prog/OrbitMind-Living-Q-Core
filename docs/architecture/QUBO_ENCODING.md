@@ -22,23 +22,33 @@ Minimizing `E` therefore maximizes the penalized objective. This identity is che
 
 ## Coefficients
 With penalty `P` (default `total mission value + 1`):
-- `linear_i = −value_i − P·[i is mandatory]`
+- `linear_i = −(value_i · mission_value_weight) − P·[i is mandatory]`
 - `quad_ij = +P` for each conflict pair (overlap or mutual exclusion)
 - `offset = P · (number of mandatory opportunities)`
 
-All penalties are exactly linear/quadratic in `x` — **no slack variables**, so the qubit
-count equals the number of opportunities.
+The mission value is **weighted** by `objective.mission_value_weight` (review finding #7)
+— consistently across the evaluator, the QUBO linear terms, the penalty bound, and the
+benchmark/verification. Default weight is `1.0` (unchanged behaviour). All penalties are
+exactly linear/quadratic in `x` — **no slack variables**, so the qubit count equals the
+number of opportunities.
 
 ## Ising conversion
 `qubo_to_ising` maps `x_i = (1 − z_i)/2` to `H = Σ h_i Z_i + Σ J_ij Z_i Z_j + offset`. The
 QAOA cost layer applies `RZ(2γ h_i)` and `RZZ(2γ J_ij)`; the mixer applies `RX(2β)`. The
 round-trip is verified (`test_ising_roundtrip`).
 
-## Penalty-weight limitation
-`P = total value + 1` is a safe upper bound that guarantees a constraint violation can
-never be optimal; `penalty_is_sufficient` reports if a smaller configured `P` is unsafe.
-Larger `P` widens the QAOA energy scale and can make the variational landscape harder —
-a documented trade-off.
+## Penalty policy + proof (review finding #6)
+The penalty is **generated automatically** — `P = (Σ max(0, value_i)·weight) + 1`, i.e.
+**strictly greater than the maximum possible total positive weighted mission value**, so no
+combination of encoded violations can ever beat the best feasible assignment. Externally-
+submitted custom penalties are **not accepted via the API**; an internal explicit penalty
+(research/testing only) must be positive + finite or execution stops with a validation
+error. `penalty_policy` (`penalties.py`) records the value, source, bound formula, and
+**proves sufficiency exhaustively** for tiny instances (the global QUBO minimum must be an
+encoded-feasible assignment, strictly below every encoded-infeasible one). A penalty is
+**never** reported sufficient when no satisfying encoded assignment exists (contradictory
+hard constraints, e.g. two conflicting mandatory opportunities). Larger `P` widens the QAOA
+energy scale and can make the variational landscape harder — a documented trade-off.
 
 ## What the QUBO does NOT encode
 Resource/cardinality constraints (energy/storage capacity, max-observations, per-target

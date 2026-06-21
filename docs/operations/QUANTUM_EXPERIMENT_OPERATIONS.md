@@ -32,8 +32,19 @@ feasible-sample ratio, and the objective gap vs the exact optimum.
 - Reproducibility limits: shot noise + the grid resolution. Re-running with the same seed +
   package versions on the same machine reproduces the samples.
 
+## Whole-experiment timeout (process isolation)
+The bounded computation runs in an **isolated child process** (`spawn`) with a hard
+parent-side wall-clock deadline. The deadline covers the *entire* operation (QUBO prep,
+build, transpile, parameter search, sampling, decode). On expiry the worker is terminated
+(and reaped — no orphan), the status is `timed-out`, no final sampling completes, and the
+benchmark conclusion is non-positive. On Windows/CI the child re-imports only the worker
+module; the env-var test hook (`ORBITMIND_QUANTUM_TEST_SLEEP`) is test-only.
+
 ## Safety
 - An experimental quantum result **never** drives a production mission.
+- API request DTOs are strict (`extra='forbid'`) and reject server-owned fields (internal
+  ids, timestamps, provenance, checksums, epistemic/verification status, limits, versions,
+  conclusions, artifact paths) and custom penalties; those are server-stamped (review #5/#6).
 - The API rejects unsupported solver/backend names, out-of-range shots/iterations/timeout,
   arbitrary Python, and raw Qiskit object input (structured JSON only) — ADR-0029.
 - Circuit diagrams are documentation of what ran; they are **not** evidence of quantum

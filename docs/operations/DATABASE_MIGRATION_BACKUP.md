@@ -10,7 +10,7 @@ PostgreSQL is **not** required for tests or basic development. To exercise Postg
 full-text retrieval locally:
 
 ```bash
-docker compose --profile postgres up -d          # start a local PostgreSQL 16
+docker compose --profile postgres up -d postgres          # start a local PostgreSQL 16
 pip install -e .[postgres]                        # install the psycopg driver
 
 # Local-only, throwaway credentials (never use in production, never commit real ones):
