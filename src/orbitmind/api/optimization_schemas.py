@@ -16,6 +16,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from orbitmind.api.optimization_views import (
+    ArtifactView,
     BenchmarkView,
     ProblemView,
     QuantumExperimentView,
@@ -237,7 +238,7 @@ class RunListResponse(BaseModel):
 
 class ArtifactListResponse(BaseModel):
     scope_id: str
-    artifacts: list[dict[str, str]]
+    artifacts: list[ArtifactView]
     disclaimer: str = OPTIMIZATION_DISCLAIMER
 
 

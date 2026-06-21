@@ -89,7 +89,7 @@ _SNAPSHOTS = {
         "epistemic_status",
         "limitations",
     },
-    ArtifactView: {"type", "checksum"},
+    ArtifactView: {"id", "type", "checksum", "media_type", "created_at", "epistemic_status"},
     BenchmarkView: {
         "id",
         "problem_checksum",
@@ -123,14 +123,27 @@ def test_benchmark_response_hides_internal_fields(client: TestClient) -> None:
     run = body["run"]
     # No mutable evidence object, no execution limits, no raw provenance dump at run level.
     assert "evidence" not in run and "limits" not in run
-    # Artifacts expose only a type + checksum, never an on-disk path.
+    # Artifacts never expose on-disk paths in any response.
     for art in run["artifacts"]:
-        assert set(art) == {"type", "checksum"}
+        assert "path" not in art and "sidecar_path" not in art
     # Solver results expose the reviewed surface only (no resource_usage / runtimes / config).
     for r in run["solver_results"]:
         assert (
             "resource_usage" not in r and "configuration" not in r and "software_versions" not in r
         )
+    # The dedicated artifacts endpoint is also path-free.
+    arts = client.get(f"/api/v1/optimization/runs/{run['id']}/artifacts").json()["artifacts"]
+    assert arts
+    for art in arts:
+        assert "path" not in art and "sidecar_path" not in art
+        assert set(art) <= {
+            "id",
+            "type",
+            "checksum",
+            "media_type",
+            "created_at",
+            "epistemic_status",
+        }
 
 
 def test_problem_response_hides_limits(client: TestClient) -> None:

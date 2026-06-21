@@ -192,9 +192,35 @@ class ComparisonView(_View):
         )
 
 
+_MEDIA_TYPES = {".png": "image/png", ".json": "application/json", ".txt": "text/plain"}
+
+
+def _media_type(path_or_name: str) -> str:
+    for ext, media in _MEDIA_TYPES.items():
+        if path_or_name.endswith(ext):
+            return media
+    return "application/octet-stream"
+
+
 class ArtifactView(_View):
+    """Public artifact metadata. On-disk paths (path/sidecar_path/root/tmp) are NEVER exposed."""
+
+    id: str | None = None
     type: str
-    checksum: str  # on-disk paths are NOT exposed; retrieve via the artifacts endpoint by id
+    checksum: str
+    media_type: str
+    created_at: str | None = None
+    epistemic_status: str = "model-estimate"
+
+    @classmethod
+    def from_run_dict(cls, a: dict[str, str]) -> ArtifactView:
+        # Benchmark-response artifacts (pre-persistence): no id/timestamp yet. media_type is
+        # derived from the (internal) path extension but the path itself is not exposed.
+        return cls(
+            type=a.get("type", ""),
+            checksum=a.get("checksum", ""),
+            media_type=_media_type(a.get("path", "")),
+        )
 
 
 class BenchmarkView(_View):
@@ -223,8 +249,5 @@ class BenchmarkView(_View):
             comparison=(
                 ComparisonView.from_domain(run.comparison) if run.comparison is not None else None
             ),
-            artifacts=[
-                ArtifactView(type=a.get("type", ""), checksum=a.get("checksum", ""))
-                for a in run.artifacts
-            ],
+            artifacts=[ArtifactView.from_run_dict(a) for a in run.artifacts],
         )

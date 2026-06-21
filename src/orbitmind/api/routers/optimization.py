@@ -20,6 +20,7 @@ from orbitmind.api.optimization_schemas import (
     SolverResultResponse,
 )
 from orbitmind.api.optimization_views import (
+    ArtifactView,
     BenchmarkView,
     ProblemView,
     QuantumExperimentView,
@@ -146,4 +147,5 @@ def get_run(run_id: str, service: ServiceDep) -> SolverResultView | QuantumExper
 
 @router.get("/runs/{run_id}/artifacts", response_model=ArtifactListResponse)
 def get_run_artifacts(run_id: str, service: ServiceDep) -> ArtifactListResponse:
-    return ArtifactListResponse(scope_id=run_id, artifacts=service.get_artifacts(run_id))
+    artifacts = [ArtifactView(**a) for a in service.get_artifacts(run_id)]
+    return ArtifactListResponse(scope_id=run_id, artifacts=artifacts)
