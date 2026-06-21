@@ -417,8 +417,12 @@ class BenchmarkComparison(BaseModel):
     greedy_objective: float | None = None
     quantum_objective: float | None = None
     known_optimum: float | None = None
+    objective_gap: float | None = None  # known_optimum - quantum_objective (when both known)
     conclusion: ComparisonConclusion
     thresholds: BenchmarkThresholds = Field(default_factory=BenchmarkThresholds)
+    policy_id: str = "strict-v1"
+    policy_version: str = "1"
+    policy_checksum: str = ""
     rationale: str = ""
     limitations: str = (
         "Bounded simulator benchmark on a tiny fixture instance. 'quantum-competitive' "

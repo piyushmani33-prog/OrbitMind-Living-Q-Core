@@ -231,6 +231,13 @@ class SqlAlchemyOptimizationRepository:
                 greedy_objective=comparison.greedy_objective,
                 quantum_objective=comparison.quantum_objective,
                 known_optimum=comparison.known_optimum,
+                objective_gap=comparison.objective_gap,
+                exact_result_id=comparison.exact_result_id,
+                greedy_result_id=comparison.greedy_result_id,
+                quantum_experiment_id=comparison.quantum_experiment_id,
+                policy_id=comparison.policy_id,
+                policy_version=comparison.policy_version,
+                policy_checksum=comparison.policy_checksum,
                 rationale=comparison.rationale,
                 thresholds_json=comparison.thresholds.model_dump(mode="json"),
                 epistemic_status=comparison.epistemic_status.value,
@@ -327,16 +334,24 @@ class SqlAlchemyOptimizationRepository:
         )
         if row is None:
             return None
-        # Exact round-trip incl. thresholds, epistemic status, limitations (finding #12).
+        # Exact round-trip incl. associations, objective gap, policy metadata, thresholds,
+        # epistemic status, limitations (review findings #12/#17).
         return BenchmarkComparison(
             id=row.id,
             problem_checksum=row.problem_checksum,
+            exact_result_id=row.exact_result_id,
+            greedy_result_id=row.greedy_result_id,
+            quantum_experiment_id=row.quantum_experiment_id,
             conclusion=row.conclusion,  # type: ignore[arg-type]
             exact_objective=row.exact_objective,
             greedy_objective=row.greedy_objective,
             quantum_objective=row.quantum_objective,
             known_optimum=row.known_optimum,
+            objective_gap=row.objective_gap,
             thresholds=BenchmarkThresholds.model_validate(row.thresholds_json),
+            policy_id=row.policy_id,
+            policy_version=row.policy_version,
+            policy_checksum=row.policy_checksum,
             rationale=row.rationale,
             epistemic_status=row.epistemic_status,  # type: ignore[arg-type]
             limitations=row.limitations,
