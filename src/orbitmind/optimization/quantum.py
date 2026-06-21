@@ -117,6 +117,8 @@ def _build_evidence(
         penalty_source=pol.source,
         penalty_sufficient=pol.sufficient,
         penalty_satisfying_assignment_exists=pol.satisfying_encoded_assignment_exists,
+        penalty_proof_status=pol.proof_status.value,
+        penalty_proof_method=pol.method,
         seeds={
             "seed": config.seed,
             "seed_simulator": config.seed,
@@ -193,6 +195,29 @@ def run_quantum_experiment(
     if not quantum_available():
         return base.model_copy(
             update={"status": ExperimentStatus.UNSUPPORTED, "error": "Aer/Qiskit not installed"}
+        )
+
+    # Penalty proof gate (review finding #13): the QUBO must NOT be executed on Aer unless the
+    # penalty is proven sufficient (or no encoded constraints apply). Contradictory encoded
+    # constraints, an unsafe penalty, or an unproven (large custom) penalty stop here BEFORE
+    # any circuit is built or any sampler runs — the run is non-positive by policy.
+    from orbitmind.optimization.penalties import penalty_policy, proof_allows_execution
+
+    policy = penalty_policy(problem)
+    if not proof_allows_execution(policy.proof_status):
+        return base.model_copy(
+            update={
+                "status": ExperimentStatus.INCONCLUSIVE,
+                "error": (
+                    f"penalty proof status '{policy.proof_status.value}' is not executable; "
+                    "QUBO was not built or sampled on Aer"
+                ),
+                "limitations": (
+                    "The QUBO penalty was not proven sufficient (status "
+                    f"'{policy.proof_status.value}'). No circuit was built and no Aer sampling "
+                    "occurred; this run is non-positive by policy and is not competitive evidence."
+                ),
+            }
         )
 
     ctx = mp.get_context("spawn")

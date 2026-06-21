@@ -24,6 +24,7 @@ from orbitmind.optimization.evaluation import Evaluator
 from orbitmind.optimization.models import (
     BenchmarkRun,
     BenchmarkThresholds,
+    PenaltyProofStatus,
     QuantumExperiment,
     SchedulingProblem,
     SolverConfiguration,
@@ -121,9 +122,11 @@ def verify_benchmark(
     findings.append(
         _f(
             "opt.penalty_policy",
-            policy.sufficient and policy.satisfying_encoded_assignment_exists,
-            f"penalty P={policy.penalty} proven sufficient ({policy.method}); a satisfying "
-            "encoded assignment exists",
+            policy.proof_status
+            in (PenaltyProofStatus.PROVEN_SUFFICIENT, PenaltyProofStatus.NOT_APPLICABLE)
+            and policy.satisfying_encoded_assignment_exists,
+            f"penalty P={policy.penalty} proof status '{policy.proof_status.value}' "
+            f"({policy.method}); a satisfying encoded assignment exists",
             category=CheckCategory.MATHEMATICS,
             severity=Severity.CRITICAL,
             values=policy.model_dump(),

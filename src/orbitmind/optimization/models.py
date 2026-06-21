@@ -54,6 +54,17 @@ class ExperimentStatus(StrEnum):
     INCONCLUSIVE = "inconclusive"
 
 
+class PenaltyProofStatus(StrEnum):
+    """Explicit proof status for the QUBO penalty (review finding #11). 'not checked' is
+    NEVER treated as 'sufficient'."""
+
+    PROVEN_SUFFICIENT = "proven-sufficient"  # analytic (P>bound) or exhaustive proof
+    PROVEN_UNSAFE = "proven-unsafe"  # exhaustively shown a violation can tie/beat feasible
+    CONTRADICTORY = "contradictory"  # encoded hard constraints have no satisfying assignment
+    UNPROVEN = "unproven"  # cannot prove sufficiency cheaply (large custom penalty)
+    NOT_APPLICABLE = "not-applicable"  # no encoded constraints; penalty plays no role
+
+
 class ComparisonConclusion(StrEnum):
     CLASSICAL_EXACT_BEST = "classical-exact-best"
     CLASSICAL_GREEDY_BEST = "classical-greedy-best"
@@ -313,6 +324,8 @@ class QuantumEvidence(BaseModel):
     penalty_source: str
     penalty_sufficient: bool
     penalty_satisfying_assignment_exists: bool
+    penalty_proof_status: str = PenaltyProofStatus.PROVEN_SUFFICIENT.value
+    penalty_proof_method: str = ""
     post_verification_required: bool = True
     simulator_backend: str = "AerSimulator"
     seeds: dict[str, int] = Field(default_factory=dict)

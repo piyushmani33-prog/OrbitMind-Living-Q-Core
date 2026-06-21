@@ -14,7 +14,12 @@ from itertools import product
 
 from pydantic import BaseModel
 
-from orbitmind.optimization.models import SchedulingConflict, SchedulingProblem
+from orbitmind.core.errors import ValidationError
+from orbitmind.optimization.models import (
+    PenaltyProofStatus,
+    SchedulingConflict,
+    SchedulingProblem,
+)
 from orbitmind.optimization.problem import (
     generate_conflicts,
     resolved_penalty,
@@ -23,6 +28,11 @@ from orbitmind.optimization.problem import (
 )
 
 _EXHAUSTIVE_MAX_VARS = 16
+
+# Proof statuses under which the QUBO is safe to execute on Aer (review finding #13).
+_EXECUTABLE_PROOF = frozenset(
+    {PenaltyProofStatus.PROVEN_SUFFICIENT, PenaltyProofStatus.NOT_APPLICABLE}
+)
 
 
 class PenaltyPolicy(BaseModel):
@@ -34,7 +44,29 @@ class PenaltyPolicy(BaseModel):
     bound_formula: str
     satisfying_encoded_assignment_exists: bool
     sufficient: bool
-    method: str  # "exhaustive" | "analytical-bound"
+    method: str  # "exhaustive" | "analytical-bound" | "analytic-satisfiability"
+    proof_status: PenaltyProofStatus = PenaltyProofStatus.UNPROVEN
+
+
+def encoded_constraints_satisfiable(problem: SchedulingProblem) -> bool:
+    """Analytic satisfiability of the ENCODED hard constraints, for ALL sizes (finding #12).
+
+    The only encoded hard constraints are: (a) every mandatory variable selected, and (b) no
+    conflict pair both-selected. The candidate "select exactly the mandatory set" satisfies
+    (a) trivially and violates (b) iff a conflict edge joins two mandatory variables. Any
+    zero-violation assignment must select all mandatory, so such an edge makes the encoded
+    constraints contradictory regardless of the other variables. O(conflicts), no enumeration.
+    """
+    mandatory = set(problem.constraints.mandatory)
+    return not any(
+        c.opportunity_a in mandatory and c.opportunity_b in mandatory
+        for c in generate_conflicts(problem)
+    )
+
+
+def proof_allows_execution(status: PenaltyProofStatus) -> bool:
+    """The QUBO may run on Aer only under an executable proof status (finding #13)."""
+    return status in _EXECUTABLE_PROOF
 
 
 def _encoded_violation_count(
@@ -55,8 +87,16 @@ def _encoded_violation_count(
 
 
 def penalty_policy(problem: SchedulingProblem) -> PenaltyPolicy:
-    """Compute the penalty + prove (or bound) its sufficiency. Never raises for proof."""
-    penalty = resolved_penalty(problem)
+    """Compute the penalty + assign an explicit proof status. Never raises for proof.
+
+    Order of decisions (review findings #11/#12/#13):
+      1. No encoded constraints at all          -> NOT_APPLICABLE (penalty plays no role).
+      2. Encoded hard constraints unsatisfiable  -> CONTRADICTORY (never 'sufficient').
+      3. Penalty zero/negative/NaN/inf           -> PROVEN_UNSAFE.
+      4. Tiny instance (n<=16)                    -> exhaustive proof (PROVEN_SUFFICIENT/UNSAFE).
+      5. Larger instance, P > bound               -> PROVEN_SUFFICIENT (analytic bound proof).
+      6. Larger instance, P <= bound              -> UNPROVEN (cannot prove cheaply).
+    """
     bound = total_weighted_value_bound(problem)
     source = (
         "explicit" if problem.objective.penalty_coefficient is not None else "auto-weighted-bound"
@@ -67,9 +107,30 @@ def penalty_policy(problem: SchedulingProblem) -> PenaltyPolicy:
     conflicts = generate_conflicts(problem)
     mandatory = set(problem.constraints.mandatory)
 
-    if n <= _EXHAUSTIVE_MAX_VARS:
-        # Exhaustive proof: the global QUBO minimum must be achieved by an encoded-feasible
-        # assignment, with every encoded-infeasible assignment strictly higher in energy.
+    # Resolve the penalty defensively: an invalid explicit penalty is PROVEN_UNSAFE, not a raise.
+    try:
+        penalty = resolved_penalty(problem)
+        penalty_valid = math.isfinite(penalty) and penalty > 0.0
+    except ValidationError:
+        penalty = problem.objective.penalty_coefficient or float("nan")
+        penalty_valid = False
+
+    has_encoded = bool(conflicts) or bool(mandatory)
+    satisfiable = encoded_constraints_satisfiable(problem)
+
+    method = "analytic-satisfiability"
+    if not has_encoded:
+        status = PenaltyProofStatus.NOT_APPLICABLE
+        exists, sufficient = True, True
+    elif not satisfiable:
+        status = PenaltyProofStatus.CONTRADICTORY
+        exists, sufficient = False, False
+    elif not penalty_valid:
+        status = PenaltyProofStatus.PROVEN_UNSAFE
+        exists, sufficient = True, False
+    elif n <= _EXHAUSTIVE_MAX_VARS:
+        # Exhaustive proof: the global QUBO minimum must be an encoded-feasible assignment,
+        # strictly below every encoded-infeasible one.
         from orbitmind.optimization.qubo import build_qubo, qubo_energy
 
         qubo = build_qubo(problem)
@@ -86,10 +147,17 @@ def penalty_policy(problem: SchedulingProblem) -> PenaltyPolicy:
         sufficient = exists and (
             not math.isfinite(best_infeasible) or best_feasible < best_infeasible
         )
+        status = (
+            PenaltyProofStatus.PROVEN_SUFFICIENT if sufficient else PenaltyProofStatus.PROVEN_UNSAFE
+        )
         method = "exhaustive"
+    elif penalty > bound:
+        status = PenaltyProofStatus.PROVEN_SUFFICIENT  # analytic: P strictly exceeds the bound
+        exists, sufficient = True, True
+        method = "analytical-bound"
     else:
-        exists = True  # cannot prove cheaply; the analytical bound assumes satisfiability
-        sufficient = penalty > bound and math.isfinite(penalty) and penalty > 0.0
+        status = PenaltyProofStatus.UNPROVEN  # large custom penalty, no cheap proof
+        exists, sufficient = True, False
         method = "analytical-bound"
 
     return PenaltyPolicy(
@@ -100,6 +168,7 @@ def penalty_policy(problem: SchedulingProblem) -> PenaltyPolicy:
         satisfying_encoded_assignment_exists=exists,
         sufficient=sufficient,
         method=method,
+        proof_status=status,
     )
 
 
