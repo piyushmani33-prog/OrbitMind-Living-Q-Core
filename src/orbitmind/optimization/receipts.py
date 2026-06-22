@@ -127,6 +127,7 @@ class ReceiptPayload(BaseModel):
     circuit_metadata_digest: str | None
     software_version_digest: str | None
     artifact_manifest_digest: str | None
+    scientific_metadata_digest: str
     # None for a benchmark with no completed quantum worker (the parent NEVER fabricates one).
     worker_execution_nonce: str | None
     worker_output_digest: str
@@ -253,6 +254,36 @@ def sample_map_digest(run: BenchmarkRun) -> str | None:
         for s in q.samples
     )
     return sha256_canonical_json(rows)
+
+
+def scientific_metadata_digest(run: BenchmarkRun) -> str:
+    """Digest over every material scientific-metadata field (final acceptance, Critical 2):
+    solver/quantum/comparison limitations, comparison rationale, epistemic labels, solver/optimality
+    status, and the final conclusion. Binding this means ANY change — benign or overclaiming — to a
+    caveat or epistemic label after acceptance invalidates read authentication."""
+    solvers = sorted(
+        [
+            r.solver_kind.value,
+            r.limitations,
+            r.epistemic_status.value,
+            r.status.value,
+            r.optimality_status.value,
+        ]
+        for r in run.solver_results
+    )
+    q = run.quantum_experiment
+    quantum = (
+        [q.limitations, q.epistemic_status.value, q.status.value] if q is not None else None
+    )
+    c = run.comparison
+    comparison = (
+        [c.limitations, c.rationale, c.epistemic_status.value, c.conclusion.value]
+        if c is not None
+        else None
+    )
+    return sha256_canonical_json(
+        {"solvers": solvers, "quantum": quantum, "comparison": comparison}
+    )
 
 
 def selected_parameter_digest(run: BenchmarkRun) -> str | None:
@@ -412,6 +443,7 @@ def _build_payload(run: BenchmarkRun, signer: EvidenceReceiptSigner) -> ReceiptP
         circuit_metadata_digest=circuit_metadata_digest(run),
         software_version_digest=software_version_digest(run),
         artifact_manifest_digest=artifact_manifest_digest(run),
+        scientific_metadata_digest=scientific_metadata_digest(run),
         worker_execution_nonce=(q.execution_nonce if eligible and q is not None else None),
         worker_output_digest=worker_output_digest(run),
         issued_at=utcnow().isoformat(),
@@ -481,6 +513,7 @@ def verify_receipt(
             ("circuit-metadata", p.circuit_metadata_digest),
             ("software-version", p.software_version_digest),
             ("artifact-manifest", p.artifact_manifest_digest),
+            ("scientific-metadata", p.scientific_metadata_digest),
         ):
             if expected_value != _recompute_digest(run, name):
                 reasons.append(f"{name}-digest")
@@ -655,4 +688,6 @@ def _recompute_digest(run: BenchmarkRun, name: str) -> str | None:
         return software_version_digest(run)
     if name == "artifact-manifest":
         return artifact_manifest_digest(run)
+    if name == "scientific-metadata":
+        return scientific_metadata_digest(run)
     return None  # pragma: no cover
