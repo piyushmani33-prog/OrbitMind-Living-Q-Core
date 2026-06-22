@@ -250,6 +250,29 @@ class ArtifactListResponse(BaseModel):
     disclaimer: str = OPTIMIZATION_DISCLAIMER
 
 
+class EvidenceEdgeView(BaseModel):
+    """A memory-graph edge anchored on a benchmark, annotated with read-time integrity."""
+
+    edge_kind: str
+    direction: str
+    entity_kind: str
+    entity_id: str
+    integrity_failed: bool
+
+
+class BenchmarkEvidenceGraphResponse(BaseModel):
+    """Benchmark-scoped memory navigation (fourth review, finding #30). When the benchmark fails
+    read-time re-authentication, its edges are marked integrity_failed and ``valid_evidence`` is
+    False so they are NOT treated as valid scientific evidence (the original edges/audit history
+    are retained, not deleted)."""
+
+    benchmark_id: str
+    integrity_failed: bool
+    valid_evidence: bool
+    edges: list[EvidenceEdgeView]
+    disclaimer: str = OPTIMIZATION_DISCLAIMER
+
+
 __all__ = [
     "OPTIMIZATION_DISCLAIMER",
     "ArtifactListResponse",

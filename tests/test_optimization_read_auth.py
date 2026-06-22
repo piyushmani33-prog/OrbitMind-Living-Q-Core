@@ -127,6 +127,24 @@ def test_run_list_does_not_label_tampered_run_verified(container: AppContainer) 
     assert not row.authenticated and row.integrity_failed
 
 
+def test_evidence_graph_marks_tampered_benchmark_edges(client_container) -> None:
+    # finding #30: read-time memory navigation must mark a tampered benchmark's edges
+    # integrity-failed and not treat them as valid evidence (history retained).
+    client, container = client_container
+    problem = container.optimization_service.create_problem(fixtures.fixture("default"))
+    run, _ = container.optimization_service.benchmark(problem.id, seed=7, run_quantum=False)
+
+    clean = client.get(f"/api/v1/optimization/benchmarks/{run.id}/evidence-graph").json()
+    assert clean["valid_evidence"] and not clean["integrity_failed"]
+    assert clean["edges"] and all(not e["integrity_failed"] for e in clean["edges"])
+
+    _tamper_exact_objective(container, run.id)
+    tampered = client.get(f"/api/v1/optimization/benchmarks/{run.id}/evidence-graph").json()
+    assert tampered["integrity_failed"] and not tampered["valid_evidence"]
+    # The edges still exist (history not deleted) but are all flagged integrity-failed.
+    assert tampered["edges"] and all(e["integrity_failed"] for e in tampered["edges"])
+
+
 def test_artifacts_endpoint_withholds_tampered_evidence(client_container) -> None:
     client, container = client_container
     problem = container.optimization_service.create_problem(fixtures.fixture("default"))

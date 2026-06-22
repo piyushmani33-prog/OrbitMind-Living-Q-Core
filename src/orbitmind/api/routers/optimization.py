@@ -6,14 +6,16 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
 
-from orbitmind.api.deps import get_optimization_service
+from orbitmind.api.deps import get_memory_service, get_optimization_service
 from orbitmind.api.optimization_schemas import (
     ArtifactListResponse,
+    BenchmarkEvidenceGraphResponse,
     BenchmarkReadResponse,
     BenchmarkRequest,
     BenchmarkResponse,
     ClassicalSolveRequest,
     CreateProblemRequest,
+    EvidenceEdgeView,
     ProblemListResponse,
     QuantumExperimentResponse,
     QuantumSolveRequest,
@@ -29,6 +31,7 @@ from orbitmind.api.optimization_views import (
     SolverResultView,
 )
 from orbitmind.core.errors import NotFoundError, ValidationError
+from orbitmind.memory.service import MemoryService
 from orbitmind.optimization import fixtures
 from orbitmind.optimization.models import (
     QuantumExperiment,
@@ -59,6 +62,7 @@ def _summary(auth: AuthenticatedBenchmark) -> RunSummaryView:
 router = APIRouter(prefix="/api/v1/optimization", tags=["optimization"])
 
 ServiceDep = Annotated[OptimizationService, Depends(get_optimization_service)]
+MemoryDep = Annotated[MemoryService, Depends(get_memory_service)]
 
 
 @router.post("/problems", response_model=ProblemView)
@@ -166,6 +170,38 @@ def get_benchmark(benchmark_id: str, service: ServiceDep) -> BenchmarkReadRespon
     safe = view.model_copy(update={"conclusion": auth.safe_conclusion()})
     return BenchmarkReadResponse(
         run=safe, verified=auth.authenticated, integrity_failed=auth.integrity_failed
+    )
+
+
+@router.get(
+    "/benchmarks/{benchmark_id}/evidence-graph", response_model=BenchmarkEvidenceGraphResponse
+)
+def get_benchmark_evidence_graph(
+    benchmark_id: str, service: ServiceDep, memory: MemoryDep
+) -> BenchmarkEvidenceGraphResponse:
+    """Navigate the benchmark's memory edges, RE-AUTHENTICATING the benchmark first (fourth
+    review, finding #30). If re-auth fails, the edges are marked integrity_failed and not treated
+    as valid evidence; the integrity audit is written by the read and the edge/audit history is
+    retained (never deleted)."""
+    auth = service.read_benchmark_evidence(benchmark_id)
+    if not auth.found or auth.run is None or auth.run.problem_id is None:
+        raise NotFoundError("benchmark not found")
+    result = memory.graph_neighbors(auth.run.problem_id, depth=1, limit=200)
+    edges = [
+        EvidenceEdgeView(
+            edge_kind=n.edge_kind.value,
+            direction=n.direction,
+            entity_kind=n.entity.kind.value,
+            entity_id=n.entity.entity_id,
+            integrity_failed=auth.integrity_failed,
+        )
+        for n in result.neighbors
+    ]
+    return BenchmarkEvidenceGraphResponse(
+        benchmark_id=benchmark_id,
+        integrity_failed=auth.integrity_failed,
+        valid_evidence=auth.authenticated and not auth.integrity_failed,
+        edges=edges,
     )
 
 
