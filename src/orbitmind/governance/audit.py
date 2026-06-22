@@ -88,6 +88,7 @@ class AuditAction(StrEnum):
     OPTIMIZATION_ARTIFACT_GENERATED = "optimization.artifact_generated"
     BENCHMARK_MEMORY_REGISTERED = "optimization.benchmark_memory_registered"
     BENCHMARK_FAILED = "optimization.benchmark_failed"
+    BENCHMARK_INTEGRITY_FAILED = "optimization.benchmark_integrity_failed"
 
 
 class AuditEvent(BaseModel):

@@ -8,6 +8,8 @@ verified, and compared only.
 
 from __future__ import annotations
 
+from pydantic import BaseModel, ConfigDict
+
 from orbitmind.core.config import Settings
 from orbitmind.core.errors import NotFoundError, ValidationError
 from orbitmind.core.logging import get_logger
@@ -55,6 +57,26 @@ from orbitmind.verification.models import (
 )
 
 _log = get_logger("optimization.service")
+
+
+class AuthenticatedBenchmark(BaseModel):
+    """Result of read-time re-authentication of persisted benchmark evidence (Critical #2)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    found: bool
+    authenticated: bool = False
+    integrity_failed: bool = False
+    receipt_status: str = "none"
+    run: BenchmarkRun | None = None
+
+    def safe_conclusion(self) -> str | None:
+        """The conclusion to present publicly — non-positive unless re-authentication passed."""
+        if self.run is None or self.run.comparison is None:
+            return None
+        if not self.authenticated:
+            return ComparisonConclusion.INSUFFICIENT_EVIDENCE.value
+        return self.run.comparison.conclusion.value
 
 
 class OptimizationService:
@@ -472,10 +494,71 @@ class OptimizationService:
                     )
                 )
 
-    # ---- reads -------------------------------------------------------------
+    # ---- reads (re-authenticated; fourth review, Critical #2) ---------------
+    def _authenticate(
+        self,
+        problem: SchedulingProblem,
+        run: BenchmarkRun,
+        receipt: BenchmarkExecutionReceipt | None,
+    ) -> tuple[bool, str, list[VerificationFinding]]:
+        """Re-run semantic + receipt verification over a reconstructed benchmark. Pure (no I/O
+        beyond re-solving). Returns (authenticated, receipt_status, findings)."""
+        artifacts_root = self._settings.resolved_artifacts_dir() if run.artifacts else None
+        findings = verify_benchmark(problem, run, artifacts_root=artifacts_root)
+        semantic_ok = benchmark_verified_for_evidence(findings)
+        if receipt is None:
+            return False, "none", findings
+        receipt_ok = verify_receipt(receipt, run=run, signers=self._receipt_signers).ok
+        status = "signed" if receipt_ok else "integrity-failed"
+        return (semantic_ok and receipt_ok), status, findings
+
+    def read_benchmark_evidence(self, benchmark_id: str) -> AuthenticatedBenchmark:
+        """Load + REAUTHENTICATE persisted benchmark evidence (never trust verification_passed
+        alone). On a tamper (stored-accepted but re-auth fails) write an integrity audit."""
+        with self._db.session() as session:
+            repo = SqlAlchemyOptimizationRepository(session)
+            problem, run, receipt = repo.reconstruct_benchmark(benchmark_id)
+            stored = repo.get_benchmark(benchmark_id)
+            stored_accepted = bool(stored and stored.verification_passed)
+        if problem is None or run is None:
+            return AuthenticatedBenchmark(found=False)
+        authenticated, receipt_status, _findings = self._authenticate(problem, run, receipt)
+        integrity_failed = stored_accepted and not authenticated
+        if integrity_failed:
+            self._record_integrity_audit(benchmark_id=benchmark_id, problem=problem)
+        return AuthenticatedBenchmark(
+            found=True,
+            authenticated=authenticated,
+            integrity_failed=integrity_failed,
+            receipt_status=("integrity-failed" if integrity_failed else receipt_status),
+            run=run,
+        )
+
+    def _record_integrity_audit(self, *, benchmark_id: str, problem: SchedulingProblem) -> None:
+        detail = {
+            "operation": "benchmark_read",
+            "benchmark_attempt_id": benchmark_id,
+            "problem_id": problem.id,
+            "problem_checksum": problem.checksum,
+            "error_code": "evidence_integrity_failed",
+        }
+        try:
+            with self._db.session() as session:
+                SqlAlchemyMissionRepository(session).add_audit_event(
+                    AuditEvent(action=AuditAction.BENCHMARK_INTEGRITY_FAILED, detail=detail)
+                )
+                session.commit()
+        except Exception:  # pragma: no cover - final fallback when the DB itself is unavailable
+            _log.error("optimization.benchmark.integrity_failed", **detail)
+
     def get_run(self, run_id: str) -> SolverResult | QuantumExperiment | None:
         with self._db.session() as session:
             return SqlAlchemyOptimizationRepository(session).get_solver_run(run_id)
+
+    def list_run_summaries(self, limit: int, offset: int) -> list[AuthenticatedBenchmark]:
+        with self._db.session() as session:
+            ids = SqlAlchemyOptimizationRepository(session).list_benchmark_ids(limit, offset)
+        return [self.read_benchmark_evidence(bid) for bid in ids]
 
     def list_runs(self, limit: int, offset: int) -> list[dict[str, object]]:
         with self._db.session() as session:

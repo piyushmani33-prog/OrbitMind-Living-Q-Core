@@ -340,6 +340,80 @@ class SqlAlchemyOptimizationRepository:
     def get_benchmark(self, benchmark_id: str) -> BenchmarkRunRow | None:
         return self._s.get(BenchmarkRunRow, benchmark_id)
 
+    def list_benchmark_ids(self, limit: int, offset: int) -> list[str]:
+        rows = (
+            self._s.execute(
+                select(BenchmarkRunRow.id)
+                .order_by(BenchmarkRunRow.created_at.desc())
+                .limit(limit)
+                .offset(offset)
+            )
+            .scalars()
+            .all()
+        )
+        return list(rows)
+
+    def reconstruct_benchmark(
+        self, benchmark_id: str
+    ) -> tuple[SchedulingProblem | None, BenchmarkRun | None, BenchmarkExecutionReceipt | None]:
+        """Rebuild the full domain benchmark + receipt from persistence for read-time
+        re-authentication (fourth review, Critical #2). Returns (problem, run, receipt)."""
+        row = self._s.get(BenchmarkRunRow, benchmark_id)
+        if row is None or row.problem_id is None:
+            return None, None, None
+        problem = self.get_problem(row.problem_id)
+        if problem is None:
+            return None, None, None
+        solver_rows = (
+            self._s.execute(select(SolverRunRow).where(SolverRunRow.benchmark_id == benchmark_id))
+            .scalars()
+            .all()
+        )
+        solver_results = [SolverResult.model_validate(r.result_json) for r in solver_rows]
+        qrow = (
+            self._s.execute(
+                select(QuantumExperimentRow).where(
+                    QuantumExperimentRow.benchmark_id == benchmark_id
+                )
+            )
+            .scalars()
+            .first()
+        )
+        quantum = QuantumExperiment.model_validate(qrow.experiment_json) if qrow else None
+        comparison = self.get_comparison(benchmark_id)
+        artifacts = [
+            {
+                "type": a.artifact_type,
+                "path": a.path,
+                "sidecar_path": a.sidecar_path,
+                "checksum": a.checksum,
+            }
+            for a in self.get_artifacts(benchmark_id)
+        ]
+        run = BenchmarkRun(
+            id=row.id,
+            problem_id=row.problem_id,
+            problem_checksum=row.problem_checksum,
+            policy_snapshot=row.policy_snapshot_json,
+            solver_results=solver_results,
+            quantum_experiment=quantum,
+            comparison=comparison,
+            artifacts=artifacts,
+        )
+        receipt_row = self.get_receipt(benchmark_id)
+        receipt = (
+            BenchmarkExecutionReceipt.model_validate(
+                {
+                    "payload": receipt_row.payload_json,
+                    "payload_checksum": receipt_row.payload_checksum,
+                    "signature": receipt_row.signature,
+                }
+            )
+            if receipt_row is not None
+            else None
+        )
+        return problem, run, receipt
+
     # ---- execution receipts (third review, High #1) ------------------------
     def save_receipt(self, receipt: BenchmarkExecutionReceipt) -> None:
         p = receipt.payload

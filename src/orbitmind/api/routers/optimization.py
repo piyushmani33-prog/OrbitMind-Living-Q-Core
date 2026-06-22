@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, Query
 from orbitmind.api.deps import get_optimization_service
 from orbitmind.api.optimization_schemas import (
     ArtifactListResponse,
+    BenchmarkReadResponse,
     BenchmarkRequest,
     BenchmarkResponse,
     ClassicalSolveRequest,
@@ -24,6 +25,7 @@ from orbitmind.api.optimization_views import (
     BenchmarkView,
     ProblemView,
     QuantumExperimentView,
+    RunSummaryView,
     SolverResultView,
 )
 from orbitmind.core.errors import NotFoundError, ValidationError
@@ -34,8 +36,25 @@ from orbitmind.optimization.models import (
     SolverKind,
     SolverResult,
 )
-from orbitmind.optimization.service import OptimizationService
+from orbitmind.optimization.service import AuthenticatedBenchmark, OptimizationService
 from orbitmind.optimization.verification import benchmark_verified_for_evidence
+
+
+def _summary(auth: AuthenticatedBenchmark) -> RunSummaryView:
+    run = auth.run
+    assert run is not None
+    return RunSummaryView(
+        id=run.id,
+        problem_checksum=run.problem_checksum,
+        verified=auth.authenticated,
+        integrity_failed=auth.integrity_failed,
+        conclusion=auth.safe_conclusion(),
+        created_at=run.created_at.isoformat(),
+        has_quantum=run.quantum_experiment is not None,
+        receipt_status=auth.receipt_status,
+        artifact_count=len(run.artifacts),
+    )
+
 
 router = APIRouter(prefix="/api/v1/optimization", tags=["optimization"])
 
@@ -132,20 +151,29 @@ def list_runs(
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> RunListResponse:
-    return RunListResponse(items=service.list_runs(limit, offset))
+    # Benchmark-level summaries; each is RE-AUTHENTICATED before being labelled verified.
+    return RunListResponse(items=[_summary(a) for a in service.list_run_summaries(limit, offset)])
 
 
-@router.get("/runs/{run_id}", response_model=SolverResultView | QuantumExperimentView)
-def get_run(run_id: str, service: ServiceDep) -> SolverResultView | QuantumExperimentView:
-    run = service.get_run(run_id)
-    if run is None:
-        raise NotFoundError("solver run not found")
-    if isinstance(run, SolverResult):
-        return SolverResultView.from_domain(run)
-    return QuantumExperimentView.from_domain(run)
+@router.get("/benchmarks/{benchmark_id}", response_model=BenchmarkReadResponse)
+def get_benchmark(benchmark_id: str, service: ServiceDep) -> BenchmarkReadResponse:
+    """Read persisted benchmark evidence with full re-authentication (Critical #2)."""
+    auth = service.read_benchmark_evidence(benchmark_id)
+    if not auth.found or auth.run is None:
+        raise NotFoundError("benchmark not found")
+    view = BenchmarkView.from_domain(auth.run, verified=auth.authenticated)
+    # Never present a positive conclusion for evidence that failed re-authentication.
+    safe = view.model_copy(update={"conclusion": auth.safe_conclusion()})
+    return BenchmarkReadResponse(
+        run=safe, verified=auth.authenticated, integrity_failed=auth.integrity_failed
+    )
 
 
 @router.get("/runs/{run_id}/artifacts", response_model=ArtifactListResponse)
 def get_run_artifacts(run_id: str, service: ServiceDep) -> ArtifactListResponse:
+    # The scope id is the benchmark id; re-authenticate before serving artifact metadata.
+    auth = service.read_benchmark_evidence(run_id)
+    if auth.found and auth.integrity_failed:
+        raise ValidationError("benchmark evidence failed re-authentication; artifacts withheld")
     artifacts = [ArtifactView(**a) for a in service.get_artifacts(run_id)]
     return ArtifactListResponse(scope_id=run_id, artifacts=artifacts)

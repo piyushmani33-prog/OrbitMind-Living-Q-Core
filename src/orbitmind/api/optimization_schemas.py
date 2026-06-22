@@ -20,6 +20,7 @@ from orbitmind.api.optimization_views import (
     BenchmarkView,
     ProblemView,
     QuantumExperimentView,
+    RunSummaryView,
     SolverResultView,
 )
 from orbitmind.optimization.models import (
@@ -233,7 +234,14 @@ class BenchmarkResponse(BaseModel):
 
 
 class RunListResponse(BaseModel):
-    items: list[dict[str, object]]
+    items: list[RunSummaryView]
+
+
+class BenchmarkReadResponse(BaseModel):
+    run: BenchmarkView
+    verified: bool
+    integrity_failed: bool
+    disclaimer: str = OPTIMIZATION_DISCLAIMER
 
 
 class ArtifactListResponse(BaseModel):

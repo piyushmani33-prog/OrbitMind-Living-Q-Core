@@ -223,6 +223,20 @@ class ArtifactView(_View):
         )
 
 
+class RunSummaryView(_View):
+    """Strict, reviewed run-list row (fourth review, Low #2). No paths / config / ORM dicts."""
+
+    id: str
+    problem_checksum: str
+    verified: bool
+    integrity_failed: bool
+    conclusion: str | None
+    created_at: str | None
+    has_quantum: bool
+    receipt_status: str  # "signed" | "none" | "integrity-failed"
+    artifact_count: int
+
+
 class BenchmarkView(_View):
     id: str
     problem_checksum: str

@@ -83,9 +83,25 @@ def test_benchmark_generates_verified_artifacts(client: TestClient) -> None:
 
 def test_runs_listing(client: TestClient) -> None:
     pid = _create(client)
-    client.post(f"/api/v1/optimization/problems/{pid}/solve/classical", json={"solver": "exact"})
+    resp = client.post(
+        f"/api/v1/optimization/problems/{pid}/benchmark", json={"run_quantum": False}
+    )
+    bid = resp.json()["run"]["id"]
     runs = client.get("/api/v1/optimization/runs").json()
-    assert any(r["kind"] == "exact" for r in runs["items"])
+    row = next(r for r in runs["items"] if r["id"] == bid)
+    # Run-list rows are a strict benchmark summary (no kind/path/config), re-authenticated.
+    assert set(row) == {
+        "id",
+        "problem_checksum",
+        "verified",
+        "integrity_failed",
+        "conclusion",
+        "created_at",
+        "has_quantum",
+        "receipt_status",
+        "artifact_count",
+    }
+    assert row["verified"] is True and row["integrity_failed"] is False
 
 
 def test_quantum_unsupported_when_aer_absent(
