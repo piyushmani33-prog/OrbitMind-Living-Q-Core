@@ -45,7 +45,11 @@ def _resign(payload: ReceiptPayload) -> BenchmarkExecutionReceipt:
         ("comparison_algorithm_version", "99", "comparison-algorithm"),
         ("issued_at", "", "issued-at-empty"),
         ("issued_at", "not-a-timestamp", "issued-at-malformed"),
+        ("issued_at", "2026-06-22T12:00:00", "issued-at-naive"),  # no timezone
+        ("issued_at", "2026-06-22T12:00:00+05:00", "issued-at-not-utc"),  # non-UTC offset
+        ("issued_at", "2099-01-01T00:00:00+00:00", "issued-at-future"),  # far future
         ("receipt_id", "short", "receipt-id-format"),
+        ("receipt_id", "not-a-uuid-but-long-enough-string", "receipt-id-format"),  # non-UUID
     ],
 )
 def test_strict_schema_rejects_bad_signed_fields(field: str, value: str, reason: str) -> None:
@@ -54,6 +58,18 @@ def test_strict_schema_rejects_bad_signed_fields(field: str, value: str, reason:
     forged = _resign(base.model_copy(update={field: value}))
     result = verify_receipt(forged, run=run, signers=_SIGNERS)
     assert not result.ok and reason in result.reasons
+
+
+def test_receipt_payload_rejects_unknown_fields() -> None:
+    # extra="forbid": a persisted payload with an unknown key fails strict validation (Medium #1).
+    from pydantic import ValidationError as PydValidationError
+
+    from orbitmind.optimization.receipts import ReceiptPayload
+
+    base = build_receipt(_run(), signer=_SIGNER).payload.model_dump(mode="json")
+    base["smuggled_field"] = "x"
+    with pytest.raises(PydValidationError):
+        ReceiptPayload.model_validate(base)
 
 
 def test_changed_exact_config_invalidates_receipt() -> None:

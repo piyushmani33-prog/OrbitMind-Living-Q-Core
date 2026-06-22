@@ -30,7 +30,11 @@ from orbitmind.api.optimization_views import (
     RunSummaryView,
     SolverResultView,
 )
-from orbitmind.core.errors import NotFoundError, ValidationError
+from orbitmind.core.errors import (
+    EvidenceNotAuthenticatedError,
+    NotFoundError,
+    ValidationError,
+)
 from orbitmind.memory.service import MemoryService
 from orbitmind.optimization import fixtures
 from orbitmind.optimization.models import (
@@ -232,7 +236,15 @@ def get_benchmark_evidence_graph(
 def get_run_artifacts(run_id: str, service: ServiceDep) -> ArtifactListResponse:
     # The scope id is the benchmark id; re-authenticate before serving artifact metadata.
     auth = service.read_benchmark_evidence(run_id)
-    if auth.found and auth.integrity_failed:
+    if not auth.found:
+        raise NotFoundError("benchmark not found")
+    if auth.integrity_failed:
+        # Tampered / malformed persisted evidence: bounded integrity error (422).
         raise ValidationError("benchmark evidence failed re-authentication; artifacts withheld")
+    if not auth.authenticated:
+        # Unaccepted / no-signer / failed-receipt: diagnostic only, NOT public evidence (409).
+        raise EvidenceNotAuthenticatedError(
+            "benchmark evidence is not authenticated; artifacts are diagnostic only"
+        )
     artifacts = [ArtifactView(**a) for a in service.get_artifacts(run_id)]
     return ArtifactListResponse(scope_id=run_id, artifacts=artifacts)

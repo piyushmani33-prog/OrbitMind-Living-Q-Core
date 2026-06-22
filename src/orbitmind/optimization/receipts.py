@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+from datetime import timedelta
 from typing import Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict
@@ -42,6 +43,10 @@ SUPPORTED_COMPARISON_ALGORITHM_VERSIONS = frozenset({"1.0"})
 # Worker nonce: secrets.token_hex(16) => 16 bytes / 128 bits of entropy => 32 hex chars.
 MIN_NONCE_HEX_LEN = 32
 _SHA256_HEX_LEN = 64
+# issued_at acceptance window: a small forward clock-skew tolerance; a generous backward bound
+# (receipts are persisted long-lived) that still rejects nonsensical pre-2000 / far-future dates.
+_ISSUED_AT_FUTURE_SKEW = timedelta(minutes=5)
+_ISSUED_AT_MAX_AGE = timedelta(days=3650)
 
 
 def _is_valid_worker_nonce(nonce: object) -> bool:
@@ -95,9 +100,11 @@ class HmacSha256EvidenceReceiptSigner:
 
 
 class ReceiptPayload(BaseModel):
-    """The canonical, signed receipt payload. Frozen; serialized deterministically."""
+    """The canonical, signed receipt payload. Frozen; serialized deterministically. Unknown
+    fields are rejected so a persisted payload with extra keys fails closed (fifth review,
+    Medium #1)."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     receipt_format_version: str
     receipt_id: str
@@ -129,7 +136,7 @@ class ReceiptPayload(BaseModel):
 
 
 class BenchmarkExecutionReceipt(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     payload: ReceiptPayload
     payload_checksum: str
@@ -162,7 +169,10 @@ def _is_sha256_hex(value: object) -> bool:
 
 def _strict_schema_reasons(receipt: BenchmarkExecutionReceipt) -> list[str]:
     """Validate the SEMANTICS of the signed fields, failing closed on unknown/malformed values."""
+    import uuid
     from datetime import datetime
+
+    from orbitmind.core.timeutils import utcnow
 
     p = receipt.payload
     reasons: list[str] = []
@@ -172,19 +182,31 @@ def _strict_schema_reasons(receipt: BenchmarkExecutionReceipt) -> list[str]:
         reasons.append("signature-algorithm")
     if p.comparison_algorithm_version not in SUPPORTED_COMPARISON_ALGORITHM_VERSIONS:
         reasons.append("comparison-algorithm")
-    if not isinstance(p.receipt_id, str) or len(p.receipt_id) < 16:
+    # The receipt id must be a real UUID (fifth review, Medium #1).
+    try:
+        uuid.UUID(str(p.receipt_id))
+    except (ValueError, AttributeError, TypeError):
         reasons.append("receipt-id-format")
     if not _is_sha256_hex(receipt.signature):
         reasons.append("signature-encoding")
     if not _is_sha256_hex(receipt.payload_checksum):
         reasons.append("payload-checksum-encoding")
+    # issued_at must be a non-empty, timezone-aware UTC timestamp inside a bounded acceptance
+    # window (reject naive/non-UTC/empty/far-future timestamps; fifth review, Medium #1).
     if not isinstance(p.issued_at, str) or not p.issued_at:
         reasons.append("issued-at-empty")
     else:
         try:
             ts = datetime.fromisoformat(p.issued_at)
-            if not (2000 <= ts.year <= 2100):
-                reasons.append("issued-at-bounds")
+            now = utcnow()
+            if ts.tzinfo is None:
+                reasons.append("issued-at-naive")
+            elif ts.utcoffset() != timedelta(0):
+                reasons.append("issued-at-not-utc")
+            elif ts > now + _ISSUED_AT_FUTURE_SKEW:
+                reasons.append("issued-at-future")
+            elif ts < now - _ISSUED_AT_MAX_AGE:
+                reasons.append("issued-at-too-old")
         except ValueError:
             reasons.append("issued-at-malformed")
     if not p.signer_key_id:
