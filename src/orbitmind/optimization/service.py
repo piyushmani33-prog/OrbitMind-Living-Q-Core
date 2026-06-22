@@ -253,34 +253,60 @@ class OptimizationService:
             run_quantum=run_quantum,
         )
         artifacts_root = self._settings.resolved_artifacts_dir()
-        findings = verify_benchmark(problem, run)
-        if generate_artifacts:
-            artifacts = self._viz.generate(problem, run, findings, seed=seed)
-            run = run.model_copy(update={"artifacts": artifacts})
-            # Re-verify INCLUDING the artifact files + sidecars on disk.
-            findings = verify_benchmark(problem, run, artifacts_root=artifacts_root)
+        stage = "verification"
+        try:
+            findings = verify_benchmark(problem, run)
+            if generate_artifacts:
+                stage = "artifact-generation"
+                artifacts = self._viz.generate(problem, run, findings, seed=seed)
+                run = run.model_copy(update={"artifacts": artifacts})
+                stage = "artifact-verification"
+                findings = verify_benchmark(problem, run, artifacts_root=artifacts_root)
 
-        # Evidence-origin authentication (third review, High #1): build + verify a signed
-        # execution receipt. Modelled as a verification finding so it joins the release gate —
-        # no signer (provenance unavailable) or a failed receipt makes the benchmark UNACCEPTED.
-        receipt, receipt_finding = self._authorize_evidence(run, findings)
-        findings = [*findings, receipt_finding]
-        verified = benchmark_verified_for_evidence(findings)
-        # A benchmark that fails any material verification can never present a positive
-        # conclusion (review findings #2/#19): downgrade to non-positive before persistence.
-        if not verified and run.comparison is not None:
-            run = run.model_copy(
-                update={
-                    "comparison": run.comparison.model_copy(
-                        update={
-                            "conclusion": ComparisonConclusion.INSUFFICIENT_EVIDENCE,
-                            "rationale": "verification failed; conclusion downgraded: "
-                            + run.comparison.rationale,
-                        }
-                    )
-                }
-            )
+            # Evidence-origin authentication (third review, High #1): a signed execution receipt,
+            # modelled as a verification finding so it joins the release gate (no signer or a
+            # failed receipt leaves the benchmark UNACCEPTED).
+            receipt, receipt_finding = self._authorize_evidence(run, findings)
+            findings = [*findings, receipt_finding]
+            verified = benchmark_verified_for_evidence(findings)
+            if not verified and run.comparison is not None:
+                run = run.model_copy(
+                    update={
+                        "comparison": run.comparison.model_copy(
+                            update={
+                                "conclusion": ComparisonConclusion.INSUFFICIENT_EVIDENCE,
+                                "rationale": "verification failed; conclusion downgraded: "
+                                + run.comparison.rationale,
+                            }
+                        )
+                    }
+                )
 
+            stage = "persistence"
+            self._persist_benchmark(run, problem, findings, verified, receipt)
+        except Exception as exc:
+            # Idempotent cleanup of any staged/promoted artifacts + a durable failure audit in a
+            # SEPARATE transaction (the main one rolled back) — review Medium #3.
+            if generate_artifacts:
+                self._viz.cleanup(run.id)
+            self._record_failure_audit(stage=stage, benchmark_id=run.id, problem=problem, exc=exc)
+            raise
+
+        _log.info(
+            "optimization.benchmark",
+            conclusion=run.comparison.conclusion.value if run.comparison else "unknown",
+            verified=verified,
+        )
+        return run, findings
+
+    def _persist_benchmark(
+        self,
+        run: BenchmarkRun,
+        problem: SchedulingProblem,
+        findings: list[VerificationFinding],
+        verified: bool,
+        receipt: BenchmarkExecutionReceipt | None,
+    ) -> None:
         with self._db.session() as session:
             audit = SqlAlchemyMissionRepository(session)
             repo = SqlAlchemyOptimizationRepository(session)
@@ -326,12 +352,29 @@ class OptimizationService:
                 )
             )
             session.commit()
-        _log.info(
-            "optimization.benchmark",
-            conclusion=run.comparison.conclusion.value if run.comparison else "unknown",
-            verified=verified,
-        )
-        return run, findings
+
+    def _record_failure_audit(
+        self, *, stage: str, benchmark_id: str, problem: SchedulingProblem, exc: Exception
+    ) -> None:
+        """Persist a bounded failure audit in its own short transaction; log-only if the DB is
+        unavailable. Contains NO secrets, signing key, or raw environment values (Medium #3)."""
+        detail = {
+            "operation": "benchmark",
+            "benchmark_attempt_id": benchmark_id,
+            "problem_id": problem.id,
+            "problem_checksum": problem.checksum,
+            "stage": stage,
+            "exception_class": type(exc).__name__,
+            "error_code": "benchmark_failed",
+        }
+        try:
+            with self._db.session() as session:
+                SqlAlchemyMissionRepository(session).add_audit_event(
+                    AuditEvent(action=AuditAction.BENCHMARK_FAILED, detail=detail)
+                )
+                session.commit()
+        except Exception:  # pragma: no cover - final fallback when the DB itself is unavailable
+            _log.error("optimization.benchmark.failure", **detail)
 
     def _authorize_evidence(
         self, run: BenchmarkRun, findings: list[VerificationFinding]

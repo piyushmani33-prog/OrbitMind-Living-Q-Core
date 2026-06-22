@@ -916,9 +916,7 @@ def _verify_artifacts(
     out: list[VerificationFinding] = []
     snap_checksum = str((run.policy_snapshot or {}).get("checksum", ""))
     qexp = run.quantum_experiment
-    manifest = (
-        build_evidence_manifest(problem, qexp.configuration) if qexp is not None else None
-    )
+    manifest = build_evidence_manifest(problem, qexp.configuration) if qexp is not None else None
     for art in run.artifacts:
         rel = art.get("path", "")
         # Derive the EXPECTED sidecar path from the artifact record + convention; never trust a

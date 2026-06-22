@@ -6,8 +6,10 @@ performance; it is documentation of the experiment that was run on a simulator.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import platform
+import shutil
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -34,12 +36,35 @@ class OptimizationVisualizationService:
     def __init__(self, artifacts_root: Path) -> None:
         self._root = artifacts_root
 
-    def _scope_dir(self, scope_id: str) -> Path:
+    def _final_dir(self, scope_id: str) -> Path:
         if not is_valid_uuid(scope_id):
             raise ValueError("scope id is not a valid identifier")
-        target = ensure_within(self._root, self._root / scope_id)
-        target.mkdir(parents=True, exist_ok=True)
-        return target
+        return ensure_within(self._root, self._root / scope_id)
+
+    def _staging_dir(self, scope_id: str) -> Path:
+        if not is_valid_uuid(scope_id):
+            raise ValueError("scope id is not a valid identifier")
+        staging = ensure_within(self._root, self._root / ".staging" / scope_id)
+        if staging.exists():
+            shutil.rmtree(staging, ignore_errors=True)
+        staging.mkdir(parents=True, exist_ok=True)
+        return staging
+
+    def cleanup(self, scope_id: str) -> None:
+        """Idempotently remove a scope's staging + final artifact directories (Medium #3)."""
+        if not is_valid_uuid(scope_id):
+            return
+        for d in (self._root / ".staging" / scope_id, self._root / scope_id):
+            with contextlib.suppress(Exception):
+                shutil.rmtree(d, ignore_errors=True)
+
+    def _promote(self, scope_id: str, staging: Path) -> None:
+        """Atomically move the staged scope directory into its final location (Medium #3)."""
+        final = self._final_dir(scope_id)
+        if final.exists():
+            shutil.rmtree(final, ignore_errors=True)
+        final.parent.mkdir(parents=True, exist_ok=True)
+        staging.replace(final)
 
     def _software(self, run: BenchmarkRun) -> dict[str, str]:
         out = {
@@ -59,7 +84,9 @@ class OptimizationVisualizationService:
         *,
         seed: int,
     ) -> list[dict[str, str]]:
-        scope = self._scope_dir(run.id)
+        # Generate into a staging directory, then atomically promote on success (Medium #3); the
+        # service removes staging/final on any later failure so no orphan artifacts remain.
+        scope = self._staging_dir(run.id)
         software = self._software(run)
         verification = {
             "checks": len(findings),
@@ -99,11 +126,12 @@ class OptimizationVisualizationService:
                 # checksum, post-verification requirement, seeds, versions (review #16/#17).
                 body["quantum_evidence"] = evidence_json
             sidecar.write_text(json.dumps(body, indent=2), encoding="utf-8")
+            # Record FINAL-location relative paths (the scope dir name), not the staging path.
             artifacts.append(
                 {
                     "type": art_type,
-                    "path": str(path.relative_to(self._root)),
-                    "sidecar_path": str(sidecar.relative_to(self._root)),
+                    "path": str(Path(run.id) / name),
+                    "sidecar_path": str(Path(run.id) / (name + ".json")),
                     "checksum": checksum,
                 }
             )
@@ -128,6 +156,7 @@ class OptimizationVisualizationService:
             encoding="utf-8",
         )
         emit("benchmark_summary.json", "benchmark_summary_json", "all")
+        self._promote(run.id, scope)  # atomic staging -> final on success
         return artifacts
 
     # -- individual charts --------------------------------------------------
