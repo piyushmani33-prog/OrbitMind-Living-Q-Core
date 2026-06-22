@@ -27,10 +27,42 @@ from pydantic import BaseModel, ConfigDict
 from orbitmind.core.checksums import sha256_canonical_json
 from orbitmind.core.ids import new_id
 from orbitmind.core.timeutils import utcnow
-from orbitmind.optimization.models import BenchmarkRun, SolverKind
+from orbitmind.optimization.models import (
+    BenchmarkRun,
+    ExperimentStatus,
+    QuantumExperiment,
+    SolverKind,
+)
 
 RECEIPT_FORMAT_VERSION = "1.0"
 COMPARISON_ALGORITHM_VERSION = "1.0"
+# Worker nonce: secrets.token_hex(16) => 16 bytes / 128 bits of entropy => 32 hex chars.
+MIN_NONCE_HEX_LEN = 32
+
+
+def _is_valid_worker_nonce(nonce: object) -> bool:
+    """A worker nonce must be a lowercase-hex string of >= MIN_NONCE_HEX_LEN chars (128-bit)."""
+    if not isinstance(nonce, str) or len(nonce) < MIN_NONCE_HEX_LEN:
+        return False
+    try:
+        bytes.fromhex(nonce)
+    except ValueError:
+        return False
+    return nonce == nonce.lower()
+
+
+def quantum_execution_receipt_eligible(experiment: QuantumExperiment | None) -> bool:
+    """A quantum execution receipt may be created ONLY for a genuinely completed worker run
+    (fourth review, Critical #1): status is exactly COMPLETED, the worker returned its own
+    valid cryptographic nonce, circuit metadata exists, and samples were produced. The trusted
+    parent NEVER invents a missing nonce."""
+    return (
+        experiment is not None
+        and experiment.status == ExperimentStatus.COMPLETED
+        and _is_valid_worker_nonce(experiment.execution_nonce)
+        and experiment.circuit_metadata is not None
+        and bool(experiment.samples)
+    )
 
 
 @runtime_checkable
@@ -84,7 +116,8 @@ class ReceiptPayload(BaseModel):
     circuit_metadata_digest: str | None
     software_version_digest: str | None
     artifact_manifest_digest: str | None
-    worker_execution_nonce: str
+    # None for a benchmark with no completed quantum worker (the parent NEVER fabricates one).
+    worker_execution_nonce: str | None
     worker_output_digest: str
     issued_at: str
     signer_key_id: str
@@ -196,6 +229,11 @@ def _build_payload(run: BenchmarkRun, signer: EvidenceReceiptSigner) -> ReceiptP
     snap = run.policy_snapshot or {}
     c = run.comparison
     q = run.quantum_experiment
+    # A receipt is only ever built for a completed-quantum (eligible) or classical-only run; the
+    # service gates this. The worker nonce is copied EXACTLY from the worker — never invented.
+    eligible = quantum_execution_receipt_eligible(q)
+    if q is not None and not eligible:
+        raise ValueError("cannot build a receipt for a non-completed quantum experiment")
     return ReceiptPayload(
         receipt_format_version=RECEIPT_FORMAT_VERSION,
         receipt_id=new_id(),
@@ -224,7 +262,7 @@ def _build_payload(run: BenchmarkRun, signer: EvidenceReceiptSigner) -> ReceiptP
         circuit_metadata_digest=circuit_metadata_digest(run),
         software_version_digest=software_version_digest(run),
         artifact_manifest_digest=artifact_manifest_digest(run),
-        worker_execution_nonce=(q.execution_nonce if q and q.execution_nonce else new_id()),
+        worker_execution_nonce=(q.execution_nonce if eligible and q is not None else None),
         worker_output_digest=worker_output_digest(run),
         issued_at=utcnow().isoformat(),
         signer_key_id=signer.key_id,
@@ -292,8 +330,20 @@ def verify_receipt(
         ):
             if expected_value != _recompute_digest(run, name):
                 reasons.append(f"{name}-digest")
-        if not isinstance(p.worker_execution_nonce, str) or not p.worker_execution_nonce:
-            reasons.append("worker-nonce")
+        # Worker-nonce binding (fourth review, Critical #1/#4). A receipt that claims a quantum
+        # experiment must carry the worker's EXACT valid nonce; a classical-only receipt must
+        # carry no nonce. A non-completed quantum experiment is never receipt-eligible.
+        q = run.quantum_experiment
+        if quantum_execution_receipt_eligible(q):
+            assert q is not None
+            if not _is_valid_worker_nonce(p.worker_execution_nonce):
+                reasons.append("worker-nonce")
+            elif p.worker_execution_nonce != q.execution_nonce:
+                reasons.append("worker-nonce-mismatch")
+        elif q is not None:
+            reasons.append("quantum-not-eligible")  # quantum present but not a completed run
+        elif p.worker_execution_nonce is not None:
+            reasons.append("worker-nonce-unexpected")  # classical-only must have no worker nonce
         if p.worker_output_digest != worker_output_digest(run):
             reasons.append("worker-output-digest")
         if seen_receipt_ids is not None and p.receipt_id in seen_receipt_ids:

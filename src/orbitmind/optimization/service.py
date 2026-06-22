@@ -38,6 +38,7 @@ from orbitmind.optimization.receipts import (
     BenchmarkExecutionReceipt,
     EvidenceReceiptSigner,
     build_receipt,
+    quantum_execution_receipt_eligible,
     verify_receipt,
 )
 from orbitmind.optimization.solvers import solve_exact, solve_greedy
@@ -398,6 +399,15 @@ class OptimizationService:
         # already non-positive and must not be signed as accepted evidence.
         if not benchmark_verified_for_evidence(findings):
             return None, finding(False, "benchmark failed semantic verification; not signed")
+        # A quantum experiment that is not a completed worker run can NEVER receive a trusted
+        # receipt (fourth review, Critical #1): no fabricated nonce, no acceptance.
+        q = run.quantum_experiment
+        if q is not None and not quantum_execution_receipt_eligible(q):
+            return None, finding(
+                False,
+                f"quantum experiment status '{q.status.value}' is not a completed worker run; "
+                "no execution receipt is issued",
+            )
         if self._receipt_signer is None:
             return None, finding(
                 False, "execution provenance unavailable: no evidence signer configured"

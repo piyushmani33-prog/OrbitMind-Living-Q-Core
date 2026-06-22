@@ -100,12 +100,23 @@ def test_quantum_unsupported_when_aer_absent(
         problem.id, seed=1, shots=512, optimizer_iterations=8, qaoa_layers=1, timeout_seconds=5.0
     )
     assert experiment.status.value == "unsupported"
-    # Benchmark still runs the classical baselines and concludes without quantum.
-    run, _findings = container.optimization_service.benchmark(problem.id, seed=1)
+    # A requested quantum run that cannot execute is a non-completed worker run (fourth review,
+    # Critical #1): no receipt, the benchmark is unaccepted, and the conclusion is non-positive.
+    # The classical baselines are still preserved honestly as diagnostics.
+    run, findings = container.optimization_service.benchmark(problem.id, seed=1)
     assert (
         run.quantum_experiment is not None and run.quantum_experiment.status.value == "unsupported"
     )
-    assert run.comparison.conclusion.value == "classical-exact-best"
+    assert run.comparison.conclusion.value == "insufficient-evidence"
+    assert len(run.solver_results) == 2  # exact + greedy preserved
+    receipt_finding = next(f for f in findings if f.check_id == "opt.execution_receipt")
+    assert not receipt_finding.passed
+    from orbitmind.persistence.optimization_repository import SqlAlchemyOptimizationRepository
+
+    session = container.database.session()
+    accepted = SqlAlchemyOptimizationRepository(session).get_benchmark(run.id)
+    session.close()
+    assert accepted is not None and accepted.verification_passed is False
 
 
 def test_benchmark_registers_bounded_memory_links(container: AppContainer) -> None:
