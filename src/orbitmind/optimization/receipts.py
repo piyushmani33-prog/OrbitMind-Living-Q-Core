@@ -353,6 +353,69 @@ def verify_receipt(
     return EvidenceReceiptVerification(ok=not reasons, reasons=tuple(sorted(set(reasons))))
 
 
+# ---- sidecar receipt linkage + detached offline authentication (fourth review, High #1) ----
+RECEIPT_ENVELOPE_KEY = "execution_receipt"
+
+
+def embed_receipt(meta: dict[str, Any], receipt: BenchmarkExecutionReceipt) -> dict[str, Any]:
+    """Embed the completed signed receipt into a sidecar/summary dict (two-layer model: the
+    receipt signs the benchmark evidence; the sidecar then carries the receipt). Public metadata
+    only — never the signing secret."""
+    return {
+        **meta,
+        RECEIPT_ENVELOPE_KEY: {
+            "receipt_id": receipt.payload.receipt_id,
+            "receipt_format_version": receipt.payload.receipt_format_version,
+            "payload_checksum": receipt.payload_checksum,
+            "signer_key_id": receipt.payload.signer_key_id,
+            "signature_algorithm": receipt.payload.signature_algorithm,
+            "signature": receipt.signature,
+            "payload": receipt.payload.model_dump(mode="json"),
+        },
+    }
+
+
+def authenticate_sidecar_offline(
+    meta: dict[str, Any], signers: dict[str, EvidenceReceiptSigner]
+) -> tuple[bool, str]:
+    """Authenticate a sidecar WITHOUT database access (fourth review, High #1): verify the
+    embedded receipt's HMAC and that the sidecar's declared material fields are bound by the
+    signed receipt payload."""
+    env = meta.get(RECEIPT_ENVELOPE_KEY)
+    if not isinstance(env, dict):
+        return False, "no-receipt-envelope"
+    try:
+        receipt = BenchmarkExecutionReceipt.model_validate(
+            {
+                "payload": env["payload"],
+                "payload_checksum": env["payload_checksum"],
+                "signature": env["signature"],
+            }
+        )
+    except Exception:
+        return False, "malformed-receipt"
+    p = receipt.payload
+    signer = signers.get(p.signer_key_id)
+    if signer is None:
+        return False, "unknown-key-id"
+    if _payload_checksum(p) != receipt.payload_checksum:
+        return False, "payload-checksum"
+    if not hmac.compare_digest(signer.sign(_payload_bytes(p)), receipt.signature):
+        return False, "signature"
+    # The sidecar's own declared fields must be bound by the signed receipt payload.
+    if (
+        meta.get("benchmark_id") != p.benchmark_id
+        or meta.get("problem_id") != p.problem_id
+        or meta.get("problem_checksum") != p.problem_checksum
+        or meta.get("policy_snapshot_checksum") != p.policy_checksum
+    ):
+        return False, "sidecar-binding"
+    ev = meta.get("quantum_evidence")
+    if isinstance(ev, dict) and ev.get("manifest_checksum") != p.evidence_manifest_checksum:
+        return False, "evidence-binding"
+    return True, "authentic"
+
+
 def _recompute_digest(run: BenchmarkRun, name: str) -> str | None:
     q = run.quantum_experiment
     if name == "evidence-manifest":

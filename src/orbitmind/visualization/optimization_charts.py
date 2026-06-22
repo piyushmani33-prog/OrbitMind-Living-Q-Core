@@ -50,6 +50,21 @@ class OptimizationVisualizationService:
         staging.mkdir(parents=True, exist_ok=True)
         return staging
 
+    def embed_receipt_into_sidecars(self, artifacts: list[dict[str, str]], receipt: object) -> None:
+        """Embed the signed execution receipt into every promoted sidecar for offline
+        authentication (fourth review, High #1). Receipt bytes are EXCLUDED from the digests the
+        receipt itself signs, so this does not invalidate the receipt."""
+        from orbitmind.optimization.receipts import BenchmarkExecutionReceipt, embed_receipt
+
+        assert isinstance(receipt, BenchmarkExecutionReceipt)
+        for art in artifacts:
+            sidecar = ensure_within(self._root, self._root / art["sidecar_path"])
+            if sidecar.is_file():
+                meta = json.loads(sidecar.read_text("utf-8"))
+                sidecar.write_text(
+                    json.dumps(embed_receipt(meta, receipt), indent=2), encoding="utf-8"
+                )
+
     def cleanup(self, scope_id: str) -> None:
         """Idempotently remove a scope's staging + final artifact directories (Medium #3)."""
         if not is_valid_uuid(scope_id):

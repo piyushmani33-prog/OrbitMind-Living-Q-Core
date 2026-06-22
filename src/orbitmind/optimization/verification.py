@@ -955,23 +955,28 @@ def _verify_artifacts(
             try:
                 raw = sidecar_target.read_text("utf-8")
                 meta = json.loads(raw)
-                # Ownership + policy anchor authenticated against the trusted run (review #16):
-                # if the sidecar declares these fields they must equal the trusted values.
-                ownership_ok = (
-                    meta.get("benchmark_id", run.id) == run.id
-                    and meta.get("problem_id", run.problem_id) == run.problem_id
-                    and meta.get("policy_snapshot_checksum", snap_checksum) == snap_checksum
-                )
-                meta_ok = (
-                    meta.get("checksum") == actual
-                    and meta.get("problem_checksum") == problem_checksum_value
-                    and meta.get("artifact_type") == art.get("type")
-                    and str(meta.get("epistemic_status")) in _BOUNDED_EPISTEMIC
+                # Every material field must be PRESENT and EQUAL to the trusted value — never a
+                # get(default-to-trusted) that turns a missing field into trusted evidence
+                # (fourth review, High #1). A missing field is a verification failure.
+                snap = run.policy_snapshot or {}
+                algo_version = str(snap.get("comparison_algorithm_version", ""))
+                required_equal = {
+                    "benchmark_id": run.id,
+                    "problem_id": run.problem_id,
+                    "problem_checksum": problem_checksum_value,
+                    "policy_snapshot_checksum": snap_checksum,
+                    "comparison_algorithm_version": algo_version,
+                    "artifact_type": art.get("type"),
+                    "checksum": actual,
+                }
+                fields_ok = all(k in meta and meta[k] == v for k, v in required_equal.items())
+                bounded_ok = (
+                    str(meta.get("epistemic_status")) in _BOUNDED_EPISTEMIC
                     and bool(str(meta.get("limitations", "")).strip())
                     and "software_versions" in meta
                     and "seed" in meta
-                    and ownership_ok
                 )
+                meta_ok = fields_ok and bounded_ok
                 # A quantum sidecar's evidence block is authenticated against the rebuilt manifest
                 # (not merely required to exist).
                 claim = meta.get("quantum_evidence")
