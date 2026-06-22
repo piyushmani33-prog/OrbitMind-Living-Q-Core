@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -65,6 +65,31 @@ class EvidenceLoadResult:
     @property
     def is_ok(self) -> bool:
         return self.integrity_status == INTEGRITY_OK
+
+
+class PersistedBenchmarkThresholds(BaseModel):
+    """STRICT persistence-only DTO for stored comparison thresholds (final acceptance, High #2).
+
+    No defaults: a persisted ``{}`` / partial JSON, an extra field, a non-finite value, or an
+    out-of-range value is malformed evidence — NOT an excuse to synthesize trusted defaults. This
+    is used ONLY when reading historical persisted evidence; new server policies still create
+    thresholds with their own defaults.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    competitive_relative_gap: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
+    min_feasible_sample_ratio: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
+
+
+def _persisted_thresholds(raw: Any) -> BenchmarkThresholds:
+    """Validate stored thresholds with the strict DTO, then map to the domain model. Raises on
+    malformed evidence (caught by load_evidence and classified as malformed-persisted-evidence)."""
+    strict = PersistedBenchmarkThresholds.model_validate(raw)
+    return BenchmarkThresholds(
+        competitive_relative_gap=strict.competitive_relative_gap,
+        min_feasible_sample_ratio=strict.min_feasible_sample_ratio,
+    )
 
 
 def _sample_key(s: Any) -> tuple[str, int, float, bool, float, float, float, int]:
@@ -589,7 +614,7 @@ class SqlAlchemyOptimizationRepository:
             quantum_objective=row.quantum_objective,
             known_optimum=row.known_optimum,
             objective_gap=row.objective_gap,
-            thresholds=BenchmarkThresholds.model_validate(row.thresholds_json),
+            thresholds=_persisted_thresholds(row.thresholds_json),
             policy_id=row.policy_id,
             policy_version=row.policy_version,
             policy_checksum=row.policy_checksum,
