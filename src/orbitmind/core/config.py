@@ -102,6 +102,15 @@ class Settings(BaseSettings):
     # Controlled cache directory for raw source payloads (metadata lives in the DB).
     cache_dir: Path = PROJECT_ROOT / "cache"
 
+    # Evidence-receipt signing (third review, High #1). The secret is supplied OUTSIDE the
+    # database (env only) and is NEVER persisted/logged/returned. When unset, quantum evidence
+    # runs diagnostically but is never ACCEPTED (execution provenance unavailable). The
+    # active key id signs new receipts; retired keys can stay verifiable for historical receipts.
+    evidence_signing_key: str = ""
+    evidence_signing_key_id: str = "primary"
+    # Optional retired keys for historical verification: "keyid:secret,keyid2:secret2".
+    evidence_signing_retired_keys: str = ""
+
     def resolved_ingestion_roots(self) -> tuple[Path, ...]:
         """Absolute, resolved allowlisted ingestion roots."""
         return tuple(self._resolve(Path(r)) for r in self.memory_ingestion_roots)

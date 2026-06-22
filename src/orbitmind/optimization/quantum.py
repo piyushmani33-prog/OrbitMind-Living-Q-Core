@@ -14,6 +14,7 @@ from __future__ import annotations
 import contextlib
 import multiprocessing as mp
 import os
+import secrets
 import time
 from queue import Empty
 from typing import Any
@@ -103,6 +104,9 @@ def _quantum_worker(
             known_optimum,
             tuple(optimum_selection) if optimum_selection else None,
         )
+        # The isolated worker stamps a cryptographically random execution nonce that the trusted
+        # parent binds into the signed receipt (third review, High #1).
+        result = result.model_copy(update={"execution_nonce": secrets.token_hex(16)})
         queue.put(result.model_dump(mode="json"))
     except Exception as exc:  # pragma: no cover - surfaced to the parent as FAILED
         queue.put({"__error__": f"{type(exc).__name__}: {exc}"})

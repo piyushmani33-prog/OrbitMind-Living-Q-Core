@@ -217,3 +217,21 @@ class OptimizationArtifactRow(Base):
     sidecar_path: Mapped[str] = mapped_column(Text)
     checksum: Mapped[str] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(UTCDateTime)
+
+
+class BenchmarkExecutionReceiptRow(Base):
+    """Signed evidence-origin receipt (third review, High #1). Stores ONLY public receipt
+    metadata — never the signing secret."""
+
+    __tablename__ = "benchmark_execution_receipts"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)  # receipt_id
+    benchmark_id: Mapped[str] = mapped_column(
+        ForeignKey("benchmark_runs.id"), index=True, unique=True
+    )
+    signer_key_id: Mapped[str] = mapped_column(String(64), index=True)
+    signature_algorithm: Mapped[str] = mapped_column(String(32))
+    payload_checksum: Mapped[str] = mapped_column(String(64))
+    signature: Mapped[str] = mapped_column(String(128))
+    payload_json: Mapped[dict[str, Any]] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, index=True)

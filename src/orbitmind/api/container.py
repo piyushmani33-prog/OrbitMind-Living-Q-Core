@@ -6,6 +6,7 @@ dependency wiring so routers depend on interfaces, not construction details.
 
 from __future__ import annotations
 
+import secrets
 import time
 from collections.abc import Callable
 
@@ -14,6 +15,10 @@ import httpx
 from orbitmind.core.config import Settings, get_settings
 from orbitmind.memory.service import MemoryService
 from orbitmind.observability.service import ObservabilityService
+from orbitmind.optimization.receipts import (
+    EvidenceReceiptSigner,
+    HmacSha256EvidenceReceiptSigner,
+)
 from orbitmind.optimization.service import OptimizationService
 from orbitmind.orchestration.orchestrator import PrimeOrchestrator
 from orbitmind.orchestration.source_resolver import SourceResolver
@@ -37,6 +42,35 @@ from orbitmind.space.propagation import PropagationService
 from orbitmind.verification.checks import VerificationService
 from orbitmind.visualization.charts import VisualizationService
 from orbitmind.visualization.smallbody_charts import SmallBodyVisualizationService
+
+
+def _build_evidence_signers(
+    settings: Settings,
+) -> tuple[EvidenceReceiptSigner | None, dict[str, EvidenceReceiptSigner]]:
+    """Build the active receipt signer + the verification keyring (incl. retired keys).
+
+    The secret comes ONLY from configuration/env (never the DB). When no key is configured the
+    active signer is None UNLESS this is a test environment, where an ephemeral process-local key
+    is used so the receipt path is exercised end-to-end. In non-test environments without a key,
+    quantum evidence runs diagnostically but is never accepted (provenance unavailable).
+    """
+    signers: dict[str, EvidenceReceiptSigner] = {}
+    for entry in settings.evidence_signing_retired_keys.split(","):
+        if ":" in entry:
+            kid, _, sec = entry.partition(":")
+            kid, sec = kid.strip(), sec.strip()
+            if kid and sec:
+                signers[kid] = HmacSha256EvidenceReceiptSigner(sec.encode("utf-8"), kid)
+    active: EvidenceReceiptSigner | None = None
+    if settings.evidence_signing_key:
+        active = HmacSha256EvidenceReceiptSigner(
+            settings.evidence_signing_key.encode("utf-8"), settings.evidence_signing_key_id
+        )
+    elif settings.env == "test":
+        active = HmacSha256EvidenceReceiptSigner(secrets.token_bytes(32), "ephemeral-test")
+    if active is not None:
+        signers[active.key_id] = active
+    return active, signers
 
 
 class AppContainer:
@@ -117,8 +151,12 @@ class AppContainer:
         self.memory_service = MemoryService(settings=self.settings, database=self.database)
 
         # --- Phase 4A: bounded quantum optimization service ---
+        signer, signers = _build_evidence_signers(self.settings)
         self.optimization_service = OptimizationService(
-            settings=self.settings, database=self.database
+            settings=self.settings,
+            database=self.database,
+            receipt_signer=signer,
+            receipt_signers=signers,
         )
 
     def init_storage(self) -> None:

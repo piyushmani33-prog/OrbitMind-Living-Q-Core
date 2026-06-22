@@ -34,21 +34,46 @@ from orbitmind.optimization.models import (
 from orbitmind.optimization.policy import DEFAULT_POLICY_ID, get_policy
 from orbitmind.optimization.problem import normalize_problem
 from orbitmind.optimization.quantum import run_quantum_experiment
+from orbitmind.optimization.receipts import (
+    BenchmarkExecutionReceipt,
+    EvidenceReceiptSigner,
+    build_receipt,
+    verify_receipt,
+)
 from orbitmind.optimization.solvers import solve_exact, solve_greedy
 from orbitmind.optimization.verification import benchmark_verified_for_evidence, verify_benchmark
 from orbitmind.persistence.database import Database
 from orbitmind.persistence.optimization_repository import SqlAlchemyOptimizationRepository
 from orbitmind.persistence.repositories import SqlAlchemyMissionRepository
 from orbitmind.quantum.adapter import quantum_available
-from orbitmind.verification.models import VerificationFinding
+from orbitmind.verification.models import (
+    CheckCategory,
+    FindingStatus,
+    Severity,
+    VerificationFinding,
+)
 
 _log = get_logger("optimization.service")
 
 
 class OptimizationService:
-    def __init__(self, *, settings: Settings, database: Database) -> None:
+    def __init__(
+        self,
+        *,
+        settings: Settings,
+        database: Database,
+        receipt_signer: EvidenceReceiptSigner | None = None,
+        receipt_signers: dict[str, EvidenceReceiptSigner] | None = None,
+    ) -> None:
         self._settings = settings
         self._db = database
+        # Evidence-receipt signing (third review, High #1). ``receipt_signer`` signs new receipts
+        # (None => provenance unavailable, evidence stays unaccepted); ``receipt_signers`` maps
+        # key id -> signer for verification (incl. retired keys for historical receipts).
+        self._receipt_signer = receipt_signer
+        self._receipt_signers: dict[str, EvidenceReceiptSigner] = receipt_signers or (
+            {receipt_signer.key_id: receipt_signer} if receipt_signer is not None else {}
+        )
         from orbitmind.visualization.optimization_charts import OptimizationVisualizationService
 
         self._viz = OptimizationVisualizationService(settings.resolved_artifacts_dir())
@@ -234,6 +259,12 @@ class OptimizationService:
             run = run.model_copy(update={"artifacts": artifacts})
             # Re-verify INCLUDING the artifact files + sidecars on disk.
             findings = verify_benchmark(problem, run, artifacts_root=artifacts_root)
+
+        # Evidence-origin authentication (third review, High #1): build + verify a signed
+        # execution receipt. Modelled as a verification finding so it joins the release gate —
+        # no signer (provenance unavailable) or a failed receipt makes the benchmark UNACCEPTED.
+        receipt, receipt_finding = self._authorize_evidence(run, findings)
+        findings = [*findings, receipt_finding]
         verified = benchmark_verified_for_evidence(findings)
         # A benchmark that fails any material verification can never present a positive
         # conclusion (review findings #2/#19): downgrade to non-positive before persistence.
@@ -260,6 +291,8 @@ class OptimizationService:
                 )
             )
             repo.save_benchmark(run, problem_id=problem.id, verification_passed=verified)
+            if verified and receipt is not None:
+                repo.save_receipt(receipt)
             audit.add_audit_event(
                 AuditEvent(
                     action=AuditAction.OPTIMIZATION_VERIFIED
@@ -299,6 +332,38 @@ class OptimizationService:
             verified=verified,
         )
         return run, findings
+
+    def _authorize_evidence(
+        self, run: BenchmarkRun, findings: list[VerificationFinding]
+    ) -> tuple[BenchmarkExecutionReceipt | None, VerificationFinding]:
+        """Build + verify a signed execution receipt and express it as a release finding.
+
+        When no signer is configured the evidence runs diagnostically but is never accepted
+        (execution provenance unavailable); a failed receipt likewise blocks acceptance.
+        """
+
+        def finding(passed: bool, explanation: str) -> VerificationFinding:
+            return VerificationFinding(
+                check_id="opt.execution_receipt",
+                severity=Severity.INFO if passed else Severity.CRITICAL,
+                status=FindingStatus.PASSED if passed else FindingStatus.FAILED,
+                explanation=explanation,
+                category=CheckCategory.PROVENANCE,
+            )
+
+        # Only build a receipt over an otherwise-clean benchmark; a semantically invalid run is
+        # already non-positive and must not be signed as accepted evidence.
+        if not benchmark_verified_for_evidence(findings):
+            return None, finding(False, "benchmark failed semantic verification; not signed")
+        if self._receipt_signer is None:
+            return None, finding(
+                False, "execution provenance unavailable: no evidence signer configured"
+            )
+        receipt = build_receipt(run, signer=self._receipt_signer)
+        result = verify_receipt(receipt, run=run, signers=self._receipt_signers)
+        if not result.ok:
+            return None, finding(False, f"execution receipt invalid: {', '.join(result.reasons)}")
+        return receipt, finding(True, "execution receipt signed + verified by the trusted runtime")
 
     def _register_memory_links(
         self, memory: SqlAlchemyMemoryRepository, problem: SchedulingProblem, run: BenchmarkRun

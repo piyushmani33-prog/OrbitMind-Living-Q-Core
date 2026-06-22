@@ -18,8 +18,10 @@ from orbitmind.optimization.models import (
     SchedulingProblem,
     SolverResult,
 )
+from orbitmind.optimization.receipts import BenchmarkExecutionReceipt
 from orbitmind.persistence.optimization_models import (
     BenchmarkComparisonRow,
+    BenchmarkExecutionReceiptRow,
     BenchmarkRunRow,
     ObservationOpportunityRow,
     OptimizationArtifactRow,
@@ -337,6 +339,33 @@ class SqlAlchemyOptimizationRepository:
 
     def get_benchmark(self, benchmark_id: str) -> BenchmarkRunRow | None:
         return self._s.get(BenchmarkRunRow, benchmark_id)
+
+    # ---- execution receipts (third review, High #1) ------------------------
+    def save_receipt(self, receipt: BenchmarkExecutionReceipt) -> None:
+        p = receipt.payload
+        self._s.add(
+            BenchmarkExecutionReceiptRow(
+                id=p.receipt_id,
+                benchmark_id=p.benchmark_id,
+                signer_key_id=p.signer_key_id,
+                signature_algorithm=p.signature_algorithm,
+                payload_checksum=receipt.payload_checksum,
+                signature=receipt.signature,
+                payload_json=p.model_dump(mode="json"),
+                created_at=utcnow(),
+            )
+        )
+
+    def get_receipt(self, benchmark_id: str) -> BenchmarkExecutionReceiptRow | None:
+        return (
+            self._s.execute(
+                select(BenchmarkExecutionReceiptRow).where(
+                    BenchmarkExecutionReceiptRow.benchmark_id == benchmark_id
+                )
+            )
+            .scalars()
+            .first()
+        )
 
     def get_comparison(self, benchmark_id: str) -> BenchmarkComparison | None:
         row = (
