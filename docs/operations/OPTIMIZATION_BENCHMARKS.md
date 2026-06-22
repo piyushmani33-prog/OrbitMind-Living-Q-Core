@@ -28,9 +28,17 @@ worker's 128-bit execution nonce for quantum runs.
   `ORBITMIND_EVIDENCE_SIGNING_RETIRED_KEYS` (`kid1:secret1,kid2:secret2` for verify-only
   rotation). Secrets are `SecretStr` — they never appear in `repr`, `model_dump`, logs, errors,
   audits, or any API response.
-- **Key strength**: a configured key must be **≥ 32 bytes** and not a known placeholder
-  (`changeme`, `placeholder`, …); active + retired key ids and material must be distinct.
-  Generate one with `python -c "import secrets;print(secrets.token_urlsafe(48))"`.
+- **Key strength + startup validation**: a configured key must be **≥ 32 bytes** and not a known
+  placeholder (`changeme`, `placeholder`, …); active + retired key ids and material must be
+  distinct. Malformed signing configuration (a retired entry without `id:secret`, a blank id or
+  secret, a duplicate id/material, an active id repeated in retired, a weak/placeholder retired
+  key) **fails startup** — entries are never silently skipped. Generate a key with
+  `python -c "import secrets;print(secrets.token_urlsafe(48))"`.
+- **Strict receipt schema**: receipt + payload models reject unknown fields (`extra="forbid"`);
+  the receipt id must be a real UUID, and `issued_at` must be a non-empty, timezone-aware **UTC**
+  timestamp inside a bounded acceptance window (naive/non-UTC/empty/far-future are rejected). The
+  format version, signature algorithm, comparison version, and lowercase-hex signature/checksum
+  are allowlisted.
 - **No-signer mode**: when the key is **empty**, benchmarks run **diagnostically but are never
   ACCEPTED** (execution provenance unavailable). There is **no implicit test-environment
   signer** — tests inject a key explicitly. `.env.example` ships a **blank** key.
@@ -43,6 +51,12 @@ worker's 128-bit execution nonce for quantum runs.
 - **Timeout/failure prohibition**: a quantum experiment that is not a **completed** worker run
   (timed-out/failed/cancelled/unsupported/inconclusive) receives **no receipt**, is **not
   accepted**, yields an `insufficient-evidence` conclusion, and registers **no** memory edges.
+- **Malformed auxiliary evidence**: the pure conclusion policy validates every supplied numerical
+  auxiliary up front; a present-but-non-finite value (NaN/inf known optimum, objective gap, etc.)
+  forces `insufficient-evidence` rather than slipping into a positive branch.
+- **Cleanup observability**: artifact cleanup returns an explicit, secret-free `CleanupResult`;
+  a real deletion failure is logged + audited and the **original** benchmark error is re-raised
+  unmasked (no `suppress`, no `ignore_errors`).
 
 ## Read-time verification (do not trust the stored flag)
 Every read **re-authenticates**: it reconstructs the domain benchmark from persistence and
@@ -52,13 +66,39 @@ never trusted on its own.
 - `GET /runs` returns strict, re-authenticated `RunSummaryView`s (no paths/config).
 - `GET /benchmarks/<id>` returns the authenticated benchmark; a tampered row is served with
   `integrity_failed:true` and a non-positive conclusion (never a positive serve).
-- `GET /runs/<id>/artifacts` **withholds** artifacts (bounded `422`) when re-auth fails.
-- `GET /benchmarks/<id>/evidence-graph` re-authenticates, then navigates the benchmark's memory
-  edges; if re-auth fails every edge is flagged `integrity_failed` and `valid_evidence:false`
-  (the edges + audit history are retained, not deleted).
+- `GET /runs/<id>/artifacts` returns artifacts only for **authenticated** evidence: a tampered/
+  malformed benchmark is withheld with a bounded `422`, and an **unauthenticated** one
+  (no signer / unaccepted / failed receipt) returns `409 evidence_not_authenticated` — diagnostic
+  artifacts are never served as ordinary evidence.
+- `GET /benchmarks/<id>/evidence-graph` re-authenticates, then navigates **only that benchmark's
+  own** memory edges (selected by `benchmark_id` ownership, so one benchmark's tamper cannot
+  affect another's edges); if re-auth fails every edge is flagged `integrity_failed` and
+  `valid_evidence:false` (the edges + audit history are retained, not deleted).
 
-On a tamper an `optimization.benchmark_integrity_failed` audit is written in its own
-transaction; the original audit history is preserved.
+### Canonical persisted evidence
+Read-time reconstruction loads the authoritative parent evidence AND verifies the persisted
+`quantum_sample_results` child rows for **complete equality** against it — a tampered child copy
+fails closed as `sample-row-mismatch`. **Malformed** persisted JSON (solver/quantum/comparison/
+receipt/policy) is classified as `malformed-persisted-evidence` and returns a bounded integrity
+response, **never an uncaught exception / HTTP 500**. Every evidence text field
+(solver/quantum/comparison limitations + comparison rationale) is re-scanned for overclaims, so
+an affirmative claim injected after acceptance invalidates read authentication. On any integrity
+failure an `optimization.benchmark_integrity_failed` audit is written in its own transaction; the
+original (malformed/tampered) data + audit history are preserved for forensic review.
+
+### Offline sidecar authentication
+Each artifact sidecar embeds its **canonical artifact entry** + the **complete canonical
+manifest** + the signed receipt envelope. Offline authentication (no DB) verifies the receipt
+HMAC, proves the entry is a **member** of the signed manifest, recomputes the manifest digest and
+compares it to the receipt payload, binds the entry's ownership ids, and (given the artifact file
+checksum) confirms it matches — a valid receipt with the wrong manifest entry is rejected.
+
+### PostgreSQL ownership + solver-role enforcement
+PostgreSQL rejects, with transaction recovery: a greedy result in the exact slot (or vice versa),
+a tampered comparison role column, a cross-benchmark association repoint, a child row anchored to
+another problem, and reassigning a benchmark to a different problem — via role-aware composite
+FKs (`benchmark_id, id, problem_id, solver_kind`), CHECK-pinned role columns, and
+`(benchmark_id, problem_id)` ownership FKs to the parent benchmark.
 
 ## Historical policy verification
 The benchmark carries an immutable, **self-validating** policy snapshot. Verification
