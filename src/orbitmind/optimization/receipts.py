@@ -233,11 +233,23 @@ def _config_checksum(result_config: dict[str, Any] | None) -> str | None:
 
 
 def sample_map_digest(run: BenchmarkRun) -> str | None:
+    """Digest over the COMPLETE ordered collection of canonical sample records (final acceptance,
+    Critical 1): every persisted sample field is bound, so a coordinated parent+child mutation of
+    a finite raw mission value or violation count invalidates the receipt."""
     q = run.quantum_experiment
     if q is None or not q.samples:
         return None
     rows = sorted(
-        [s.bitstring, s.count, s.probability, s.feasible, s.objective_value, s.qubo_energy]
+        [
+            s.bitstring,
+            s.count,
+            s.probability,
+            s.feasible,
+            s.raw_mission_value,
+            s.objective_value,
+            s.qubo_energy,
+            s.violations_count,
+        ]
         for s in q.samples
     )
     return sha256_canonical_json(rows)
@@ -320,9 +332,17 @@ def artifact_manifest_digest(run: BenchmarkRun) -> str | None:
     return _manifest_digest(canonical_artifact_manifest(run))
 
 
+def _sample_identity(s: Any | None) -> list[Any] | None:
+    if s is None:
+        return None
+    return [s.bitstring, s.count, s.probability, s.feasible, s.raw_mission_value, s.objective_value]
+
+
 def worker_output_digest(run: BenchmarkRun) -> str:
-    """Canonical digest binding the raw worker output. For a quantum run it covers the samples,
-    circuit metadata, evidence manifest, and status; otherwise the classical schedules."""
+    """Canonical digest binding the raw worker output. For a quantum run it covers the full sample
+    map, circuit metadata, evidence manifest, status, AND the derived selected feasible/infeasible
+    samples, feasible-sample ratio, exact-optimum-in-samples, and objective gap (final acceptance,
+    Critical 1); otherwise the classical schedules."""
     q = run.quantum_experiment
     if q is not None:
         return sha256_canonical_json(
@@ -332,6 +352,12 @@ def worker_output_digest(run: BenchmarkRun) -> str:
                 "manifest": q.evidence.manifest_checksum if q.evidence else None,
                 "status": q.status.value,
                 "total_shots": q.total_shots,
+                "best_feasible_sample": _sample_identity(q.best_feasible_sample),
+                "best_infeasible_sample": _sample_identity(q.best_infeasible_sample),
+                "feasible_sample_ratio": q.feasible_sample_ratio,
+                "exact_optimum_in_samples": q.exact_optimum_in_samples,
+                "objective_gap": q.objective_gap,
+                "distinct_samples": q.distinct_samples,
             }
         )
     return sha256_canonical_json(

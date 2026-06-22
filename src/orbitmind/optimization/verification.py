@@ -416,10 +416,16 @@ def _verify_quantum(
         if len(s.bitstring) != n or any(c not in "01" for c in s.bitstring):
             sample_ok = False
             continue
+        # INDEPENDENT recomputation from the canonical problem + bitstring (final acceptance,
+        # Critical 1): every scientific scalar is re-derived here, NOT read back from the persisted
+        # evaluation, so a coordinated parent+child mutation of a FINITE value still fails. The raw
+        # mission value, weighted value, objective, energy, feasibility, and full violation set are
+        # all re-derived and compared.
         ev = evaluator.evaluate_bitstring(s.bitstring)
         energy = qubo_energy(qubo, s.bitstring)
         if (
             ev.feasible != s.feasible
+            or abs(ev.raw_mission_value - s.raw_mission_value) > _TOL
             or abs(ev.objective_value - s.objective_value) > _TOL
             or abs(energy - s.qubo_energy) > _TOL
             or len(ev.violations) != s.violations_count
