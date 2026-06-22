@@ -109,6 +109,9 @@ class SolverRunRow(Base):
             ["benchmark_runs.id", "benchmark_runs.problem_id"],
             name="fk_solver_runs_benchmark_problem",
         ),
+        # Only the two classical solver roles may be persisted here; quantum lives in its own
+        # table (final acceptance, Medium). PostgreSQL rejects bogus/quantum/empty/mis-cased kinds.
+        CheckConstraint("solver_kind IN ('exact', 'greedy')", name="ck_solver_runs_kind"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)

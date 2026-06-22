@@ -160,6 +160,59 @@ def test_comparison_role_check_constraint_enforced(pg_container: AppContainer) -
     assert _exec(pg_container, "SELECT 1")[0][0] == 1
 
 
+@pytest.mark.parametrize("bad_kind", ["bogus", "quantum-qaoa", "", "Exact", "GREEDY"])
+def test_bogus_solver_kind_is_rejected(pg_container: AppContainer, bad_kind: str) -> None:
+    """The solver-kind CHECK rejects any role outside ('exact','greedy') with txn recovery
+    (final acceptance, Medium)."""
+    from sqlalchemy.exc import IntegrityError
+
+    svc = pg_container.optimization_service
+    problem = svc.create_problem(fixtures.fixture("default"))
+    run, _ = svc.benchmark(problem.id, seed=7, run_quantum=False)
+    engine = pg_container.database.engine
+    with engine.connect() as conn:
+        trans = conn.begin()
+        with pytest.raises(IntegrityError):
+            conn.execute(
+                text("UPDATE solver_runs SET solver_kind=:k WHERE benchmark_id=:b"),
+                {"k": bad_kind, "b": run.id},
+            )
+        trans.rollback()
+    assert _exec(pg_container, "SELECT 1")[0][0] == 1  # transaction recovers
+
+
+def test_generic_memory_navigation_integrity_aware_on_postgres(
+    pg_container: AppContainer,
+) -> None:
+    """Generic problem navigation authenticates each benchmark independently on live PostgreSQL:
+    tampering A marks only A's edges invalid while B stays valid (final acceptance, High #3)."""
+    from fastapi.testclient import TestClient
+
+    from orbitmind.api.app import create_app
+
+    svc = pg_container.optimization_service
+    problem = svc.create_problem(fixtures.fixture("default"))
+    run_a, _ = svc.benchmark(problem.id, seed=7, run_quantum=False)
+    run_b, _ = svc.benchmark(problem.id, seed=11, run_quantum=False)
+    # Coordinated/visible tamper of A's exact objective JSON.
+    with pg_container.database.engine.begin() as conn:
+        conn.execute(
+            text(
+                "UPDATE solver_runs SET result_json = jsonb_set(result_json::jsonb,"
+                "'{objective_value}', '999') WHERE benchmark_id=:b AND solver_kind='exact'"
+            ),
+            {"b": run_a.id},
+        )
+    with TestClient(create_app(pg_container)) as client:
+        body = client.get(
+            f"/api/v1/memory/graph/{problem.id}/neighbors", params={"limit": 200}
+        ).json()
+    a_edges = [n for n in body["neighbors"] if n["benchmark_id"] == run_a.id]
+    b_edges = [n for n in body["neighbors"] if n["benchmark_id"] == run_b.id]
+    assert a_edges and all(n["evidence_validity"] == "integrity-failed" for n in a_edges)
+    assert b_edges and all(n["evidence_validity"] == "valid" for n in b_edges)
+
+
 def test_benchmark_problem_reassignment_is_rejected(pg_container: AppContainer) -> None:
     """A benchmark cannot be repointed to another problem while its children reference the
     original (benchmark_id, problem_id) ownership anchor (High #4)."""
@@ -302,7 +355,7 @@ def test_receipt_replay_is_rejected_on_postgres(pg_container: AppContainer) -> N
 
 def test_schema_is_at_corrective_head_with_constraints(pg_container: AppContainer) -> None:
     head = _exec(pg_container, "SELECT version_num FROM alembic_version")[0][0]
-    assert head == "g3b4c5d6e7f8"
+    assert head == "h4c5d6e7f8a9"
     # Foreign keys created by the corrective migration are present.
     fks = {
         r[0]
