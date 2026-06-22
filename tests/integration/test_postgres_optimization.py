@@ -181,6 +181,57 @@ def test_benchmark_problem_reassignment_is_rejected(pg_container: AppContainer) 
     assert _exec(pg_container, "SELECT 1")[0][0] == 1
 
 
+def test_malformed_solver_json_fails_closed_on_postgres(pg_container: AppContainer) -> None:
+    """A corrupt persisted solver result_json must FAIL CLOSED on live PostgreSQL — classified as
+    malformed, never raised as a 500 (fifth review, High #2)."""
+    svc = pg_container.optimization_service
+    problem = svc.create_problem(fixtures.fixture("default"))
+    run, _ = svc.benchmark(problem.id, seed=7, run_quantum=False)
+    assert svc.read_benchmark_evidence(run.id).authenticated
+    with pg_container.database.engine.begin() as conn:
+        conn.execute(
+            text(
+                "UPDATE solver_runs SET result_json='{\"corrupt\": true}'::jsonb "
+                "WHERE benchmark_id=:b"
+            ),
+            {"b": run.id},
+        )
+    auth = svc.read_benchmark_evidence(run.id)
+    assert auth.found and auth.integrity_failed and auth.run is None
+    assert auth.integrity_status == "malformed-persisted-evidence"
+    audits = _exec(
+        pg_container,
+        "SELECT count(*) FROM audit_events WHERE action='optimization.benchmark_integrity_failed'",
+    )[0][0]
+    assert audits >= 1
+
+
+@pytest.mark.skipif(
+    not __import__("orbitmind.quantum.adapter", fromlist=["quantum_available"]).quantum_available(),
+    reason="qiskit/qiskit-aer not installed",
+)
+def test_child_sample_tamper_detected_on_postgres(pg_container: AppContainer) -> None:
+    """A tampered quantum_sample_results child row is caught by canonical-sample re-authentication
+    on live PostgreSQL (fifth review, Critical)."""
+    svc = pg_container.optimization_service
+    problem = svc.create_problem(fixtures.fixture("default"))
+    run, _ = svc.benchmark(problem.id, seed=7, shots=128, optimizer_iterations=6, run_quantum=True)
+    q = run.quantum_experiment
+    if q is None or q.status.value != "completed":
+        pytest.skip("quantum experiment did not complete")
+    assert svc.read_benchmark_evidence(run.id).authenticated
+    with pg_container.database.engine.begin() as conn:
+        conn.execute(
+            text(
+                "UPDATE quantum_sample_results SET raw_mission_value = raw_mission_value + 123 "
+                "WHERE experiment_id=:e"
+            ),
+            {"e": q.id},
+        )
+    auth = svc.read_benchmark_evidence(run.id)
+    assert auth.integrity_failed and auth.integrity_status == "sample-row-mismatch"
+
+
 def test_execution_receipt_persists_on_postgres(pg_container: AppContainer) -> None:
     """A verified benchmark persists a signed execution receipt (signer key id stored, secret
     never) and is marked accepted on live PostgreSQL (third review, High #1)."""
