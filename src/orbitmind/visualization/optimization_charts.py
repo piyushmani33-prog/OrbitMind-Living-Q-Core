@@ -77,7 +77,14 @@ class OptimizationVisualizationService:
             sidecar = path.with_suffix(path.suffix + ".json")
             body: dict[str, object] = {
                 "artifact_type": art_type,
+                # Ownership + policy anchor authenticated by the verifier (third review, High #4).
+                "benchmark_id": run.id,
+                "problem_id": run.problem_id,
                 "problem_checksum": problem.checksum,
+                "policy_snapshot_checksum": str((run.policy_snapshot or {}).get("checksum", "")),
+                "comparison_algorithm_version": str(
+                    (run.policy_snapshot or {}).get("comparison_algorithm_version", "")
+                ),
                 "solver": solver,
                 "created_at": utcnow().isoformat(),
                 "software_versions": software,

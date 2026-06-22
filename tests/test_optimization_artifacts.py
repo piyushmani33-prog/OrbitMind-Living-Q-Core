@@ -77,6 +77,29 @@ def test_sidecar_wrong_type_is_rejected(container: AppContainer) -> None:
     assert not all_critical_passed(findings)
 
 
+@pytest.mark.parametrize("field", ["benchmark_id", "problem_id", "policy_snapshot_checksum"])
+def test_sidecar_ownership_or_policy_tamper_is_rejected(
+    container: AppContainer, field: str
+) -> None:
+    # The sidecar's ownership + policy anchor is authenticated against the trusted run (High #4).
+    problem, run, root = _benchmark_with_artifacts(container, run_quantum=False)
+    art = run.artifacts[0]
+    sidecar = root / (art["path"] + ".json")
+    meta = json.loads(sidecar.read_text("utf-8"))
+    meta[field] = "TAMPERED"
+    sidecar.write_text(json.dumps(meta), encoding="utf-8")
+    findings = verify_benchmark(problem, run, artifacts_root=root)
+    assert not all_critical_passed(findings)
+
+
+def test_sidecar_carries_ownership_and_policy_anchor(container: AppContainer) -> None:
+    _problem, run, root = _benchmark_with_artifacts(container, run_quantum=False)
+    art = run.artifacts[0]
+    meta = json.loads((root / (art["path"] + ".json")).read_text("utf-8"))
+    assert meta["benchmark_id"] == run.id
+    assert meta["policy_snapshot_checksum"] == str((run.policy_snapshot or {}).get("checksum", ""))
+
+
 def test_summary_is_self_describing_without_quantum(container: AppContainer) -> None:
     _problem, run, root = _benchmark_with_artifacts(container, run_quantum=False)
     summary = next(a for a in run.artifacts if a["type"] == "benchmark_summary_json")
@@ -105,3 +128,17 @@ def test_quantum_sidecar_and_summary_carry_evidence(container: AppContainer) -> 
     assert qsidecars
     side = json.loads((root / (qsidecars[0]["path"] + ".json")).read_text("utf-8"))
     assert side["quantum_evidence"]["manifest_checksum"] == ev["manifest_checksum"]
+
+
+@pytest.mark.skipif(not quantum_available(), reason="qiskit/qiskit-aer not installed")
+def test_tampered_quantum_sidecar_evidence_is_rejected(container: AppContainer) -> None:
+    problem, run, root = _benchmark_with_artifacts(container, run_quantum=True)
+    if run.quantum_experiment is None or run.quantum_experiment.status.value != "completed":
+        pytest.skip("quantum experiment did not complete")
+    qside = next(a for a in run.artifacts if a["type"] == "quantum_sample_distribution")
+    path = root / (qside["path"] + ".json")
+    meta = json.loads(path.read_text("utf-8"))
+    meta["quantum_evidence"]["qubo_checksum"] = "FORGED"  # break the evidence manifest match
+    path.write_text(json.dumps(meta), encoding="utf-8")
+    findings = verify_benchmark(problem, run, artifacts_root=root)
+    assert not all_critical_passed(findings)

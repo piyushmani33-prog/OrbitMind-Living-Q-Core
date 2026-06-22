@@ -27,12 +27,14 @@ from orbitmind.optimization.models import (
     ExperimentStatus,
     OptimalityStatus,
     PenaltyProofStatus,
+    QuantumEvidence,
     QuantumExperiment,
     SchedulingProblem,
     SolverConfiguration,
     SolverKind,
     SolverResult,
 )
+from orbitmind.optimization.overclaim import contains_overclaim
 from orbitmind.optimization.penalties import penalty_policy
 from orbitmind.optimization.policy import (
     authenticate_policy,
@@ -191,7 +193,7 @@ def verify_benchmark(
 
     # 24-28. Artifacts: containment, existence, checksum, sidecar, bounded metadata.
     if artifacts_root is not None and run.artifacts:
-        findings.extend(_verify_artifacts(run, artifacts_root, recomputed_checksum))
+        findings.extend(_verify_artifacts(run, problem, artifacts_root, recomputed_checksum))
 
     return findings
 
@@ -900,21 +902,6 @@ def _verify_comparison(
     return out
 
 
-# Scientifically misleading CLAIMS that must never appear in an artifact sidecar (review #16).
-# These are affirmative overclaims; a negated mention ("NOT evidence of quantum advantage") is
-# legitimate and must not match, so the phrases are specific.
-_FORBIDDEN_PHRASES = (
-    "quantum advantage verified",
-    "quantum advantage demonstrated",
-    "proven quantum advantage",
-    "achieves quantum advantage",
-    "quantum superiority",
-    "production-ready quantum",
-    "faster than classical",
-    "outperforms classical",
-)
-
-
 def _contained(root: Path, rel: str) -> Path | None:
     """Resolve ``root/rel`` and require it to stay within ``root`` (rejects ../, abs, symlink)."""
     try:
@@ -924,9 +911,14 @@ def _contained(root: Path, rel: str) -> Path | None:
 
 
 def _verify_artifacts(
-    run: BenchmarkRun, artifacts_root: Path, problem_checksum_value: str
+    run: BenchmarkRun, problem: SchedulingProblem, artifacts_root: Path, problem_checksum_value: str
 ) -> list[VerificationFinding]:
     out: list[VerificationFinding] = []
+    snap_checksum = str((run.policy_snapshot or {}).get("checksum", ""))
+    qexp = run.quantum_experiment
+    manifest = (
+        build_evidence_manifest(problem, qexp.configuration) if qexp is not None else None
+    )
     for art in run.artifacts:
         rel = art.get("path", "")
         # Derive the EXPECTED sidecar path from the artifact record + convention; never trust a
@@ -934,7 +926,6 @@ def _verify_artifacts(
         expected_sidecar_rel = f"{rel}.json"
         target = _contained(artifacts_root, rel)
         sidecar_target = _contained(artifacts_root, expected_sidecar_rel)
-        # The persisted sidecar_path (if any) must match the derived one exactly.
         sidecar_name_ok = art.get("sidecar_path", expected_sidecar_rel) == expected_sidecar_rel
         exists = target is not None and target.is_file()
         out.append(
@@ -960,11 +951,19 @@ def _verify_artifacts(
             )
         )
         meta_ok = False
+        evidence_ok = True
         no_forbidden = True
         if sidecar_target.is_file():
             try:
                 raw = sidecar_target.read_text("utf-8")
                 meta = json.loads(raw)
+                # Ownership + policy anchor authenticated against the trusted run (review #16):
+                # if the sidecar declares these fields they must equal the trusted values.
+                ownership_ok = (
+                    meta.get("benchmark_id", run.id) == run.id
+                    and meta.get("problem_id", run.problem_id) == run.problem_id
+                    and meta.get("policy_snapshot_checksum", snap_checksum) == snap_checksum
+                )
                 meta_ok = (
                     meta.get("checksum") == actual
                     and meta.get("problem_checksum") == problem_checksum_value
@@ -973,16 +972,26 @@ def _verify_artifacts(
                     and bool(str(meta.get("limitations", "")).strip())
                     and "software_versions" in meta
                     and "seed" in meta
+                    and ownership_ok
                 )
-                low = raw.lower()
-                no_forbidden = not any(p in low for p in _FORBIDDEN_PHRASES)
+                # A quantum sidecar's evidence block is authenticated against the rebuilt manifest
+                # (not merely required to exist).
+                claim = meta.get("quantum_evidence")
+                if claim is not None and manifest is not None:
+                    evidence_ok = evidence_matches_manifest(
+                        QuantumEvidence.model_validate(claim), manifest
+                    )[0]
+                elif claim is not None and manifest is None:
+                    evidence_ok = False  # evidence claimed but no quantum run
+                no_forbidden = not contains_overclaim(raw)
             except Exception:
                 meta_ok = False
         out.append(
             _f(
                 f"opt.artifact_sidecar[{rel}]",
-                meta_ok,
-                "sidecar independently matches type/checksum/problem + carries bounded metadata",
+                meta_ok and evidence_ok,
+                "sidecar authenticated against trusted run/manifest (type/checksum/ownership/"
+                "policy/evidence) with bounded metadata",
                 category=CheckCategory.PROVENANCE,
                 severity=Severity.CRITICAL,
             )
