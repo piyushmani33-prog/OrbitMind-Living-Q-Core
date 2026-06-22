@@ -45,7 +45,20 @@ from orbitmind.optimization.verification import benchmark_verified_for_evidence
 
 def _summary(auth: AuthenticatedBenchmark) -> RunSummaryView:
     run = auth.run
-    assert run is not None
+    if run is None:
+        # Malformed persisted evidence: render a bounded integrity-failed summary from the safe
+        # denormalized row scalars, never trusting the malformed payload (fifth review, High #2).
+        return RunSummaryView(
+            id=auth.benchmark_id or "",
+            problem_checksum=auth.problem_checksum or "",
+            verified=False,
+            integrity_failed=True,
+            conclusion=None,
+            created_at=auth.created_at_iso or "",
+            has_quantum=auth.has_quantum,
+            receipt_status=auth.receipt_status,
+            artifact_count=auth.artifact_count,
+        )
     return RunSummaryView(
         id=run.id,
         problem_checksum=run.problem_checksum,
@@ -163,8 +176,13 @@ def list_runs(
 def get_benchmark(benchmark_id: str, service: ServiceDep) -> BenchmarkReadResponse:
     """Read persisted benchmark evidence with full re-authentication (Critical #2)."""
     auth = service.read_benchmark_evidence(benchmark_id)
-    if not auth.found or auth.run is None:
+    if not auth.found:
         raise NotFoundError("benchmark not found")
+    if auth.run is None:
+        # Malformed persisted evidence: bounded integrity error, never a positive serve or a 500.
+        raise ValidationError(
+            f"benchmark evidence failed integrity reconstruction ({auth.integrity_status})"
+        )
     view = BenchmarkView.from_domain(auth.run, verified=auth.authenticated)
     # Never present a positive conclusion for evidence that failed re-authentication.
     safe = view.model_copy(update={"conclusion": auth.safe_conclusion()})
@@ -184,8 +202,13 @@ def get_benchmark_evidence_graph(
     as valid evidence; the integrity audit is written by the read and the edge/audit history is
     retained (never deleted)."""
     auth = service.read_benchmark_evidence(benchmark_id)
-    if not auth.found or auth.run is None or auth.run.problem_id is None:
+    if not auth.found:
         raise NotFoundError("benchmark not found")
+    if auth.run is None or auth.run.problem_id is None:
+        # Malformed persisted evidence: no edges are treated as valid; bounded integrity response.
+        return BenchmarkEvidenceGraphResponse(
+            benchmark_id=benchmark_id, integrity_failed=True, valid_evidence=False, edges=[]
+        )
     result = memory.graph_neighbors(auth.run.problem_id, depth=1, limit=200)
     edges = [
         EvidenceEdgeView(

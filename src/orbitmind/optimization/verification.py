@@ -195,7 +195,36 @@ def verify_benchmark(
     if artifacts_root is not None and run.artifacts:
         findings.extend(_verify_artifacts(run, problem, artifacts_root, recomputed_checksum))
 
+    # 29. Scientific-integrity: NO affirmative quantum-advantage overclaim in ANY evidence text
+    # (limitations, rationale) — limitations/epistemic labels are evidence, not decoration.
+    findings.extend(_verify_evidence_text(run))
+
     return findings
+
+
+def _verify_evidence_text(run: BenchmarkRun) -> list[VerificationFinding]:
+    """Run the bounded overclaim validator over every persisted evidence text field (fifth
+    review, Critical step 6): solver/quantum/comparison limitations + comparison rationale.
+    Affirmative quantum-advantage language anywhere fails authentication."""
+    texts: list[tuple[str, str]] = []
+    for result in run.solver_results:
+        texts.append((f"solver[{result.solver_kind.value}].limitations", result.limitations))
+    if run.quantum_experiment is not None:
+        texts.append(("quantum.limitations", run.quantum_experiment.limitations))
+    if run.comparison is not None:
+        texts.append(("comparison.limitations", run.comparison.limitations))
+        texts.append(("comparison.rationale", run.comparison.rationale))
+    offenders = sorted(name for name, text in texts if contains_overclaim(text))
+    return [
+        _f(
+            "opt.evidence_text_no_overclaim",
+            not offenders,
+            "no affirmative quantum-advantage overclaim in any persisted evidence text",
+            category=CheckCategory.POLICY,
+            severity=Severity.CRITICAL,
+            values={"offenders": offenders},
+        )
+    ]
 
 
 def _verify_solvers(

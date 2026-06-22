@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
+from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -31,6 +33,52 @@ from orbitmind.persistence.optimization_models import (
     SchedulingConstraintRow,
     SolverRunRow,
 )
+
+# Integrity classifications for a persisted-evidence load (fifth review, Critical + High #2).
+INTEGRITY_OK = "ok"
+INTEGRITY_NOT_FOUND = "not-found"
+INTEGRITY_MALFORMED = "malformed-persisted-evidence"
+INTEGRITY_SAMPLE_MISMATCH = "sample-row-mismatch"
+
+
+@dataclass(frozen=True)
+class EvidenceLoadResult:
+    """Outcome of safely reconstructing persisted benchmark evidence. Malformed persisted data
+    NEVER escapes as an uncaught exception (fifth review, High #2); duplicate sample
+    representations that disagree fail closed (fifth review, Critical). Denormalized row scalars
+    are always populated (even when the JSON is malformed) so public reads can render a bounded
+    integrity response without trusting the malformed payload."""
+
+    found: bool
+    integrity_status: str
+    problem: SchedulingProblem | None = None
+    run: BenchmarkRun | None = None
+    receipt: BenchmarkExecutionReceipt | None = None
+    findings: tuple[str, ...] = ()
+    benchmark_id: str | None = None
+    problem_id: str | None = None
+    problem_checksum: str | None = None
+    created_at_iso: str | None = None
+    artifact_count: int = 0
+    has_quantum: bool = False
+
+    @property
+    def is_ok(self) -> bool:
+        return self.integrity_status == INTEGRITY_OK
+
+
+def _sample_key(s: Any) -> tuple[str, int, float, bool, float, float, float, int]:
+    """Canonical comparison key shared by domain samples and persisted child rows."""
+    return (
+        str(s.bitstring),
+        int(s.count),
+        float(s.probability),
+        bool(s.feasible),
+        float(s.raw_mission_value),
+        float(s.objective_value),
+        float(s.qubo_energy),
+        int(s.violations_count),
+    )
 
 
 class SqlAlchemyOptimizationRepository:
@@ -353,23 +401,28 @@ class SqlAlchemyOptimizationRepository:
         )
         return list(rows)
 
-    def reconstruct_benchmark(
-        self, benchmark_id: str
-    ) -> tuple[SchedulingProblem | None, BenchmarkRun | None, BenchmarkExecutionReceipt | None]:
-        """Rebuild the full domain benchmark + receipt from persistence for read-time
-        re-authentication (fourth review, Critical #2). Returns (problem, run, receipt)."""
-        row = self._s.get(BenchmarkRunRow, benchmark_id)
-        if row is None or row.problem_id is None:
-            return None, None, None
-        problem = self.get_problem(row.problem_id)
-        if problem is None:
-            return None, None, None
-        solver_rows = (
-            self._s.execute(select(SolverRunRow).where(SolverRunRow.benchmark_id == benchmark_id))
+    def _quantum_sample_rows(self, experiment_id: str) -> list[QuantumSampleResultRow]:
+        return list(
+            self._s.execute(
+                select(QuantumSampleResultRow).where(
+                    QuantumSampleResultRow.experiment_id == experiment_id
+                )
+            )
             .scalars()
             .all()
         )
-        solver_results = [SolverResult.model_validate(r.result_json) for r in solver_rows]
+
+    def load_evidence(self, benchmark_id: str) -> EvidenceLoadResult:
+        """Safely reconstruct the full domain benchmark + receipt for read-time
+        re-authentication (fourth review, Critical #2; fifth review, Critical + High #2).
+
+        Malformed persisted JSON is classified rather than raised, and the authoritative parent
+        experiment samples are verified for COMPLETE EQUALITY against the persisted
+        ``quantum_sample_results`` child rows so a tampered child copy fails closed.
+        """
+        row = self._s.get(BenchmarkRunRow, benchmark_id)
+        if row is None:
+            return EvidenceLoadResult(found=False, integrity_status=INTEGRITY_NOT_FOUND)
         qrow = (
             self._s.execute(
                 select(QuantumExperimentRow).where(
@@ -379,40 +432,106 @@ class SqlAlchemyOptimizationRepository:
             .scalars()
             .first()
         )
-        quantum = QuantumExperiment.model_validate(qrow.experiment_json) if qrow else None
-        comparison = self.get_comparison(benchmark_id)
-        artifacts = [
-            {
-                "type": a.artifact_type,
-                "path": a.path,
-                "sidecar_path": a.sidecar_path,
-                "checksum": a.checksum,
-            }
-            for a in self.get_artifacts(benchmark_id)
-        ]
-        run = BenchmarkRun(
-            id=row.id,
-            problem_id=row.problem_id,
-            problem_checksum=row.problem_checksum,
-            policy_snapshot=row.policy_snapshot_json,
-            solver_results=solver_results,
-            quantum_experiment=quantum,
-            comparison=comparison,
-            artifacts=artifacts,
-        )
-        receipt_row = self.get_receipt(benchmark_id)
-        receipt = (
-            BenchmarkExecutionReceipt.model_validate(
-                {
-                    "payload": receipt_row.payload_json,
-                    "payload_checksum": receipt_row.payload_checksum,
-                    "signature": receipt_row.signature,
-                }
+        bench_id: str = row.id
+        prob_id: str | None = row.problem_id
+        prob_checksum: str = row.problem_checksum
+        created_iso: str | None = row.created_at.isoformat() if row.created_at else None
+        art_count: int = len(self.get_artifacts(benchmark_id))
+        has_q: bool = qrow is not None
+        try:
+            if row.problem_id is None:
+                raise ValueError("benchmark row has no problem_id")
+            problem = self.get_problem(row.problem_id)
+            if problem is None:
+                raise ValueError("benchmark problem is missing")
+            solver_rows = (
+                self._s.execute(
+                    select(SolverRunRow).where(SolverRunRow.benchmark_id == benchmark_id)
+                )
+                .scalars()
+                .all()
             )
-            if receipt_row is not None
-            else None
+            solver_results = [SolverResult.model_validate(r.result_json) for r in solver_rows]
+            quantum = QuantumExperiment.model_validate(qrow.experiment_json) if qrow else None
+            comparison = self.get_comparison(benchmark_id)
+            artifacts = [
+                {
+                    "type": a.artifact_type,
+                    "path": a.path,
+                    "sidecar_path": a.sidecar_path,
+                    "checksum": a.checksum,
+                }
+                for a in self.get_artifacts(benchmark_id)
+            ]
+            run = BenchmarkRun(
+                id=row.id,
+                problem_id=row.problem_id,
+                problem_checksum=row.problem_checksum,
+                policy_snapshot=row.policy_snapshot_json,
+                solver_results=solver_results,
+                quantum_experiment=quantum,
+                comparison=comparison,
+                artifacts=artifacts,
+            )
+            receipt_row = self.get_receipt(benchmark_id)
+            receipt = (
+                BenchmarkExecutionReceipt.model_validate(
+                    {
+                        "payload": receipt_row.payload_json,
+                        "payload_checksum": receipt_row.payload_checksum,
+                        "signature": receipt_row.signature,
+                    }
+                )
+                if receipt_row is not None
+                else None
+            )
+        except (ValidationError, ValueError, TypeError, LookupError, AttributeError) as exc:
+            # Malformed persisted evidence must FAIL CLOSED, never raise (fifth review, High #2).
+            return EvidenceLoadResult(
+                found=True,
+                integrity_status=INTEGRITY_MALFORMED,
+                findings=(f"{type(exc).__name__}: persisted evidence failed reconstruction",),
+                benchmark_id=bench_id,
+                problem_id=prob_id,
+                problem_checksum=prob_checksum,
+                created_at_iso=created_iso,
+                artifact_count=art_count,
+                has_quantum=has_q,
+            )
+        # Canonical sample representation: the authoritative parent samples must EXACTLY equal the
+        # persisted child rows (fifth review, Critical) — a tampered child copy is undetectable to
+        # semantic re-verification (which only sees the parent), so it is caught here.
+        if quantum is not None and qrow is not None:
+            parent = sorted(_sample_key(s) for s in quantum.samples)
+            child = sorted(_sample_key(r) for r in self._quantum_sample_rows(qrow.id))
+            if parent != child:
+                return EvidenceLoadResult(
+                    found=True,
+                    integrity_status=INTEGRITY_SAMPLE_MISMATCH,
+                    problem=problem,
+                    run=run,
+                    receipt=receipt,
+                    findings=("quantum sample child rows disagree with the authoritative samples",),
+                    benchmark_id=bench_id,
+                    problem_id=prob_id,
+                    problem_checksum=prob_checksum,
+                    created_at_iso=created_iso,
+                    artifact_count=art_count,
+                    has_quantum=has_q,
+                )
+        return EvidenceLoadResult(
+            found=True,
+            integrity_status=INTEGRITY_OK,
+            problem=problem,
+            run=run,
+            receipt=receipt,
+            benchmark_id=bench_id,
+            problem_id=prob_id,
+            problem_checksum=prob_checksum,
+            created_at_iso=created_iso,
+            artifact_count=art_count,
+            has_quantum=has_q,
         )
-        return problem, run, receipt
 
     # ---- execution receipts (third review, High #1) ------------------------
     def save_receipt(self, receipt: BenchmarkExecutionReceipt) -> None:

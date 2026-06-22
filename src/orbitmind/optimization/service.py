@@ -68,8 +68,16 @@ class AuthenticatedBenchmark(BaseModel):
     found: bool
     authenticated: bool = False
     integrity_failed: bool = False
+    integrity_status: str = "ok"
     receipt_status: str = "none"
     run: BenchmarkRun | None = None
+    # Denormalized row scalars — always available, even when the JSON payload is malformed and the
+    # domain ``run`` could not be reconstructed (fifth review, High #2).
+    benchmark_id: str | None = None
+    problem_checksum: str | None = None
+    created_at_iso: str | None = None
+    artifact_count: int = 0
+    has_quantum: bool = False
 
     def safe_conclusion(self) -> str | None:
         """The conclusion to present publicly — non-positive unless re-authentication passed."""
@@ -568,32 +576,79 @@ class OptimizationService:
 
     def read_benchmark_evidence(self, benchmark_id: str) -> AuthenticatedBenchmark:
         """Load + REAUTHENTICATE persisted benchmark evidence (never trust verification_passed
-        alone). On a tamper (stored-accepted but re-auth fails) write an integrity audit."""
+        alone). Malformed persisted evidence + sample-row disagreements FAIL CLOSED rather than
+        raising, and any integrity failure writes an audit in a separate transaction."""
         with self._db.session() as session:
             repo = SqlAlchemyOptimizationRepository(session)
-            problem, run, receipt = repo.reconstruct_benchmark(benchmark_id)
+            res = repo.load_evidence(benchmark_id)
             stored = repo.get_benchmark(benchmark_id)
             stored_accepted = bool(stored and stored.verification_passed)
-        if problem is None or run is None:
+        if not res.found:
             return AuthenticatedBenchmark(found=False)
-        authenticated, receipt_status, _findings = self._authenticate(problem, run, receipt)
+
+        # Malformed or self-inconsistent persisted evidence is an integrity failure regardless of
+        # the stored verification flag (fifth review, Critical + High #2).
+        if not res.is_ok:
+            self._record_integrity_audit(
+                benchmark_id=benchmark_id,
+                problem_id=res.problem_id,
+                problem_checksum=res.problem_checksum,
+                status=res.integrity_status,
+            )
+            return AuthenticatedBenchmark(
+                found=True,
+                authenticated=False,
+                integrity_failed=True,
+                integrity_status=res.integrity_status,
+                receipt_status="integrity-failed",
+                run=res.run,
+                benchmark_id=res.benchmark_id,
+                problem_checksum=res.problem_checksum,
+                created_at_iso=res.created_at_iso,
+                artifact_count=res.artifact_count,
+                has_quantum=res.has_quantum,
+            )
+
+        assert res.problem is not None and res.run is not None
+        authenticated, receipt_status, _findings = self._authenticate(
+            res.problem, res.run, res.receipt
+        )
         integrity_failed = stored_accepted and not authenticated
         if integrity_failed:
-            self._record_integrity_audit(benchmark_id=benchmark_id, problem=problem)
+            self._record_integrity_audit(
+                benchmark_id=benchmark_id,
+                problem_id=res.problem_id,
+                problem_checksum=res.problem_checksum,
+                status="integrity-failed",
+            )
         return AuthenticatedBenchmark(
             found=True,
             authenticated=authenticated,
             integrity_failed=integrity_failed,
+            integrity_status=("integrity-failed" if integrity_failed else "ok"),
             receipt_status=("integrity-failed" if integrity_failed else receipt_status),
-            run=run,
+            run=res.run,
+            benchmark_id=res.benchmark_id,
+            problem_checksum=res.problem_checksum,
+            created_at_iso=res.created_at_iso,
+            artifact_count=res.artifact_count,
+            has_quantum=res.has_quantum,
         )
 
-    def _record_integrity_audit(self, *, benchmark_id: str, problem: SchedulingProblem) -> None:
+    def _record_integrity_audit(
+        self,
+        *,
+        benchmark_id: str,
+        problem_id: str | None,
+        problem_checksum: str | None,
+        status: str,
+    ) -> None:
         detail = {
             "operation": "benchmark_read",
             "benchmark_attempt_id": benchmark_id,
-            "problem_id": problem.id,
-            "problem_checksum": problem.checksum,
+            "problem_id": problem_id,
+            "problem_checksum": problem_checksum,
+            "integrity_status": status,
             "error_code": "evidence_integrity_failed",
         }
         try:
