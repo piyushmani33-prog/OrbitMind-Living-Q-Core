@@ -94,6 +94,93 @@ def test_cross_benchmark_comparison_update_is_rejected(pg_container: AppContaine
     assert _exec(pg_container, "SELECT 1")[0][0] == 1  # transaction recovers
 
 
+def test_greedy_result_in_exact_slot_is_rejected(pg_container: AppContainer) -> None:
+    """The role-aware composite FK rejects a greedy result placed in the exact slot (High #4)."""
+    from sqlalchemy.exc import IntegrityError
+
+    svc = pg_container.optimization_service
+    problem = svc.create_problem(fixtures.fixture("default"))
+    run, _ = svc.benchmark(problem.id, seed=7, run_quantum=False)
+    greedy_id = _exec(
+        pg_container,
+        f"SELECT id FROM solver_runs WHERE benchmark_id='{run.id}' AND solver_kind='greedy'",
+    )[0][0]
+    engine = pg_container.database.engine
+    with engine.connect() as conn:
+        trans = conn.begin()
+        with pytest.raises(IntegrityError):
+            conn.execute(
+                text("UPDATE benchmark_comparisons SET exact_result_id=:g WHERE benchmark_id=:b"),
+                {"g": greedy_id, "b": run.id},
+            )
+        trans.rollback()
+    assert _exec(pg_container, "SELECT 1")[0][0] == 1  # transaction recovers
+
+
+def test_exact_result_in_greedy_slot_is_rejected(pg_container: AppContainer) -> None:
+    from sqlalchemy.exc import IntegrityError
+
+    svc = pg_container.optimization_service
+    problem = svc.create_problem(fixtures.fixture("default"))
+    run, _ = svc.benchmark(problem.id, seed=7, run_quantum=False)
+    exact_id = _exec(
+        pg_container,
+        f"SELECT id FROM solver_runs WHERE benchmark_id='{run.id}' AND solver_kind='exact'",
+    )[0][0]
+    engine = pg_container.database.engine
+    with engine.connect() as conn:
+        trans = conn.begin()
+        with pytest.raises(IntegrityError):
+            conn.execute(
+                text("UPDATE benchmark_comparisons SET greedy_result_id=:e WHERE benchmark_id=:b"),
+                {"e": exact_id, "b": run.id},
+            )
+        trans.rollback()
+    assert _exec(pg_container, "SELECT 1")[0][0] == 1
+
+
+def test_comparison_role_check_constraint_enforced(pg_container: AppContainer) -> None:
+    from sqlalchemy.exc import IntegrityError
+
+    svc = pg_container.optimization_service
+    problem = svc.create_problem(fixtures.fixture("default"))
+    run, _ = svc.benchmark(problem.id, seed=7, run_quantum=False)
+    engine = pg_container.database.engine
+    with engine.connect() as conn:
+        trans = conn.begin()
+        with pytest.raises(IntegrityError):  # CHECK pins the role column to 'exact'
+            conn.execute(
+                text(
+                    "UPDATE benchmark_comparisons SET exact_solver_kind='greedy' "
+                    "WHERE benchmark_id=:b"
+                ),
+                {"b": run.id},
+            )
+        trans.rollback()
+    assert _exec(pg_container, "SELECT 1")[0][0] == 1
+
+
+def test_benchmark_problem_reassignment_is_rejected(pg_container: AppContainer) -> None:
+    """A benchmark cannot be repointed to another problem while its children reference the
+    original (benchmark_id, problem_id) ownership anchor (High #4)."""
+    from sqlalchemy.exc import IntegrityError
+
+    svc = pg_container.optimization_service
+    p1 = svc.create_problem(fixtures.fixture("default"))
+    p2 = svc.create_problem(fixtures.fixture("resource-bound"))
+    run, _ = svc.benchmark(p1.id, seed=7, run_quantum=False)
+    engine = pg_container.database.engine
+    with engine.connect() as conn:
+        trans = conn.begin()
+        with pytest.raises(IntegrityError):
+            conn.execute(
+                text("UPDATE benchmark_runs SET problem_id=:p WHERE id=:b"),
+                {"p": p2.id, "b": run.id},
+            )
+        trans.rollback()
+    assert _exec(pg_container, "SELECT 1")[0][0] == 1
+
+
 def test_execution_receipt_persists_on_postgres(pg_container: AppContainer) -> None:
     """A verified benchmark persists a signed execution receipt (signer key id stored, secret
     never) and is marked accepted on live PostgreSQL (third review, High #1)."""
@@ -164,7 +251,7 @@ def test_receipt_replay_is_rejected_on_postgres(pg_container: AppContainer) -> N
 
 def test_schema_is_at_corrective_head_with_constraints(pg_container: AppContainer) -> None:
     head = _exec(pg_container, "SELECT version_num FROM alembic_version")[0][0]
-    assert head == "e1f2a3b4c5d6"
+    assert head == "g3b4c5d6e7f8"
     # Foreign keys created by the corrective migration are present.
     fks = {
         r[0]

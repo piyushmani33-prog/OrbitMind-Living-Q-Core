@@ -12,6 +12,7 @@ from typing import Any
 from sqlalchemy import (
     JSON,
     Boolean,
+    CheckConstraint,
     Float,
     ForeignKey,
     ForeignKeyConstraint,
@@ -71,6 +72,10 @@ class SchedulingConstraintRow(Base):
 
 class BenchmarkRunRow(Base):
     __tablename__ = "benchmark_runs"
+    # Composite-unique (id, problem_id) is the FK target that anchors every child row to BOTH the
+    # benchmark and its problem, so a benchmark cannot be reassigned to another problem while its
+    # children point at the original (fifth review, High #4).
+    __table_args__ = (UniqueConstraint("id", "problem_id", name="uq_benchmark_runs_id_problem"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     problem_id: Mapped[str | None] = mapped_column(
@@ -90,8 +95,21 @@ class BenchmarkRunRow(Base):
 class SolverRunRow(Base):
     __tablename__ = "solver_runs"
     # Composite uniqueness lets the comparison reference (benchmark_id, id) via a composite FK
-    # so a result cannot be spliced in from another benchmark (third review, High #2).
-    __table_args__ = (UniqueConstraint("benchmark_id", "id", name="uq_solver_runs_owner"),)
+    # so a result cannot be spliced in from another benchmark (third review, High #2). The
+    # role-aware composite unique (benchmark_id, id, problem_id, solver_kind) is the FK target for
+    # role-pinned comparison slots, and (benchmark_id, problem_id) is anchored to the parent
+    # benchmark+problem (fifth review, High #4).
+    __table_args__ = (
+        UniqueConstraint("benchmark_id", "id", name="uq_solver_runs_owner"),
+        UniqueConstraint(
+            "benchmark_id", "id", "problem_id", "solver_kind", name="uq_solver_runs_role_owner"
+        ),
+        ForeignKeyConstraint(
+            ["benchmark_id", "problem_id"],
+            ["benchmark_runs.id", "benchmark_runs.problem_id"],
+            name="fk_solver_runs_benchmark_problem",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     benchmark_id: Mapped[str | None] = mapped_column(
@@ -118,7 +136,15 @@ class SolverRunRow(Base):
 
 class QuantumExperimentRow(Base):
     __tablename__ = "quantum_experiments"
-    __table_args__ = (UniqueConstraint("benchmark_id", "id", name="uq_quantum_experiments_owner"),)
+    __table_args__ = (
+        UniqueConstraint("benchmark_id", "id", name="uq_quantum_experiments_owner"),
+        # Anchor the quantum child to the parent benchmark + its problem (fifth review, High #4).
+        ForeignKeyConstraint(
+            ["benchmark_id", "problem_id"],
+            ["benchmark_runs.id", "benchmark_runs.problem_id"],
+            name="fk_quantum_benchmark_problem",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     benchmark_id: Mapped[str | None] = mapped_column(
@@ -162,22 +188,42 @@ class QuantumSampleResultRow(Base):
 
 class BenchmarkComparisonRow(Base):
     __tablename__ = "benchmark_comparisons"
-    # Composite FKs bind each association id to a row OWNED BY THE SAME benchmark (High #2).
+    # ROLE-AWARE composite FKs bind each association id to a row owned by the SAME benchmark + the
+    # SAME problem AND of the CORRECT solver role (fifth review, High #4): the exact slot may only
+    # reference a solver row with solver_kind='exact', the greedy slot only 'greedy'. The role
+    # columns are pinned by CHECK constraints, and (benchmark_id, problem_id) anchors to the parent.
     __table_args__ = (
+        CheckConstraint("exact_solver_kind = 'exact'", name="ck_comparison_exact_role"),
+        CheckConstraint("greedy_solver_kind = 'greedy'", name="ck_comparison_greedy_role"),
         ForeignKeyConstraint(
-            ["benchmark_id", "exact_result_id"],
-            ["solver_runs.benchmark_id", "solver_runs.id"],
-            name="fk_comparison_exact_owner",
+            ["benchmark_id", "exact_result_id", "problem_id", "exact_solver_kind"],
+            [
+                "solver_runs.benchmark_id",
+                "solver_runs.id",
+                "solver_runs.problem_id",
+                "solver_runs.solver_kind",
+            ],
+            name="fk_comparison_exact_role_owner",
         ),
         ForeignKeyConstraint(
-            ["benchmark_id", "greedy_result_id"],
-            ["solver_runs.benchmark_id", "solver_runs.id"],
-            name="fk_comparison_greedy_owner",
+            ["benchmark_id", "greedy_result_id", "problem_id", "greedy_solver_kind"],
+            [
+                "solver_runs.benchmark_id",
+                "solver_runs.id",
+                "solver_runs.problem_id",
+                "solver_runs.solver_kind",
+            ],
+            name="fk_comparison_greedy_role_owner",
         ),
         ForeignKeyConstraint(
             ["benchmark_id", "quantum_experiment_id"],
             ["quantum_experiments.benchmark_id", "quantum_experiments.id"],
             name="fk_comparison_quantum_owner",
+        ),
+        ForeignKeyConstraint(
+            ["benchmark_id", "problem_id"],
+            ["benchmark_runs.id", "benchmark_runs.problem_id"],
+            name="fk_comparison_benchmark_problem",
         ),
     )
 
@@ -197,6 +243,9 @@ class BenchmarkComparisonRow(Base):
     exact_result_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     greedy_result_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     quantum_experiment_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    # Fixed solver-role columns pinned by CHECK constraints (fifth review, High #4).
+    exact_solver_kind: Mapped[str] = mapped_column(String(24), default="exact")
+    greedy_solver_kind: Mapped[str] = mapped_column(String(24), default="greedy")
     policy_id: Mapped[str] = mapped_column(String(64), default="strict-v1")
     policy_version: Mapped[str] = mapped_column(String(16), default="1")
     policy_checksum: Mapped[str] = mapped_column(String(64), default="")
