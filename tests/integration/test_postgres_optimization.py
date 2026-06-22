@@ -120,9 +120,51 @@ def test_execution_receipt_persists_on_postgres(pg_container: AppContainer) -> N
     assert "secret" not in payload.lower()
 
 
+def test_receipt_replay_is_rejected_on_postgres(pg_container: AppContainer) -> None:
+    """A second receipt reusing an existing signed payload checksum (replay) is rejected by the
+    database-level unique constraint, and the transaction recovers (fourth review, Medium #1)."""
+    from sqlalchemy.exc import IntegrityError
+
+    svc = pg_container.optimization_service
+    problem = svc.create_problem(fixtures.fixture("default"))
+    run, _ = svc.benchmark(problem.id, seed=7, run_quantum=False)
+    existing = _exec(
+        pg_container,
+        "SELECT payload_checksum, signer_key_id, signature_algorithm, signature "
+        f"FROM benchmark_execution_receipts WHERE benchmark_id='{run.id}'",
+    )[0]
+    engine = pg_container.database.engine
+    with engine.connect() as conn:
+        trans = conn.begin()
+        with pytest.raises(IntegrityError):
+            conn.execute(
+                text(
+                    "INSERT INTO benchmark_execution_receipts (id, benchmark_id, signer_key_id, "
+                    "signature_algorithm, payload_checksum, signature, payload_json, created_at) "
+                    "VALUES ('replay-id', :bid, :kid, :alg, :pc, :sig, '{}', now())"
+                ),
+                {
+                    "bid": run.id,  # different receipt id, SAME payload checksum (replay)
+                    "kid": existing[1],
+                    "alg": existing[2],
+                    "pc": existing[0],  # replayed payload checksum -> unique violation
+                    "sig": existing[3],
+                },
+            )
+        trans.rollback()
+    assert _exec(pg_container, "SELECT 1")[0][0] == 1  # transaction recovers
+    assert (
+        _exec(
+            pg_container,
+            f"SELECT count(*) FROM benchmark_execution_receipts WHERE benchmark_id='{run.id}'",
+        )[0][0]
+        == 1
+    )
+
+
 def test_schema_is_at_corrective_head_with_constraints(pg_container: AppContainer) -> None:
     head = _exec(pg_container, "SELECT version_num FROM alembic_version")[0][0]
-    assert head == "c9a1b3e5d7f2"
+    assert head == "e1f2a3b4c5d6"
     # Foreign keys created by the corrective migration are present.
     fks = {
         r[0]

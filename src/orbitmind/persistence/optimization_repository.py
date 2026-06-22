@@ -425,6 +425,7 @@ class SqlAlchemyOptimizationRepository:
                 signature_algorithm=p.signature_algorithm,
                 payload_checksum=receipt.payload_checksum,
                 signature=receipt.signature,
+                worker_execution_nonce=p.worker_execution_nonce,
                 payload_json=p.model_dump(mode="json"),
                 created_at=utcnow(),
             )

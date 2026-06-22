@@ -224,6 +224,12 @@ class BenchmarkExecutionReceiptRow(Base):
     metadata — never the signing secret."""
 
     __tablename__ = "benchmark_execution_receipts"
+    # Replay guard (fourth review, Medium #1): a signed payload + a worker nonce are each unique
+    # across receipts; the nonce is nullable for classical-only receipts (NULLs stay distinct).
+    __table_args__ = (
+        UniqueConstraint("payload_checksum", name="uq_execution_receipt_payload_checksum"),
+        UniqueConstraint("worker_execution_nonce", name="uq_execution_receipt_worker_nonce"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)  # receipt_id
     benchmark_id: Mapped[str] = mapped_column(
@@ -233,5 +239,6 @@ class BenchmarkExecutionReceiptRow(Base):
     signature_algorithm: Mapped[str] = mapped_column(String(32))
     payload_checksum: Mapped[str] = mapped_column(String(64))
     signature: Mapped[str] = mapped_column(String(128))
+    worker_execution_nonce: Mapped[str | None] = mapped_column(String(64), nullable=True)
     payload_json: Mapped[dict[str, Any]] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, index=True)
