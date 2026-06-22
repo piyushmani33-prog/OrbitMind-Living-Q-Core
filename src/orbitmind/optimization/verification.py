@@ -295,6 +295,18 @@ def _verify_solvers(
                 severity=Severity.WARNING,
             )
         )
+        # Runtime must be a finite, non-negative duration (fourth review, Medium #2): a negative
+        # or NaN/inf runtime is rejected rather than silently accepted as provenance.
+        out.append(
+            _f(
+                f"opt.runtime_nonnegative.{kind.value}",
+                math.isfinite(result.runtime_seconds) and result.runtime_seconds >= 0.0,
+                f"{result.solver_name}: runtime is a finite, non-negative duration",
+                category=CheckCategory.PROVENANCE,
+                severity=Severity.CRITICAL,
+                values={"runtime_seconds": result.runtime_seconds},
+            )
+        )
     return out
 
 
@@ -439,8 +451,9 @@ def _verify_quantum(
             scalars_finite
             and meta_params_finite
             and math.isfinite(qexp.runtime_seconds)
+            and qexp.runtime_seconds >= 0.0  # non-negative duration (Medium #2)
             and (qexp.objective_gap is None or math.isfinite(qexp.objective_gap)),
-            "all sample/parameter/runtime scalars are finite (no NaN or infinity)",
+            "all sample/parameter/runtime scalars are finite + non-negative (no NaN/inf/negative)",
             category=CheckCategory.MATHEMATICS,
             severity=Severity.CRITICAL,
         )

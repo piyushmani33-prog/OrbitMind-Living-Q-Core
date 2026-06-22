@@ -1,10 +1,15 @@
-"""Bounded overclaim validator: affirmation rejected, disclaimer permitted (High #4)."""
+"""Bounded overclaim validator: affirmation rejected, disclaimer permitted (High #4;
+fourth review, Medium #2 — NFKC/punctuation/negation matrix)."""
 
 from __future__ import annotations
 
 import pytest
 
 from orbitmind.optimization.overclaim import PERMITTED_DISCLAIMERS, contains_overclaim
+
+_EM_DASH = chr(0x2014)
+_BOM = chr(0xFEFF)
+_FULLWIDTH_A = chr(0xFF41)  # 'a' (NFKC-folds to ASCII 'a')
 
 
 @pytest.mark.parametrize(
@@ -41,3 +46,33 @@ def test_disclaimers_are_permitted(text: str) -> None:
 def test_documented_disclaimers_pass() -> None:
     for disclaimer in PERMITTED_DISCLAIMERS:
         assert not contains_overclaim(disclaimer)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "quantum-advantage demonstrated",  # hyphen
+        "quantum_advantage verified",  # underscore
+        "Quantum" + _EM_DASH + "Advantage Demonstrated",  # em dash + case
+        "quantum   advantage   proven",  # extra whitespace
+        _BOM + "quantum advantage verified",  # NFKC / BOM
+        "qu" + _FULLWIDTH_A + "ntum advantage verified",  # NFKC fold of full-width letter
+        "this OUTPERFORMS classical decisively",
+    ],
+)
+def test_obfuscated_overclaims_still_rejected(text: str) -> None:
+    assert contains_overclaim(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "we make no claim of quantum advantage here",
+        "this does not demonstrate quantum advantage",
+        "the run is never better than classical",
+        "without any quantum advantage being shown",
+        "results are not faster than classical baselines",
+    ],
+)
+def test_negated_claims_are_permitted(text: str) -> None:
+    assert not contains_overclaim(text)
