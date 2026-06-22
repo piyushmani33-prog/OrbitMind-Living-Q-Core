@@ -37,7 +37,7 @@ from orbitmind.optimization.models import (
 from orbitmind.optimization.overclaim import contains_overclaim
 from orbitmind.optimization.penalties import penalty_policy
 from orbitmind.optimization.policy import (
-    authenticate_policy,
+    authenticate_policy_with_snapshot,
     default_policy,
     snapshot_is_self_consistent,
 )
@@ -839,17 +839,21 @@ def _verify_comparison(
     # thresholds as proof of themselves (review finding #9). The conclusion is then re-derived
     # using the authoritative server thresholds, so coherently changing both a persisted
     # threshold and the conclusion is rejected.
-    authoritative, policy_ok, policy_msg = authenticate_policy(
+    # Authenticate against the server registry when the policy is active, else against the
+    # benchmark's OWN self-consistent snapshot (fourth review, High #4) — a retired policy must
+    # not crash on a missing-registry lookup nor fall back to default thresholds.
+    authoritative, policy_ok, policy_msg = authenticate_policy_with_snapshot(
         policy_id=c.policy_id,
         policy_version=c.policy_version,
         policy_checksum_value=c.policy_checksum,
         thresholds=c.thresholds,
+        snapshot=run.policy_snapshot,
     )
     out.append(
         _f(
             "opt.policy_authenticated",
             policy_ok,
-            f"comparison policy authenticated against the server registry ({policy_msg})",
+            f"comparison policy authenticated against the server registry/snapshot ({policy_msg})",
             category=CheckCategory.POLICY,
             severity=Severity.CRITICAL,
             values={"policy_id": c.policy_id, "policy_version": c.policy_version},

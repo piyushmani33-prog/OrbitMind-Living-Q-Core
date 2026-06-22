@@ -125,3 +125,38 @@ def authenticate_policy(
         and abs(expected.min_feasible_sample_ratio - thresholds.min_feasible_sample_ratio) < 1e-12
     )
     return expected, ok, "policy authenticated" if ok else "policy mismatch vs server registry"
+
+
+def authenticate_policy_with_snapshot(
+    *,
+    policy_id: str,
+    policy_version: str,
+    policy_checksum_value: str,
+    thresholds: BenchmarkThresholds,
+    snapshot: dict[str, object] | None,
+) -> tuple[ComparisonPolicy | None, bool, str]:
+    """Authenticate a comparison policy, surviving a controlled policy RETIREMENT (fourth review,
+    High #4). Active policies authenticate against the server registry; a retired policy (absent
+    from the registry) authenticates against the benchmark's OWN self-consistent policy snapshot
+    with NO active-registry lookup, so historical evidence stays verifiable instead of crashing
+    or silently re-deriving the conclusion under default thresholds.
+    """
+    if policy_id in _REGISTRY:
+        return authenticate_policy(
+            policy_id=policy_id,
+            policy_version=policy_version,
+            policy_checksum_value=policy_checksum_value,
+            thresholds=thresholds,
+        )
+    if not snapshot_is_self_consistent(snapshot):
+        return None, False, f"retired policy '{policy_id}' lacks a self-consistent snapshot"
+    snap_pol = ComparisonPolicy.model_validate(snapshot)
+    ok = (
+        snap_pol.policy_id == policy_id
+        and snap_pol.policy_version == policy_version
+        and snap_pol.checksum == policy_checksum_value
+        and abs(snap_pol.competitive_relative_gap - thresholds.competitive_relative_gap) < 1e-12
+        and abs(snap_pol.min_feasible_sample_ratio - thresholds.min_feasible_sample_ratio) < 1e-12
+    )
+    msg = "policy authenticated (historical snapshot)" if ok else "policy mismatch vs snapshot"
+    return snap_pol, ok, msg

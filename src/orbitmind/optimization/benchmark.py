@@ -62,6 +62,7 @@ def proven_optimum(
         and exact.optimality_status == OptimalityStatus.OPTIMAL
         and exact.feasible
         and exact.objective_value is not None
+        and math.isfinite(exact.objective_value)  # a non-finite optimum is not a known optimum
         and exact.schedule is not None
     ):
         return exact.objective_value, exact.schedule.selected_opportunity_ids
@@ -125,6 +126,16 @@ def conclude(
         return ComparisonConclusion.QUANTUM_INFEASIBLE, "no feasible quantum sample observed"
 
     qobj = best_feasible.objective_value
+    # A non-finite quantum objective or an out-of-range feasible-sample ratio is never positive
+    # evidence (fourth review, High #4 / Medium #4) — guarded BEFORE any threshold arithmetic.
+    if not math.isfinite(qobj):
+        return ComparisonConclusion.QUANTUM_INFEASIBLE, "quantum sample objective is non-finite"
+    ratio = quantum_experiment.feasible_sample_ratio
+    if not math.isfinite(ratio) or not (0.0 <= ratio <= 1.0):
+        return (
+            ComparisonConclusion.INSUFFICIENT_EVIDENCE,
+            f"feasible-sample ratio {ratio} is outside [0, 1]",
+        )
     if quantum_experiment.feasible_sample_ratio < thresholds.min_feasible_sample_ratio:
         return (
             ComparisonConclusion.INSUFFICIENT_EVIDENCE,
