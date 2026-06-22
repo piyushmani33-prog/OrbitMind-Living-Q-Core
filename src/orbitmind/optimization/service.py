@@ -598,7 +598,11 @@ class OptimizationService:
         """Re-run semantic + receipt verification over a reconstructed benchmark. Pure (no I/O
         beyond re-solving). Returns (authenticated, receipt_status, findings)."""
         artifacts_root = self._settings.resolved_artifacts_dir() if run.artifacts else None
-        findings = verify_benchmark(problem, run, artifacts_root=artifacts_root)
+        # Read-time: artifacts authenticate via the SAME detached sidecar routine offline
+        # consumers use (final acceptance, High #1) — pass the verification keyring.
+        findings = verify_benchmark(
+            problem, run, artifacts_root=artifacts_root, signers=self._receipt_signers
+        )
         semantic_ok = benchmark_verified_for_evidence(findings)
         if receipt is None:
             return False, "none", findings

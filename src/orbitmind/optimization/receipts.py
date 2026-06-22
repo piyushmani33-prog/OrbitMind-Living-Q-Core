@@ -317,18 +317,34 @@ def _media_type_for(path: str) -> str:
     return "application/octet-stream"
 
 
+# The canonical artifact sidecar disclaimer/limitations (final acceptance, High #1). Shared with
+# the visualization layer so the sidecar's top-level limitations EXACTLY equals the signed entry.
+SIDECAR_ARTIFACT_LIMITATIONS = (
+    "model-estimate; bounded simulator benchmark on a tiny fixture. A circuit diagram is "
+    "NOT evidence of quantum advantage. Not a production tasking decision."
+)
+ARTIFACT_EPISTEMIC_STATUS = "model-estimate"
+ARTIFACT_VERIFICATION_STATE = "verified"
+
+
 def canonical_artifact_entry(run: BenchmarkRun, art: dict[str, str]) -> dict[str, Any]:
-    """One strict, signed artifact manifest entry (fifth review, High #1) — binds the artifact's
-    identity + type + checksum + media type to the benchmark/problem/result ownership and the
-    evidence/policy anchors. Receipt-envelope fields are deliberately excluded (the sidecar
-    carries the receipt separately) to keep the digest non-circular."""
+    """One strict, signed artifact manifest entry (fifth review, High #1; final acceptance) — binds
+    the artifact's identity, type, checksum, media type, limitations, epistemic status, and
+    verification state to the benchmark/problem/result ownership + evidence/policy anchors.
+    Receipt-envelope fields are deliberately excluded (the sidecar carries the receipt separately)
+    to keep the digest non-circular."""
     c = run.comparison
     q = run.quantum_experiment
     snap = run.policy_snapshot or {}
+    checksum = str(art.get("checksum", ""))
     return {
+        "artifact_id": checksum,  # content-addressed identity
         "artifact_type": str(art.get("type", "")),
-        "artifact_checksum": str(art.get("checksum", "")),
+        "artifact_checksum": checksum,
         "media_type": _media_type_for(str(art.get("path", ""))),
+        "limitations": SIDECAR_ARTIFACT_LIMITATIONS,
+        "epistemic_status": ARTIFACT_EPISTEMIC_STATUS,
+        "verification_state": ARTIFACT_VERIFICATION_STATE,
         "benchmark_id": run.id,
         "problem_id": run.problem_id,
         "problem_checksum": run.problem_checksum,
@@ -342,7 +358,6 @@ def canonical_artifact_entry(run: BenchmarkRun, art: dict[str, str]) -> dict[str
             q.evidence.manifest_checksum if (q is not None and q.evidence is not None) else None
         ),
         "policy_snapshot_checksum": str(snap.get("checksum", "")),
-        "epistemic_status": "model-estimate",
     }
 
 
@@ -561,8 +576,11 @@ RECEIPT_ENVELOPE_KEY = "execution_receipt"
 
 ARTIFACT_ENTRY_KEY = "artifact_entry"
 ARTIFACT_MANIFEST_KEY = "artifact_manifest"
+# The receipt envelope must contain EXACTLY these keys (final acceptance, High #1): a missing key
+# or an extra key fails closed, and every duplicated value is cross-checked against the payload.
 _REQUIRED_ENVELOPE_FIELDS = (
     "receipt_id",
+    "receipt_format_version",
     "payload_checksum",
     "signer_key_id",
     "signature_algorithm",
@@ -627,7 +645,7 @@ def authenticate_sidecar_offline(
     env = meta.get(RECEIPT_ENVELOPE_KEY)
     if not isinstance(env, dict):
         return False, "no-receipt-envelope"
-    if any(field not in env for field in _REQUIRED_ENVELOPE_FIELDS):
+    if set(env) != set(_REQUIRED_ENVELOPE_FIELDS):  # missing OR extra key fails closed
         return False, "incomplete-receipt-envelope"
     try:
         receipt = BenchmarkExecutionReceipt.model_validate(
@@ -640,6 +658,15 @@ def authenticate_sidecar_offline(
     except Exception:
         return False, "malformed-receipt"
     p = receipt.payload
+    # Every duplicated envelope value must match the signed payload (a changed receipt id / signer
+    # key id / algorithm / format version in the envelope is rejected).
+    if (
+        env["receipt_id"] != p.receipt_id
+        or env["receipt_format_version"] != p.receipt_format_version
+        or env["signer_key_id"] != p.signer_key_id
+        or env["signature_algorithm"] != p.signature_algorithm
+    ):
+        return False, "envelope-payload-mismatch"
     signer = signers.get(p.signer_key_id)
     if signer is None:
         return False, "unknown-key-id"
@@ -671,6 +698,21 @@ def authenticate_sidecar_offline(
         return False, "entry-ownership"
     if artifact_checksum is not None and entry.get("artifact_checksum") != artifact_checksum:
         return False, "artifact-checksum"
+    # Every duplicated top-level sidecar field must EXACTLY equal the signed canonical entry — no
+    # field may have a default that turns absence into trusted data (final acceptance, High #1).
+    duplicated = {
+        "artifact_type": entry.get("artifact_type"),
+        "checksum": entry.get("artifact_checksum"),
+        "limitations": entry.get("limitations"),
+        "epistemic_status": entry.get("epistemic_status"),
+        "benchmark_id": entry.get("benchmark_id"),
+        "problem_id": entry.get("problem_id"),
+        "problem_checksum": entry.get("problem_checksum"),
+        "policy_snapshot_checksum": entry.get("policy_snapshot_checksum"),
+    }
+    for sidecar_key, entry_value in duplicated.items():
+        if sidecar_key not in meta or meta[sidecar_key] != entry_value:
+            return False, "duplicate-field-mismatch"
     return True, "authentic"
 
 

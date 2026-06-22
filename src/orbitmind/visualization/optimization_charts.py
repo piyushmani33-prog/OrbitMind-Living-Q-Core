@@ -24,12 +24,16 @@ from orbitmind.core.ids import is_valid_uuid
 from orbitmind.core.paths import ensure_within
 from orbitmind.core.timeutils import utcnow
 from orbitmind.optimization.models import BenchmarkRun, SchedulingProblem
+from orbitmind.optimization.receipts import (
+    ARTIFACT_EPISTEMIC_STATUS,
+    ARTIFACT_VERIFICATION_STATE,
+    SIDECAR_ARTIFACT_LIMITATIONS,
+)
 from orbitmind.verification.models import VerificationFinding
 
-_DISCLAIMER = (
-    "model-estimate; bounded simulator benchmark on a tiny fixture. A circuit diagram is "
-    "NOT evidence of quantum advantage. Not a production tasking decision."
-)
+# The sidecar disclaimer is the SAME constant the signed canonical artifact entry binds, so the
+# sidecar's top-level limitations exactly equals the signed entry (final acceptance, High #1).
+_DISCLAIMER = SIDECAR_ARTIFACT_LIMITATIONS
 
 
 @dataclass(frozen=True)
@@ -145,6 +149,7 @@ class OptimizationVisualizationService:
             checksum = sha256_file(path)
             sidecar = path.with_suffix(path.suffix + ".json")
             body: dict[str, object] = {
+                "sidecar_format_version": "1",
                 "artifact_type": art_type,
                 # Ownership + policy anchor authenticated by the verifier (third review, High #4).
                 "benchmark_id": run.id,
@@ -158,8 +163,9 @@ class OptimizationVisualizationService:
                 "created_at": utcnow().isoformat(),
                 "software_versions": software,
                 "seed": seed,
-                "epistemic_status": "model-estimate",
+                "epistemic_status": ARTIFACT_EPISTEMIC_STATUS,
                 "verification_summary": verification,
+                "verification_state": ARTIFACT_VERIFICATION_STATE,
                 "checksum": checksum,
                 "limitations": _DISCLAIMER,
             }

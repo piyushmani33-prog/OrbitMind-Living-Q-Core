@@ -43,6 +43,11 @@ from orbitmind.optimization.policy import (
 )
 from orbitmind.optimization.problem import problem_checksum, variable_order
 from orbitmind.optimization.qubo import build_qubo, qubo_energy
+from orbitmind.optimization.receipts import (
+    RECEIPT_ENVELOPE_KEY,
+    EvidenceReceiptSigner,
+    authenticate_sidecar_offline,
+)
 from orbitmind.optimization.solvers import solve_exact, solve_greedy
 from orbitmind.verification.models import (
     CheckCategory,
@@ -89,8 +94,11 @@ def verify_benchmark(
     run: BenchmarkRun,
     *,
     artifacts_root: Path | None = None,
+    signers: dict[str, EvidenceReceiptSigner] | None = None,
 ) -> list[VerificationFinding]:
-    """Independently re-verify a benchmark run. Returns findings (no failures == clean)."""
+    """Independently re-verify a benchmark run. Returns findings (no failures == clean). When
+    ``signers`` is supplied (read-time), each promoted sidecar is additionally authenticated with
+    the SAME detached authentication offline consumers use (final acceptance, High #1)."""
     findings: list[VerificationFinding] = []
     evaluator = Evaluator(problem)
     order = variable_order(problem)
@@ -193,7 +201,9 @@ def verify_benchmark(
 
     # 24-28. Artifacts: containment, existence, checksum, sidecar, bounded metadata.
     if artifacts_root is not None and run.artifacts:
-        findings.extend(_verify_artifacts(run, problem, artifacts_root, recomputed_checksum))
+        findings.extend(
+            _verify_artifacts(run, problem, artifacts_root, recomputed_checksum, signers)
+        )
 
     # 29. Scientific-integrity: NO affirmative quantum-advantage overclaim in ANY evidence text
     # (limitations, rationale) — limitations/epistemic labels are evidence, not decoration.
@@ -963,7 +973,11 @@ def _contained(root: Path, rel: str) -> Path | None:
 
 
 def _verify_artifacts(
-    run: BenchmarkRun, problem: SchedulingProblem, artifacts_root: Path, problem_checksum_value: str
+    run: BenchmarkRun,
+    problem: SchedulingProblem,
+    artifacts_root: Path,
+    problem_checksum_value: str,
+    signers: dict[str, EvidenceReceiptSigner] | None = None,
 ) -> list[VerificationFinding]:
     out: list[VerificationFinding] = []
     snap_checksum = str((run.policy_snapshot or {}).get("checksum", ""))
@@ -1003,16 +1017,25 @@ def _verify_artifacts(
         meta_ok = False
         evidence_ok = True
         no_forbidden = True
+        # Read-time only: if the sidecar carries the embedded receipt, authenticate it with the
+        # SAME detached routine offline consumers use (final acceptance, High #1). None => not
+        # applicable (no signers, or no embedded receipt yet at build time) => no failure.
+        detached_ok: bool | None = None
         if sidecar_target.is_file():
             try:
                 raw = sidecar_target.read_text("utf-8")
                 meta = json.loads(raw)
+                if signers is not None and isinstance(meta, dict) and RECEIPT_ENVELOPE_KEY in meta:
+                    detached_ok = authenticate_sidecar_offline(
+                        meta, signers, artifact_checksum=actual
+                    )[0]
                 # Every material field must be PRESENT and EQUAL to the trusted value — never a
                 # get(default-to-trusted) that turns a missing field into trusted evidence
                 # (fourth review, High #1). A missing field is a verification failure.
                 snap = run.policy_snapshot or {}
                 algo_version = str(snap.get("comparison_algorithm_version", ""))
                 required_equal = {
+                    "sidecar_format_version": "1",
                     "benchmark_id": run.id,
                     "problem_id": run.problem_id,
                     "problem_checksum": problem_checksum_value,
@@ -1060,6 +1083,17 @@ def _verify_artifacts(
                 severity=Severity.CRITICAL,
             )
         )
+        if detached_ok is not None:
+            out.append(
+                _f(
+                    f"opt.artifact_detached_auth[{rel}]",
+                    detached_ok,
+                    "sidecar passes the SAME full detached authentication as offline consumers "
+                    "(strict envelope + manifest membership + digest + receipt + ownership)",
+                    category=CheckCategory.PROVENANCE,
+                    severity=Severity.CRITICAL,
+                )
+            )
     return out
 
 

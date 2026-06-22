@@ -151,3 +151,68 @@ def test_offline_auth_rejects_sidecar_copied_to_another_artifact(container: AppC
     meta[ARTIFACT_ENTRY_KEY] = other  # a different (but valid-member) artifact's entry
     ok, reason = authenticate_sidecar_offline(meta, signers, artifact_checksum=a_checksum)
     assert not ok and reason == "artifact-checksum"
+
+
+# --- final acceptance, High #1: strict envelope + ONLINE == OFFLINE authentication ---
+@pytest.mark.parametrize(
+    "mutate,expected",
+    [
+        (lambda e: e.pop("receipt_format_version"), "incomplete-receipt-envelope"),
+        (lambda e: e.pop("signer_key_id"), "incomplete-receipt-envelope"),
+        (lambda e: e.__setitem__("smuggled", 1), "incomplete-receipt-envelope"),
+        (lambda e: e.__setitem__("receipt_id", "forged-id"), "envelope-payload-mismatch"),
+        (lambda e: e.__setitem__("signature_algorithm", "RSA"), "envelope-payload-mismatch"),
+        (lambda e: e.__setitem__("receipt_format_version", "9"), "envelope-payload-mismatch"),
+    ],
+)
+def test_offline_auth_rejects_envelope_tamper(container: AppContainer, mutate, expected) -> None:
+    signers, sidecar, _run = _summary_sidecar(container)
+    meta = json.loads(sidecar.read_text("utf-8"))
+    mutate(meta[RECEIPT_ENVELOPE_KEY])
+    ok, reason = authenticate_sidecar_offline(meta, signers)
+    assert not ok and reason == expected
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("checksum", "FORGED"),
+        ("artifact_type", "forged_type"),
+        ("limitations", "rewritten benign caveat"),
+        ("epistemic_status", "verified-fact"),
+        ("sidecar_format_version", "9"),
+    ],
+)
+def test_online_detached_auth_rejects_changed_top_level_field(
+    container: AppContainer, field: str, value: str
+) -> None:
+    # The ONLINE read path runs the SAME detached authentication as offline consumers: a changed
+    # top-level sidecar field is rejected online, not just offline (final acceptance, High #1 #12).
+    problem = container.optimization_service.create_problem(fixtures.fixture("default"))
+    run, _ = container.optimization_service.benchmark(
+        problem.id, seed=7, run_quantum=False, generate_artifacts=True
+    )
+    assert container.optimization_service.read_benchmark_evidence(run.id).authenticated
+    root = container.settings.resolved_artifacts_dir()
+    sidecar = root / (run.artifacts[0]["path"] + ".json")
+    meta = json.loads(sidecar.read_text("utf-8"))
+    meta[field] = value
+    sidecar.write_text(json.dumps(meta), encoding="utf-8")
+    auth = container.optimization_service.read_benchmark_evidence(run.id)
+    assert auth.integrity_failed and not auth.authenticated
+
+
+def test_online_detached_auth_rejects_copied_sidecar_from_other_benchmark(
+    container: AppContainer,
+) -> None:
+    svc = container.optimization_service
+    problem = svc.create_problem(fixtures.fixture("default"))
+    run_a, _ = svc.benchmark(problem.id, seed=7, run_quantum=False, generate_artifacts=True)
+    run_b, _ = svc.benchmark(problem.id, seed=11, run_quantum=False, generate_artifacts=True)
+    root = container.settings.resolved_artifacts_dir()
+    sidecar_a = root / (run_a.artifacts[0]["path"] + ".json")
+    sidecar_b = root / (run_b.artifacts[0]["path"] + ".json")
+    # Overwrite A's first sidecar with B's sidecar content (receipt from another benchmark).
+    sidecar_a.write_text(sidecar_b.read_text("utf-8"), encoding="utf-8")
+    auth = svc.read_benchmark_evidence(run_a.id)
+    assert auth.integrity_failed and not auth.authenticated
