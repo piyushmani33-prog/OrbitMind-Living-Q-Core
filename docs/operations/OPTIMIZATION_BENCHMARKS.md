@@ -74,31 +74,58 @@ never trusted on its own.
   own** memory edges (selected by `benchmark_id` ownership, so one benchmark's tamper cannot
   affect another's edges); if re-auth fails every edge is flagged `integrity_failed` and
   `valid_evidence:false` (the edges + audit history are retained, not deleted).
+- `GET /memory/graph/<id>/neighbors` (generic navigation) is **benchmark- and integrity-aware**:
+  optimization edges are grouped by `benchmark_id`, each benchmark is authenticated independently,
+  and every edge carries `benchmark_id` + `evidence_validity` (valid / integrity-failed /
+  not-optimization). `valid_only=true` filters out integrity-failed edges; the default view keeps
+  them, visibly marked, for forensic history. One benchmark's tamper never marks another's edges.
 
-### Canonical persisted evidence
+### Canonical persisted evidence (independently recomputed)
 Read-time reconstruction loads the authoritative parent evidence AND verifies the persisted
-`quantum_sample_results` child rows for **complete equality** against it — a tampered child copy
-fails closed as `sample-row-mismatch`. **Malformed** persisted JSON (solver/quantum/comparison/
-receipt/policy) is classified as `malformed-persisted-evidence` and returns a bounded integrity
-response, **never an uncaught exception / HTTP 500**. Every evidence text field
-(solver/quantum/comparison limitations + comparison rationale) is re-scanned for overclaims, so
-an affirmative claim injected after acceptance invalidates read authentication. On any integrity
-failure an `optimization.benchmark_integrity_failed` audit is written in its own transaction; the
-original (malformed/tampered) data + audit history are preserved for forensic review.
+`quantum_sample_results` child rows for **complete equality** against it. Every quantum sample
+scalar is **independently recomputed** from the canonical problem + bitstring (selected ids, raw
+mission value, weighted value, feasibility, full violation set, objective, QUBO energy, probability
+from count/authoritative shots) — the recomputed evaluator result, not the persisted evaluation, is
+the reference. The signed receipt's `sample_map_digest` covers the **complete** canonical sample
+record (incl. raw mission value + violation count), and `worker_output_digest` binds the selected
+feasible/infeasible samples, feasible-sample ratio, exact-optimum-in-samples, and objective gap.
+A **coordinated** mutation of the same finite value in BOTH the parent JSON and the child row
+therefore still fails, because the immutable signed receipt represents the original accepted
+evidence. **Malformed** persisted JSON (solver/quantum/comparison/receipt/policy, incl. a missing
+or `{}` thresholds object) is classified as `malformed-persisted-evidence` and returns a bounded
+integrity response, **never an uncaught exception / HTTP 500** and never a synthesized default.
+On any integrity failure an `optimization.benchmark_integrity_failed` audit is written in its own
+transaction; the original data + audit history are preserved for forensic review.
 
-### Offline sidecar authentication
-Each artifact sidecar embeds its **canonical artifact entry** + the **complete canonical
-manifest** + the signed receipt envelope. Offline authentication (no DB) verifies the receipt
-HMAC, proves the entry is a **member** of the signed manifest, recomputes the manifest digest and
-compares it to the receipt payload, binds the entry's ownership ids, and (given the artifact file
-checksum) confirms it matches — a valid receipt with the wrong manifest entry is rejected.
+### Scientific metadata is receipt-bound
+The receipt's `scientific_metadata_digest` binds every material caveat + label: exact/greedy/
+quantum/comparison limitations, comparison rationale, solver/quantum/comparison epistemic status,
+solver/optimality status, and the final conclusion. Changing any of them after acceptance — even a
+**benign** non-overclaiming replacement, or downgrading the epistemic label — invalidates read
+authentication. The bounded overclaim validator additionally runs over every evidence-text field,
+so `quantum advantage verified` fails in any of them.
+
+### Strict signed artifact sidecars (online == offline)
+Each sidecar carries `sidecar_format_version`, its **canonical artifact entry** (id, type,
+checksum, media type, limitations, epistemic status, verification state, ownership ids, evidence/
+policy anchors), the **complete canonical manifest**, and a strict receipt envelope. Authentication
+verifies the receipt HMAC, requires the envelope to contain EXACTLY the expected keys (missing or
+extra fails closed), cross-checks every duplicated envelope value against the signed payload,
+proves the entry is a **member** of the signed manifest, recomputes the manifest digest vs the
+payload, requires every duplicated top-level field to equal the canonical entry, and (given the
+artifact file checksum) confirms it. **Read-time online verification invokes the SAME detached
+routine offline consumers use** — a changed checksum/type/limitations/epistemic-status, a tampered
+envelope, a copied sidecar, or a valid receipt paired with the wrong manifest is rejected both
+ways.
 
 ### PostgreSQL ownership + solver-role enforcement
 PostgreSQL rejects, with transaction recovery: a greedy result in the exact slot (or vice versa),
 a tampered comparison role column, a cross-benchmark association repoint, a child row anchored to
-another problem, and reassigning a benchmark to a different problem — via role-aware composite
-FKs (`benchmark_id, id, problem_id, solver_kind`), CHECK-pinned role columns, and
-`(benchmark_id, problem_id)` ownership FKs to the parent benchmark.
+another problem, reassigning a benchmark to a different problem, and **any solver_runs.solver_kind
+outside `('exact','greedy')`** (`bogus`, `quantum-qaoa`, empty, mis-cased) — via role-aware
+composite FKs (`benchmark_id, id, problem_id, solver_kind`), CHECK-pinned role columns, a
+`CHECK (solver_kind IN ('exact','greedy'))`, and `(benchmark_id, problem_id)` ownership FKs to the
+parent benchmark. Quantum experiments live in their own table.
 
 ## Historical policy verification
 The benchmark carries an immutable, **self-validating** policy snapshot. Verification

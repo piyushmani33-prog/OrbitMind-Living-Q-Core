@@ -89,10 +89,32 @@ The second review hardened this further:
   passes; when false the conclusion is non-positive, the benchmark is persisted unaccepted, and no
   scientific-memory edges are created.
 
+Final acceptance hardened this to **every** scientific sample scalar:
+- **Independent recomputation of every sample value**: from the canonical problem + bitstring the
+  verifier re-derives the selected opportunity ids, raw mission value, weighted value, resource
+  use, feasibility, the complete violation set, objective, QUBO energy, and probability (from the
+  count + authoritative shots). The recomputed evaluator result — never the persisted evaluation —
+  is the reference, so a *coordinated* parent-JSON + child-row mutation of a finite value (e.g.
+  `raw_mission_value`) still fails. The receipt's `sample_map_digest` covers the complete canonical
+  sample record and `worker_output_digest` binds the selected feasible/infeasible samples,
+  feasible-sample ratio, exact-optimum-in-samples, and objective gap.
+- **Receipt-bound scientific metadata**: `scientific_metadata_digest` binds all limitations,
+  comparison rationale, epistemic labels, solver/optimality status, and the final conclusion — any
+  change after acceptance (benign or overclaiming) invalidates authentication.
+- **No persisted-policy defaults**: stored thresholds are read through a strict, no-default DTO; a
+  missing/`{}`/out-of-range thresholds object is malformed evidence, not a synthesized default.
+- **Strict sidecars, online == offline**: read-time verification runs the SAME detached sidecar
+  authentication offline consumers use (strict envelope, manifest membership + digest, duplicated-
+  field equality, ownership).
+- **PostgreSQL**: a `CHECK (solver_kind IN ('exact','greedy'))` rejects bogus persisted roles.
+
 **Remaining limit:** the verifier does not re-execute Aer, so a forgery that *coherently* rewrites
 the configuration seed, the evidence seeds, and the circuit-metadata seeds together is not
-re-derived from fresh sampling (the samples are still independently re-decoded + re-evaluated).
-Re-running the sampler inside verification is out of scope for Phase 4A.
+re-derived from fresh sampling (the samples are still independently re-decoded + re-evaluated, and
+the seeds are signed into the receipt). Re-running the sampler inside verification is out of scope
+for Phase 4A. Evidence is therefore **authenticated**, not unconditionally immutable: the guarantee
+holds against persisted-data tampering, not against an attacker who holds the signing key or
+controls the runtime.
 
 ## Execution-origin authentication (third review)
 Semantic verification (above) proves a benchmark is mathematically self-consistent; it does
