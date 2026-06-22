@@ -428,6 +428,9 @@ class GraphNeighbor(BaseModel):
     direction: str  # "out" | "in"
     entity: EntityReference
     source: str
+    # Owning benchmark for optimization-generated edges (final acceptance, High #3); None for
+    # generic/curated edges.
+    benchmark_id: str | None = None
 
 
 class GraphNeighborsResult(BaseModel):

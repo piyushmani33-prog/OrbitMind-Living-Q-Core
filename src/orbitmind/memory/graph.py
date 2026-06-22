@@ -51,6 +51,7 @@ class GraphService:
                                 kind=EntityKind(edge.to_kind), entity_id=edge.to_id
                             ),
                             source=edge.source,
+                            benchmark_id=edge.benchmark_id,
                         )
                     )
                     if edge.to_id not in visited:
@@ -70,6 +71,7 @@ class GraphService:
                                 kind=EntityKind(edge.from_kind), entity_id=edge.from_id
                             ),
                             source=edge.source,
+                            benchmark_id=edge.benchmark_id,
                         )
                     )
                     if edge.from_id not in visited:

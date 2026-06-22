@@ -9,7 +9,11 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
 
-from orbitmind.api.deps import get_memory_repository, get_memory_service
+from orbitmind.api.deps import (
+    get_memory_repository,
+    get_memory_service,
+    get_optimization_service,
+)
 from orbitmind.api.memory_schemas import (
     ChunkListResponse,
     ClaimDetailResponse,
@@ -18,6 +22,8 @@ from orbitmind.api.memory_schemas import (
     DocumentListResponse,
     EvaluationRequest,
     IngestionResponse,
+    IntegrityAwareNeighbor,
+    IntegrityAwareNeighborsResult,
     MemorySearchResponse,
 )
 from orbitmind.core.errors import NotFoundError
@@ -25,7 +31,6 @@ from orbitmind.memory.evaluation import EvaluationReport
 from orbitmind.memory.ingestion import IngestionRequest
 from orbitmind.memory.models import (
     EvidenceLink,
-    GraphNeighborsResult,
     IngestionRun,
     IngestionStatus,
     ScientificClaim,
@@ -35,11 +40,13 @@ from orbitmind.memory.models import (
 from orbitmind.memory.repository import SqlAlchemyMemoryRepository
 from orbitmind.memory.retrieval import MemorySearchRequest
 from orbitmind.memory.service import MemoryService
+from orbitmind.optimization.service import AuthenticatedBenchmark, OptimizationService
 
 router = APIRouter(prefix="/api/v1/memory", tags=["memory"])
 
 ServiceDep = Annotated[MemoryService, Depends(get_memory_service)]
 RepoDep = Annotated[SqlAlchemyMemoryRepository, Depends(get_memory_repository)]
+OptimizationDep = Annotated[OptimizationService, Depends(get_optimization_service)]
 
 
 # --- ingestion -----------------------------------------------------------
@@ -163,14 +170,54 @@ def link_evidence(payload: EvidenceLink, service: ServiceDep) -> EvidenceLink:
 
 
 # --- graph ---------------------------------------------------------------
-@router.get("/graph/{entity_id}/neighbors", response_model=GraphNeighborsResult)
+@router.get("/graph/{entity_id}/neighbors", response_model=IntegrityAwareNeighborsResult)
 def graph_neighbors(
     entity_id: str,
     service: ServiceDep,
+    optimization: OptimizationDep,
     depth: Annotated[int, Query(ge=1, le=3)] = 1,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
-) -> GraphNeighborsResult:
-    return service.graph_neighbors(entity_id, depth=depth, limit=limit)
+    valid_only: Annotated[bool, Query()] = False,
+) -> IntegrityAwareNeighborsResult:
+    """Generic problem/entity navigation that is BENCHMARK- and INTEGRITY-aware (final acceptance,
+    High #3). Optimization-generated edges are grouped by their owning benchmark, each benchmark is
+    authenticated INDEPENDENTLY, and edges are marked valid / integrity-failed accordingly — one
+    benchmark's tamper never affects another's edges. ``valid_only`` filters out integrity-failed
+    optimization edges (default keeps them, visibly marked, for forensic history)."""
+    result = service.graph_neighbors(entity_id, depth=depth, limit=limit)
+    auth_cache: dict[str, AuthenticatedBenchmark] = {}
+    items: list[IntegrityAwareNeighbor] = []
+    for n in result.neighbors:
+        if n.benchmark_id is None:
+            validity, status = "not-optimization", "ok"
+        else:
+            auth = auth_cache.get(n.benchmark_id)
+            if auth is None:
+                auth = optimization.read_benchmark_evidence(n.benchmark_id)
+                auth_cache[n.benchmark_id] = auth
+            valid = auth.authenticated and not auth.integrity_failed
+            validity = "valid" if valid else "integrity-failed"
+            status = auth.integrity_status
+        items.append(
+            IntegrityAwareNeighbor(
+                edge_kind=n.edge_kind.value,
+                direction=n.direction,
+                entity_kind=n.entity.kind.value,
+                entity_id=n.entity.entity_id,
+                source=n.source,
+                benchmark_id=n.benchmark_id,
+                evidence_validity=validity,
+                integrity_status=status,
+            )
+        )
+    if valid_only:
+        items = [i for i in items if i.evidence_validity != "integrity-failed"]
+    return IntegrityAwareNeighborsResult(
+        entity_id=result.entity_id,
+        depth=result.depth,
+        neighbors=items,
+        truncated=result.truncated,
+    )
 
 
 # --- evaluation ----------------------------------------------------------

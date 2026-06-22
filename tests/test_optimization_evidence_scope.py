@@ -27,6 +27,39 @@ def _graph(client, bid: str) -> dict:
     return client.get(f"/api/v1/optimization/benchmarks/{bid}/evidence-graph").json()
 
 
+def _generic(client, problem_id: str, **params) -> dict:
+    return client.get(f"/api/v1/memory/graph/{problem_id}/neighbors", params=params).json()
+
+
+def test_generic_problem_navigation_is_integrity_aware(client_container) -> None:
+    # Final acceptance, High #3: the GENERIC memory navigation must authenticate each benchmark
+    # independently — tampering A marks only A's edges invalid; B stays valid; both distinguishable.
+    client, container = client_container
+    svc = container.optimization_service
+    problem = svc.create_problem(fixtures.fixture("default"))
+    run_a, _ = svc.benchmark(problem.id, seed=7, run_quantum=False)
+    run_b, _ = svc.benchmark(problem.id, seed=11, run_quantum=False)
+
+    before = _generic(client, problem.id, limit=200)
+    opt_edges = [n for n in before["neighbors"] if n["benchmark_id"] is not None]
+    assert opt_edges and all(n["evidence_validity"] == "valid" for n in opt_edges)
+    assert {run_a.id, run_b.id} <= {n["benchmark_id"] for n in opt_edges}
+
+    _tamper_exact_objective(container, run_a.id)
+    after = _generic(client, problem.id, limit=200)
+    a_edges = [n for n in after["neighbors"] if n["benchmark_id"] == run_a.id]
+    b_edges = [n for n in after["neighbors"] if n["benchmark_id"] == run_b.id]
+    assert a_edges and all(n["evidence_validity"] == "integrity-failed" for n in a_edges)
+    assert b_edges and all(n["evidence_validity"] == "valid" for n in b_edges)
+
+    # valid_only filters out A's invalid edges; B's remain (history still stored).
+    filtered = _generic(client, problem.id, limit=200, valid_only=True)
+    assert all(n["benchmark_id"] != run_a.id for n in filtered["neighbors"] if n["benchmark_id"])
+    assert any(n["benchmark_id"] == run_b.id for n in filtered["neighbors"])
+    # The original edges are retained for forensics (default view still lists A's edges).
+    assert any(n["benchmark_id"] == run_a.id for n in after["neighbors"])
+
+
 def test_evidence_graph_is_benchmark_scoped(client_container) -> None:
     client, container = client_container
     svc = container.optimization_service
