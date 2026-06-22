@@ -36,8 +36,12 @@ from orbitmind.optimization.models import (
 
 RECEIPT_FORMAT_VERSION = "1.0"
 COMPARISON_ALGORITHM_VERSION = "1.0"
+SUPPORTED_RECEIPT_FORMAT_VERSIONS = frozenset({"1.0"})
+SUPPORTED_SIGNATURE_ALGORITHMS = frozenset({"HMAC-SHA256"})
+SUPPORTED_COMPARISON_ALGORITHM_VERSIONS = frozenset({"1.0"})
 # Worker nonce: secrets.token_hex(16) => 16 bytes / 128 bits of entropy => 32 hex chars.
 MIN_NONCE_HEX_LEN = 32
+_SHA256_HEX_LEN = 64
 
 
 def _is_valid_worker_nonce(nonce: object) -> bool:
@@ -145,6 +149,56 @@ def _payload_bytes(payload: ReceiptPayload) -> bytes:
     return json.dumps(
         payload.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
     ).encode("utf-8")
+
+
+def _is_sha256_hex(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == _SHA256_HEX_LEN
+        and value == value.lower()
+        and all(c in "0123456789abcdef" for c in value)
+    )
+
+
+def _strict_schema_reasons(receipt: BenchmarkExecutionReceipt) -> list[str]:
+    """Validate the SEMANTICS of the signed fields, failing closed on unknown/malformed values."""
+    from datetime import datetime
+
+    p = receipt.payload
+    reasons: list[str] = []
+    if p.receipt_format_version not in SUPPORTED_RECEIPT_FORMAT_VERSIONS:
+        reasons.append("format-version")
+    if p.signature_algorithm not in SUPPORTED_SIGNATURE_ALGORITHMS:
+        reasons.append("signature-algorithm")
+    if p.comparison_algorithm_version not in SUPPORTED_COMPARISON_ALGORITHM_VERSIONS:
+        reasons.append("comparison-algorithm")
+    if not isinstance(p.receipt_id, str) or len(p.receipt_id) < 16:
+        reasons.append("receipt-id-format")
+    if not _is_sha256_hex(receipt.signature):
+        reasons.append("signature-encoding")
+    if not _is_sha256_hex(receipt.payload_checksum):
+        reasons.append("payload-checksum-encoding")
+    if not isinstance(p.issued_at, str) or not p.issued_at:
+        reasons.append("issued-at-empty")
+    else:
+        try:
+            ts = datetime.fromisoformat(p.issued_at)
+            if not (2000 <= ts.year <= 2100):
+                reasons.append("issued-at-bounds")
+        except ValueError:
+            reasons.append("issued-at-malformed")
+    if not p.signer_key_id:
+        reasons.append("signer-key-id-empty")
+    # Required complete digest set (each must be a present string of the right shape).
+    for digest in (
+        p.exact_config_checksum,
+        p.greedy_config_checksum,
+        p.worker_output_digest,
+    ):
+        if not _is_sha256_hex(digest):
+            reasons.append("digest-shape")
+            break
+    return reasons
 
 
 def _payload_checksum(payload: ReceiptPayload) -> str:
@@ -319,6 +373,10 @@ def verify_receipt(
             or p.quantum_experiment_id != c.quantum_experiment_id
         ):
             reasons.append("association-ids")
+        # Strict signed-field schema (fourth review, High #2): unknown versions/algorithms,
+        # malformed timestamps/ids/encodings fail CLOSED — interpreting the signed fields, not
+        # merely trusting the HMAC.
+        reasons.extend(_strict_schema_reasons(receipt))
         # Recompute every canonical digest from the current run.
         for name, expected_value in (
             ("evidence-manifest", p.evidence_manifest_checksum),
@@ -330,6 +388,21 @@ def verify_receipt(
         ):
             if expected_value != _recompute_digest(run, name):
                 reasons.append(f"{name}-digest")
+        # Independently recompute the solver/quantum CONFIG checksums from the benchmark — a
+        # signed digest string is not trusted on its own.
+        exact_cfg = _config_checksum(_config_for(run, SolverKind.EXACT)) or ""
+        greedy_cfg = _config_checksum(_config_for(run, SolverKind.GREEDY)) or ""
+        if p.exact_config_checksum != exact_cfg:
+            reasons.append("exact-config-digest")
+        if p.greedy_config_checksum != greedy_cfg:
+            reasons.append("greedy-config-digest")
+        expected_q = (
+            sha256_canonical_json(run.quantum_experiment.configuration.model_dump(mode="json"))
+            if run.quantum_experiment is not None
+            else None
+        )
+        if p.quantum_config_checksum != expected_q:
+            reasons.append("quantum-config-digest")
         # Worker-nonce binding (fourth review, Critical #1/#4). A receipt that claims a quantum
         # experiment must carry the worker's EXACT valid nonce; a classical-only receipt must
         # carry no nonce. A non-completed quantum experiment is never receipt-eligible.
