@@ -57,9 +57,7 @@ def _validate_signing_secret(secret: str) -> bytes:
         raise ValueError("evidence signing key is a known placeholder; refusing to use it")
     material = secret.encode("utf-8")
     if len(material) < _MIN_SIGNING_KEY_BYTES:
-        raise ValueError(
-            f"evidence signing key too short: needs >= {_MIN_SIGNING_KEY_BYTES} bytes"
-        )
+        raise ValueError(f"evidence signing key too short: needs >= {_MIN_SIGNING_KEY_BYTES} bytes")
     return material
 
 

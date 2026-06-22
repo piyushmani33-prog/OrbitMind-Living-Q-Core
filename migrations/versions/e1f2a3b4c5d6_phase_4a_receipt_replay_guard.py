@@ -30,8 +30,12 @@ _TABLE = "benchmark_execution_receipts"
 def upgrade() -> None:
     with op.batch_alter_table(_TABLE) as batch:
         batch.add_column(sa.Column("worker_execution_nonce", sa.String(length=64), nullable=True))
-        batch.create_unique_constraint("uq_execution_receipt_payload_checksum", ["payload_checksum"])
-        batch.create_unique_constraint("uq_execution_receipt_worker_nonce", ["worker_execution_nonce"])
+        batch.create_unique_constraint(
+            "uq_execution_receipt_payload_checksum", ["payload_checksum"]
+        )
+        batch.create_unique_constraint(
+            "uq_execution_receipt_worker_nonce", ["worker_execution_nonce"]
+        )
 
 
 def downgrade() -> None:
