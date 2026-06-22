@@ -6,11 +6,11 @@ performance; it is documentation of the experiment that was run on a simulator.
 
 from __future__ import annotations
 
-import contextlib
 import json
 import platform
 import shutil
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 
 import matplotlib
@@ -30,6 +30,15 @@ _DISCLAIMER = (
     "model-estimate; bounded simulator benchmark on a tiny fixture. A circuit diagram is "
     "NOT evidence of quantum advantage. Not a production tasking decision."
 )
+
+
+@dataclass(frozen=True)
+class CleanupResult:
+    """Outcome of an artifact cleanup, with a bounded, secret-free error report (Medium #4)."""
+
+    success: bool
+    exception_type: str | None = None
+    safe_error_code: str | None = None
 
 
 class OptimizationVisualizationService:
@@ -65,13 +74,24 @@ class OptimizationVisualizationService:
                     json.dumps(embed_receipt(meta, receipt), indent=2), encoding="utf-8"
                 )
 
-    def cleanup(self, scope_id: str) -> None:
-        """Idempotently remove a scope's staging + final artifact directories (Medium #3)."""
+    def cleanup(self, scope_id: str) -> CleanupResult:
+        """Idempotently remove a scope's staging + final artifact directories, REPORTING any real
+        deletion failure instead of suppressing it (fifth review, Medium #4). No ``suppress`` and
+        no ``ignore_errors`` — a failure surfaces as a bounded, secret-free ``CleanupResult``."""
         if not is_valid_uuid(scope_id):
-            return
-        for d in (self._root / ".staging" / scope_id, self._root / scope_id):
-            with contextlib.suppress(Exception):
-                shutil.rmtree(d, ignore_errors=True)
+            return CleanupResult(success=True)
+        try:
+            for d in (self._root / ".staging" / scope_id, self._root / scope_id):
+                if d.exists():
+                    shutil.rmtree(d)  # raises on a genuine deletion failure
+            return CleanupResult(success=True)
+        except Exception as exc:
+            # Safe, bounded report: NO secrets, NO unrestricted local paths.
+            return CleanupResult(
+                success=False,
+                exception_type=type(exc).__name__,
+                safe_error_code="artifact-cleanup-failed",
+            )
 
     def _promote(self, scope_id: str, staging: Path) -> None:
         """Atomically move the staged scope directory into its final location (Medium #3)."""

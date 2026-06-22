@@ -106,8 +106,12 @@ class OptimizationService:
         self._receipt_signers: dict[str, EvidenceReceiptSigner] = receipt_signers or (
             {receipt_signer.key_id: receipt_signer} if receipt_signer is not None else {}
         )
-        from orbitmind.visualization.optimization_charts import OptimizationVisualizationService
+        from orbitmind.visualization.optimization_charts import (
+            CleanupResult,
+            OptimizationVisualizationService,
+        )
 
+        self._cleanup_result_cls = CleanupResult
         self._viz = OptimizationVisualizationService(settings.resolved_artifacts_dir())
 
     # ---- problems ----------------------------------------------------------
@@ -409,27 +413,35 @@ class OptimizationService:
             session.commit()
 
     def _safe_cleanup(self, scope_id: str) -> None:
-        """Best-effort artifact cleanup that NEVER masks the original benchmark error (Medium #3).
-        A cleanup failure is logged + audited (bounded, no secrets) and then swallowed so the
-        caller can re-raise the original exception."""
+        """Best-effort artifact cleanup that NEVER masks the original benchmark error (Medium #3/
+        #4). Cleanup now returns an explicit CleanupResult; a real deletion failure is OBSERVABLE
+        — logged + audited (bounded, no secrets/paths) — then swallowed so the caller re-raises
+        the original exception. A defensive try also guards an unexpected raise from cleanup."""
         try:
-            self._viz.cleanup(scope_id)
-        except Exception as cleanup_exc:
-            detail = {
-                "operation": "benchmark_cleanup",
-                "benchmark_attempt_id": scope_id,
-                "exception_class": type(cleanup_exc).__name__,
-                "error_code": "artifact_cleanup_failed",
-            }
-            _log.error("optimization.benchmark.cleanup_failed", **detail)
-            try:
-                with self._db.session() as session:
-                    SqlAlchemyMissionRepository(session).add_audit_event(
-                        AuditEvent(action=AuditAction.BENCHMARK_FAILED, detail=detail)
-                    )
-                    session.commit()
-            except Exception:  # pragma: no cover - DB itself unavailable; already logged
-                pass
+            result = self._viz.cleanup(scope_id)
+        except Exception as exc:  # pragma: no cover - cleanup is designed not to raise
+            result = self._cleanup_result_cls(
+                success=False,
+                exception_type=type(exc).__name__,
+                safe_error_code="artifact-cleanup-failed",
+            )
+        if result.success:
+            return
+        detail = {
+            "operation": "benchmark_cleanup",
+            "benchmark_attempt_id": scope_id,
+            "exception_class": result.exception_type,
+            "error_code": result.safe_error_code or "artifact_cleanup_failed",
+        }
+        _log.error("optimization.benchmark.cleanup_failed", **detail)
+        try:
+            with self._db.session() as session:
+                SqlAlchemyMissionRepository(session).add_audit_event(
+                    AuditEvent(action=AuditAction.BENCHMARK_FAILED, detail=detail)
+                )
+                session.commit()
+        except Exception:  # pragma: no cover - DB itself unavailable; already logged
+            pass
 
     def _record_failure_audit(
         self,

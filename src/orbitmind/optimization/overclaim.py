@@ -84,11 +84,13 @@ def contains_overclaim(text: str) -> bool:
     negated by a nearby disclaimer."""
     norm = _normalize(text)
     for phrase in _FORBIDDEN_PHRASES:
+        # Evaluate EVERY occurrence (fifth review, Low #1): a negated first occurrence must not
+        # mask a later affirmative one ("no quantum advantage is claimed, but quantum advantage
+        # exists" must fail).
         start = norm.find(phrase)
-        if start == -1:
-            continue
-        preceding = norm[:start].split()
-        if any(neg in preceding[-_NEGATION_WINDOW:] for neg in _NEGATORS):
-            continue  # negated -> permitted disclaimer
-        return True
+        while start != -1:
+            preceding = norm[:start].split()
+            if not any(neg in preceding[-_NEGATION_WINDOW:] for neg in _NEGATORS):
+                return True  # an affirmative, non-negated occurrence remains
+            start = norm.find(phrase, start + 1)
     return False

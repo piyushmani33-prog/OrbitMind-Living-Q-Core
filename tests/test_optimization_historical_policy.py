@@ -162,14 +162,16 @@ def _quantum(obj: float, ratio: float) -> QuantumExperiment:
     )
 
 
-def test_non_finite_quantum_objective_is_infeasible() -> None:
+def test_non_finite_quantum_objective_is_non_positive() -> None:
+    # A non-finite quantum sample objective is malformed auxiliary evidence and is rejected up
+    # front (fifth review, Medium #3) — never a positive conclusion.
     conclusion, _ = conclude(
         exact_result=_exact(5.0),
         greedy_result=None,
         quantum_experiment=_quantum(math.inf, 1.0),
         thresholds=_THRESHOLDS,
     )
-    assert conclusion.value == "quantum-infeasible"
+    assert conclusion.value == "insufficient-evidence"
 
 
 def test_out_of_range_feasible_ratio_is_insufficient() -> None:
@@ -180,3 +182,37 @@ def test_out_of_range_feasible_ratio_is_insufficient() -> None:
         thresholds=_THRESHOLDS,
     )
     assert conclusion.value == "insufficient-evidence"
+
+
+@pytest.mark.parametrize("bad", [math.nan, math.inf, -math.inf])
+def test_malformed_known_optimum_blocks_positive_conclusion(bad: float) -> None:
+    # A valid quantum objective + a malformed known optimum must NOT yield a positive conclusion.
+    exact = _exact(5.0).model_copy(update={"known_optimum": bad})
+    conclusion, rationale = conclude(
+        exact_result=exact,
+        greedy_result=None,
+        quantum_experiment=_quantum(4.0, 1.0),
+        thresholds=_THRESHOLDS,
+    )
+    assert conclusion.value == "insufficient-evidence"
+    assert "malformed auxiliary evidence" in rationale
+
+
+@pytest.mark.parametrize("bad", [math.nan, math.inf])
+def test_malformed_objective_gap_blocks_positive_conclusion(bad: float) -> None:
+    q = _quantum(4.0, 1.0).model_copy(update={"objective_gap": bad})
+    conclusion, _ = conclude(
+        exact_result=_exact(5.0), greedy_result=None, quantum_experiment=q, thresholds=_THRESHOLDS
+    )
+    assert conclusion.value == "insufficient-evidence"
+
+
+def test_valid_zero_values_are_accepted() -> None:
+    # Zero is a valid finite value, not malformed.
+    conclusion, _ = conclude(
+        exact_result=_exact(0.0),
+        greedy_result=None,
+        quantum_experiment=None,
+        thresholds=_THRESHOLDS,
+    )
+    assert conclusion.value == "classical-exact-best"

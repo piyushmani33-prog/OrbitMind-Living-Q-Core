@@ -130,6 +130,46 @@ def test_cleanup_failure_does_not_mask_original_error(
     assert _cleanup_failed_audits(container) >= 1  # cleanup failure recorded separately
 
 
+def test_cleanup_result_reports_real_deletion_failure(
+    container: AppContainer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A GENUINE deletion failure (patched shutil.rmtree) is observable, not suppressed, and the
+    # orphan directory remains visible (fifth review, Medium #4).
+    from orbitmind.core.ids import new_id
+
+    viz = container.optimization_service._viz
+    scope = new_id()
+    target = container.settings.resolved_artifacts_dir() / scope
+    target.mkdir(parents=True, exist_ok=True)
+    (target / "leftover.txt").write_text("orphan", encoding="utf-8")
+
+    def _boom(*_a: object, **_k: object) -> None:
+        raise OSError("permission denied")
+
+    monkeypatch.setattr("orbitmind.visualization.optimization_charts.shutil.rmtree", _boom)
+    result = viz.cleanup(scope)
+    assert result.success is False
+    assert result.exception_type == "OSError"
+    assert result.safe_error_code == "artifact-cleanup-failed"
+    assert target.exists()  # orphan state is visible, not silently hidden
+
+
+def test_real_rmtree_failure_is_audited_without_masking_original(
+    container: AppContainer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    svc = container.optimization_service
+    problem = svc.create_problem(fixtures.fixture("default"))
+    _inject(container, monkeypatch, "persistence")  # original failure
+
+    def _boom(*_a: object, **_k: object) -> None:
+        raise OSError("permission denied")
+
+    monkeypatch.setattr("orbitmind.visualization.optimization_charts.shutil.rmtree", _boom)
+    with pytest.raises(RuntimeError, match="boom-persist"):  # ORIGINAL error preserved
+        svc.benchmark(problem.id, seed=7, run_quantum=False, generate_artifacts=True)
+    assert _cleanup_failed_audits(container) >= 1  # real cleanup failure audited
+
+
 def test_retry_after_failure_succeeds_without_duplicates(
     container: AppContainer, monkeypatch: pytest.MonkeyPatch
 ) -> None:

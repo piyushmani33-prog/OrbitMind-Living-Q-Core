@@ -69,6 +69,43 @@ def proven_optimum(
     return None, None
 
 
+def _malformed_auxiliaries(
+    exact_result: SolverResult | None,
+    greedy_result: SolverResult | None,
+    quantum_experiment: QuantumExperiment | None,
+) -> list[str]:
+    """Names of present-but-non-finite numerical auxiliaries (fifth review, Medium #3)."""
+
+    def bad(value: float | None) -> bool:
+        return value is not None and not math.isfinite(value)
+
+    offenders: list[str] = []
+    for name, r in (("exact", exact_result), ("greedy", greedy_result)):
+        if r is None:
+            continue
+        if bad(r.objective_value):
+            offenders.append(f"{name}.objective_value")
+        if bad(r.known_optimum):
+            offenders.append(f"{name}.known_optimum")
+        if bad(r.objective_gap):
+            offenders.append(f"{name}.objective_gap")
+    q = quantum_experiment
+    if q is not None:
+        if bad(q.objective_gap):
+            offenders.append("quantum.objective_gap")
+        if not math.isfinite(q.feasible_sample_ratio):
+            offenders.append("quantum.feasible_sample_ratio")
+        bf = q.best_feasible_sample
+        if bf is not None:
+            if bad(bf.objective_value):
+                offenders.append("quantum.sample.objective_value")
+            if bad(bf.probability):
+                offenders.append("quantum.sample.probability")
+            if bad(bf.raw_mission_value):
+                offenders.append("quantum.sample.raw_mission_value")
+    return sorted(offenders)
+
+
 def conclude(
     *,
     exact_result: SolverResult | None,
@@ -77,6 +114,15 @@ def conclude(
     thresholds: BenchmarkThresholds,
 ) -> tuple[ComparisonConclusion, str]:
     """Deterministic comparison policy. Pure function over solver/experiment records."""
+    # Validate ALL supplied numerical auxiliaries up front (fifth review, Medium #3): a present
+    # but non-finite value must force a non-positive conclusion, never be silently ignored.
+    malformed = _malformed_auxiliaries(exact_result, greedy_result, quantum_experiment)
+    if malformed:
+        return (
+            ComparisonConclusion.INSUFFICIENT_EVIDENCE,
+            f"malformed auxiliary evidence: {', '.join(malformed)}",
+        )
+
     exact_obj = _classical_objective(exact_result)
     greedy_obj = _classical_objective(greedy_result)
     known_optimum, _selection = proven_optimum(exact_result)

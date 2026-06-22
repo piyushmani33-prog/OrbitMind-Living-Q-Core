@@ -76,3 +76,16 @@ def test_obfuscated_overclaims_still_rejected(text: str) -> None:
 )
 def test_negated_claims_are_permitted(text: str) -> None:
     assert not contains_overclaim(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "no quantum advantage is claimed, but quantum advantage exists",
+        "not faster than classical; however, faster than classical in production",
+        "we make no such disclaimer in this work; quantum supremacy was clearly achieved",
+    ],
+)
+def test_affirmative_after_negated_occurrence_still_rejected(text: str) -> None:
+    # A negated first occurrence must not mask a later affirmative one (fifth review, Low #1).
+    assert contains_overclaim(text)
