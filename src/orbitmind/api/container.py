@@ -6,7 +6,6 @@ dependency wiring so routers depend on interfaces, not construction details.
 
 from __future__ import annotations
 
-import secrets
 import time
 from collections.abc import Callable
 
@@ -43,33 +42,59 @@ from orbitmind.verification.checks import VerificationService
 from orbitmind.visualization.charts import VisualizationService
 from orbitmind.visualization.smallbody_charts import SmallBodyVisualizationService
 
+_MIN_SIGNING_KEY_BYTES = 32
+# Non-empty placeholders that must be REJECTED (an empty key is the legitimate no-signer mode).
+_PLACEHOLDER_KEYS = frozenset(
+    {"changeme", "change-me", "placeholder", "secret", "your-key-here", "example"}
+)
+
+
+def _validate_signing_secret(secret: str) -> bytes:
+    """Validate + decode a configured signing secret (fourth review, High #3). Rejects known
+    placeholders and weak keys (< 32 bytes UTF-8). Errors never echo the secret. Callers must
+    invoke this only for a NON-empty secret (an empty key = legitimate no-signer mode)."""
+    if secret.strip().lower() in _PLACEHOLDER_KEYS:
+        raise ValueError("evidence signing key is a known placeholder; refusing to use it")
+    material = secret.encode("utf-8")
+    if len(material) < _MIN_SIGNING_KEY_BYTES:
+        raise ValueError(
+            f"evidence signing key too short: needs >= {_MIN_SIGNING_KEY_BYTES} bytes"
+        )
+    return material
+
 
 def _build_evidence_signers(
     settings: Settings,
 ) -> tuple[EvidenceReceiptSigner | None, dict[str, EvidenceReceiptSigner]]:
-    """Build the active receipt signer + the verification keyring (incl. retired keys).
-
-    The secret comes ONLY from configuration/env (never the DB). When no key is configured the
-    active signer is None UNLESS this is a test environment, where an ephemeral process-local key
-    is used so the receipt path is exercised end-to-end. In non-test environments without a key,
-    quantum evidence runs diagnostically but is never accepted (provenance unavailable).
+    """Build the active receipt signer + the verification keyring (incl. retired verify-only
+    keys) from configuration ONLY (never the DB; fourth review, High #3). There is NO implicit
+    test-environment signer — tests inject a signer explicitly. With no configured key the active
+    signer is None and accepted quantum evidence is impossible (diagnostic, unaccepted mode).
+    Active and retired key ids must be distinct; key material is never logged.
     """
     signers: dict[str, EvidenceReceiptSigner] = {}
-    for entry in settings.evidence_signing_retired_keys.split(","):
-        if ":" in entry:
-            kid, _, sec = entry.partition(":")
-            kid, sec = kid.strip(), sec.strip()
-            if kid and sec:
-                signers[kid] = HmacSha256EvidenceReceiptSigner(sec.encode("utf-8"), kid)
+    seen_material: set[bytes] = set()
+    for entry in settings.evidence_signing_retired_keys.get_secret_value().split(","):
+        if ":" not in entry:
+            continue
+        kid, _, sec = entry.partition(":")
+        kid, sec = kid.strip(), sec.strip()
+        if not kid:
+            continue
+        material = _validate_signing_secret(sec)
+        if kid in signers or material in seen_material:
+            raise ValueError("duplicate evidence signing key id or material")
+        signers[kid] = HmacSha256EvidenceReceiptSigner(material, kid)
+        seen_material.add(material)
     active: EvidenceReceiptSigner | None = None
-    if settings.evidence_signing_key:
-        active = HmacSha256EvidenceReceiptSigner(
-            settings.evidence_signing_key.encode("utf-8"), settings.evidence_signing_key_id
-        )
-    elif settings.env == "test":
-        active = HmacSha256EvidenceReceiptSigner(secrets.token_bytes(32), "ephemeral-test")
-    if active is not None:
-        signers[active.key_id] = active
+    raw_active = settings.evidence_signing_key.get_secret_value()
+    if raw_active.strip():  # empty = legitimate no-signer mode; non-empty is validated
+        material = _validate_signing_secret(raw_active)
+        kid = settings.evidence_signing_key_id
+        if kid in signers or material in seen_material:
+            raise ValueError("active signing key id or material duplicates a retired key")
+        active = HmacSha256EvidenceReceiptSigner(material, kid)
+        signers[kid] = active
     return active, signers
 
 

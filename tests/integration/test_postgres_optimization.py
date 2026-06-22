@@ -51,6 +51,7 @@ def pg_container(tmp_path: Path) -> AppContainer:
         artifacts_dir=tmp_path / "art",
         cache_dir=tmp_path / "cache",
         env="test",
+        evidence_signing_key="test-evidence-signing-key-0123456789abcdef",
     )
     container = AppContainer(settings=settings)  # no init_storage(): use the migrated schema
     assert container.database.is_postgres

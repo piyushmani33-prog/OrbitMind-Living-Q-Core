@@ -99,6 +99,11 @@ def make_transport(
     return httpx.MockTransport(handler)
 
 
+# A deterministic >=32-byte test signing key, injected explicitly via settings (fourth review,
+# High #3): there is no implicit env==test signer; tests configure one through DI.
+TEST_EVIDENCE_SIGNING_KEY = "test-evidence-signing-key-0123456789abcdef"
+
+
 @pytest.fixture
 def settings(tmp_path: Path) -> Settings:
     """Settings pointing at a temporary SQLite DB and artifacts directory."""
@@ -106,6 +111,7 @@ def settings(tmp_path: Path) -> Settings:
         database_url=f"sqlite:///{(tmp_path / 'test.db').as_posix()}",
         artifacts_dir=tmp_path / "artifacts",
         env="test",
+        evidence_signing_key=TEST_EVIDENCE_SIGNING_KEY,
     )
 
 
