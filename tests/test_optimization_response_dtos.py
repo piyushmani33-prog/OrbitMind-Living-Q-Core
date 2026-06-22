@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
+from orbitmind.api.optimization_schemas import BenchmarkEvidenceGraphResponse, EvidenceEdgeView
 from orbitmind.api.optimization_views import (
     ArtifactView,
     BenchmarkView,
@@ -16,6 +17,7 @@ from orbitmind.api.optimization_views import (
     OpportunityView,
     ProblemView,
     QuantumExperimentView,
+    RunSummaryView,
     SolverResultView,
 )
 
@@ -90,6 +92,24 @@ _SNAPSHOTS = {
         "limitations",
     },
     ArtifactView: {"id", "type", "checksum", "media_type", "created_at", "epistemic_status"},
+    RunSummaryView: {
+        "id",
+        "problem_checksum",
+        "verified",
+        "integrity_failed",
+        "conclusion",
+        "created_at",
+        "has_quantum",
+        "receipt_status",
+        "artifact_count",
+    },
+    EvidenceEdgeView: {
+        "edge_kind",
+        "direction",
+        "entity_kind",
+        "entity_id",
+        "integrity_failed",
+    },
     BenchmarkView: {
         "id",
         "problem_checksum",
@@ -151,3 +171,16 @@ def test_problem_response_hides_limits(client: TestClient) -> None:
     got = client.get(f"/api/v1/optimization/problems/{pid}").json()
     assert "limits" not in got  # execution bounds are internal
     assert got["opportunities"][0]["window"]["start"]  # reviewed shape preserved
+
+
+def test_openapi_pins_run_summary_and_evidence_edge_surface(client: TestClient) -> None:
+    schemas = client.get("/openapi.json").json()["components"]["schemas"]
+    # The run-list summary surface is the strict, path-free DTO (Low #2).
+    assert set(schemas["RunSummaryView"]["properties"]) == set(RunSummaryView.model_fields)
+    assert "path" not in schemas["RunSummaryView"]["properties"]
+    # The evidence-graph edge surface carries integrity, never paths/config (finding #30).
+    edge_props = set(schemas["EvidenceEdgeView"]["properties"])
+    assert edge_props == set(EvidenceEdgeView.model_fields)
+    assert {"path", "sidecar_path", "config"} & edge_props == set()
+    assert "BenchmarkEvidenceGraphResponse" in schemas
+    assert "integrity_failed" in schemas[BenchmarkEvidenceGraphResponse.__name__]["properties"]
