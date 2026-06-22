@@ -144,7 +144,7 @@ def test_offline_auth_rejects_incomplete_receipt_envelope(container: AppContaine
 def test_offline_auth_rejects_sidecar_copied_to_another_artifact(container: AppContainer) -> None:
     # Splice artifact B's entry into A's sidecar: B's entry is a valid member, but the supplied
     # artifact file checksum (A's) no longer matches -> rejected.
-    signers, sidecar, run = _summary_sidecar(container)
+    signers, sidecar, _run = _summary_sidecar(container)
     meta = json.loads(sidecar.read_text("utf-8"))
     a_checksum = meta[ARTIFACT_ENTRY_KEY]["artifact_checksum"]
     other = next(e for e in meta[ARTIFACT_MANIFEST_KEY] if e["artifact_checksum"] != a_checksum)
