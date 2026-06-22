@@ -528,6 +528,7 @@ class OptimizationService:
                     edge_kind=GraphEdgeKind.SOLVED_BY,
                     to_ref=run_ref,
                     source="phase4a-benchmark",
+                    benchmark_id=run.id,
                 )
             )
             if result.schedule is not None:
@@ -537,6 +538,7 @@ class OptimizationService:
                         edge_kind=GraphEdgeKind.PRODUCED,
                         to_ref=EntityReference(kind=EntityKind.SCHEDULE, entity_id=result.id),
                         source="phase4a-benchmark",
+                        benchmark_id=run.id,
                     )
                 )
             if result.solver_kind == SolverKind.EXACT:
@@ -550,6 +552,7 @@ class OptimizationService:
                     edge_kind=GraphEdgeKind.COMPARED_AGAINST,
                     to_ref=EntityReference(kind=EntityKind.SOLVER_RUN, entity_id=exact_id),
                     source="phase4a-benchmark",
+                    benchmark_id=run.id,
                 )
             )
         if run.comparison is not None:
@@ -565,8 +568,24 @@ class OptimizationService:
                             kind=EntityKind.OPTIMIZATION_ARTIFACT, entity_id=art["checksum"]
                         ),
                         source="phase4a-benchmark",
+                        benchmark_id=run.id,
                     )
                 )
+
+    def benchmark_evidence_edges(self, benchmark_id: str, limit: int = 200) -> list[dict[str, str]]:
+        """Return ONLY the memory edges created by this benchmark (fifth review, High #3), so one
+        benchmark's integrity status never affects another benchmark's edges."""
+        with self._db.session() as session:
+            rows = SqlAlchemyMemoryRepository(session).edges_for_benchmark(benchmark_id, limit)
+            return [
+                {
+                    "edge_kind": r.edge_kind,
+                    "direction": "out",
+                    "entity_kind": r.to_kind,
+                    "entity_id": r.to_id,
+                }
+                for r in rows
+            ]
 
     # ---- reads (re-authenticated; fourth review, Critical #2) ---------------
     def _authenticate(

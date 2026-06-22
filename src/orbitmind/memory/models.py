@@ -418,6 +418,8 @@ class GraphEdge(BaseModel):
     to_ref: EntityReference
     source: str = "curated"
     weight: float | None = None
+    # Benchmark that created this edge, when applicable (fifth review, High #3).
+    benchmark_id: str | None = None
     created_at: datetime = Field(default_factory=utcnow)
 
 

@@ -6,7 +6,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
 
-from orbitmind.api.deps import get_memory_service, get_optimization_service
+from orbitmind.api.deps import get_optimization_service
 from orbitmind.api.optimization_schemas import (
     ArtifactListResponse,
     BenchmarkEvidenceGraphResponse,
@@ -35,7 +35,6 @@ from orbitmind.core.errors import (
     NotFoundError,
     ValidationError,
 )
-from orbitmind.memory.service import MemoryService
 from orbitmind.optimization import fixtures
 from orbitmind.optimization.models import (
     QuantumExperiment,
@@ -79,7 +78,6 @@ def _summary(auth: AuthenticatedBenchmark) -> RunSummaryView:
 router = APIRouter(prefix="/api/v1/optimization", tags=["optimization"])
 
 ServiceDep = Annotated[OptimizationService, Depends(get_optimization_service)]
-MemoryDep = Annotated[MemoryService, Depends(get_memory_service)]
 
 
 @router.post("/problems", response_model=ProblemView)
@@ -199,30 +197,30 @@ def get_benchmark(benchmark_id: str, service: ServiceDep) -> BenchmarkReadRespon
     "/benchmarks/{benchmark_id}/evidence-graph", response_model=BenchmarkEvidenceGraphResponse
 )
 def get_benchmark_evidence_graph(
-    benchmark_id: str, service: ServiceDep, memory: MemoryDep
+    benchmark_id: str, service: ServiceDep
 ) -> BenchmarkEvidenceGraphResponse:
-    """Navigate the benchmark's memory edges, RE-AUTHENTICATING the benchmark first (fourth
-    review, finding #30). If re-auth fails, the edges are marked integrity_failed and not treated
-    as valid evidence; the integrity audit is written by the read and the edge/audit history is
-    retained (never deleted)."""
+    """Navigate ONLY the requested benchmark's OWN memory edges, RE-AUTHENTICATING that benchmark
+    first (fifth review, High #3; fourth review, finding #30). Edges are selected by benchmark
+    ownership, so one benchmark's tamper never marks another benchmark's edges. If re-auth fails,
+    this benchmark's edges are marked integrity_failed and not treated as valid evidence; the
+    integrity audit is written by the read and the edge/audit history is retained."""
     auth = service.read_benchmark_evidence(benchmark_id)
     if not auth.found:
         raise NotFoundError("benchmark not found")
-    if auth.run is None or auth.run.problem_id is None:
+    if auth.run is None:
         # Malformed persisted evidence: no edges are treated as valid; bounded integrity response.
         return BenchmarkEvidenceGraphResponse(
             benchmark_id=benchmark_id, integrity_failed=True, valid_evidence=False, edges=[]
         )
-    result = memory.graph_neighbors(auth.run.problem_id, depth=1, limit=200)
     edges = [
         EvidenceEdgeView(
-            edge_kind=n.edge_kind.value,
-            direction=n.direction,
-            entity_kind=n.entity.kind.value,
-            entity_id=n.entity.entity_id,
+            edge_kind=e["edge_kind"],
+            direction=e["direction"],
+            entity_kind=e["entity_kind"],
+            entity_id=e["entity_id"],
             integrity_failed=auth.integrity_failed,
         )
-        for n in result.neighbors
+        for e in service.benchmark_evidence_edges(benchmark_id)
     ]
     return BenchmarkEvidenceGraphResponse(
         benchmark_id=benchmark_id,
