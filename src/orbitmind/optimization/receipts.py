@@ -272,18 +272,14 @@ def scientific_metadata_digest(run: BenchmarkRun) -> str:
         for r in run.solver_results
     )
     q = run.quantum_experiment
-    quantum = (
-        [q.limitations, q.epistemic_status.value, q.status.value] if q is not None else None
-    )
+    quantum = [q.limitations, q.epistemic_status.value, q.status.value] if q is not None else None
     c = run.comparison
     comparison = (
         [c.limitations, c.rationale, c.epistemic_status.value, c.conclusion.value]
         if c is not None
         else None
     )
-    return sha256_canonical_json(
-        {"solvers": solvers, "quantum": quantum, "comparison": comparison}
-    )
+    return sha256_canonical_json({"solvers": solvers, "quantum": quantum, "comparison": comparison})
 
 
 def selected_parameter_digest(run: BenchmarkRun) -> str | None:
