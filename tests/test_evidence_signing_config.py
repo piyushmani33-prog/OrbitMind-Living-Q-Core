@@ -54,6 +54,49 @@ def test_duplicate_active_and_retired_id_rejected() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    "retired",
+    [
+        "no-colon-here",  # missing separator
+        ":secretwithoutidsecretwithoutid00",  # blank id
+        "kid-without-secret:",  # blank secret
+        f"kid1:{_OTHER},kid1:{_GOOD}",  # duplicate key id
+        f"a:{_OTHER},b:{_OTHER}",  # duplicate material
+        "weakid:short",  # weak retired key
+        "phid:changeme",  # placeholder retired key
+    ],
+)
+def test_malformed_retired_config_fails_startup(retired: str) -> None:
+    # Malformed retired-key configuration must FAIL startup, never be silently skipped (Low #2).
+    with pytest.raises(ValueError):
+        _build_evidence_signers(
+            _settings(evidence_signing_key=_GOOD, evidence_signing_retired_keys=retired)
+        )
+
+
+def test_blank_active_key_id_with_configured_key_fails_startup() -> None:
+    with pytest.raises(ValueError):
+        _build_evidence_signers(_settings(evidence_signing_key=_GOOD, evidence_signing_key_id="  "))
+
+
+def test_active_id_repeated_in_retired_fails_startup() -> None:
+    with pytest.raises(ValueError):
+        _build_evidence_signers(
+            _settings(
+                evidence_signing_key=_GOOD,
+                evidence_signing_key_id="shared",
+                evidence_signing_retired_keys=f"shared:{_OTHER}",
+            )
+        )
+
+
+def test_trailing_comma_in_retired_is_tolerated() -> None:
+    active, signers = _build_evidence_signers(
+        _settings(evidence_signing_key=_GOOD, evidence_signing_retired_keys=f"old:{_OTHER},")
+    )
+    assert active is not None and "old" in signers
+
+
 def test_secret_is_redacted_in_repr_and_dump() -> None:
     s = _settings(evidence_signing_key=_GOOD)
     assert _GOOD not in repr(s)

@@ -72,25 +72,38 @@ def _build_evidence_signers(
     """
     signers: dict[str, EvidenceReceiptSigner] = {}
     seen_material: set[bytes] = set()
-    for entry in settings.evidence_signing_retired_keys.get_secret_value().split(","):
-        if ":" not in entry:
+    # Malformed retired-key entries FAIL STARTUP — they are never silently skipped (fifth review,
+    # Low #2). Only purely blank segments (e.g. a trailing comma) are tolerated.
+    for raw_entry in settings.evidence_signing_retired_keys.get_secret_value().split(","):
+        entry = raw_entry.strip()
+        if not entry:
             continue
+        if ":" not in entry:
+            raise ValueError("malformed retired signing key entry (expected 'key-id:secret')")
         kid, _, sec = entry.partition(":")
         kid, sec = kid.strip(), sec.strip()
         if not kid:
-            continue
-        material = _validate_signing_secret(sec)
-        if kid in signers or material in seen_material:
-            raise ValueError("duplicate evidence signing key id or material")
+            raise ValueError("retired signing key entry has a blank key id")
+        if not sec:
+            raise ValueError("retired signing key entry has a blank secret")
+        material = _validate_signing_secret(sec)  # rejects placeholder/weak material
+        if kid in signers:
+            raise ValueError("duplicate evidence signing key id")
+        if material in seen_material:
+            raise ValueError("duplicate evidence signing key material")
         signers[kid] = HmacSha256EvidenceReceiptSigner(material, kid)
         seen_material.add(material)
     active: EvidenceReceiptSigner | None = None
     raw_active = settings.evidence_signing_key.get_secret_value()
-    if raw_active.strip():  # empty = legitimate no-signer mode; non-empty is validated
+    if raw_active.strip():  # empty = legitimate no-signer mode; non-empty is fully validated
+        kid = settings.evidence_signing_key_id.strip()
+        if not kid:
+            raise ValueError("an active signing key is configured but its key id is blank")
         material = _validate_signing_secret(raw_active)
-        kid = settings.evidence_signing_key_id
-        if kid in signers or material in seen_material:
-            raise ValueError("active signing key id or material duplicates a retired key")
+        if kid in signers:
+            raise ValueError("active signing key id duplicates a retired key id")
+        if material in seen_material:
+            raise ValueError("active signing key material duplicates a retired key")
         active = HmacSha256EvidenceReceiptSigner(material, kid)
         signers[kid] = active
     return active, signers
