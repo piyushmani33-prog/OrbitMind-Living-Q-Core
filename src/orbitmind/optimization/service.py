@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict
 
 from orbitmind.core.config import Settings
 from orbitmind.core.errors import NotFoundError, ValidationError
+from orbitmind.core.ids import new_id
 from orbitmind.core.logging import get_logger
 from orbitmind.governance.audit import AuditAction, AuditEvent
 from orbitmind.memory.models import (
@@ -261,23 +262,32 @@ class OptimizationService:
         generate_artifacts: bool = False,
         policy_id: str = DEFAULT_POLICY_ID,
     ) -> tuple[BenchmarkRun, list[VerificationFinding]]:
-        problem = self._require_problem(problem_id)
-        policy = get_policy(policy_id)
-        if policy is None:
-            raise ValidationError(f"unknown comparison policy id '{policy_id}'")
-        run = run_benchmark(
-            problem,
-            seed=seed,
-            shots=shots,
-            optimizer_iterations=optimizer_iterations,
-            qaoa_layers=qaoa_layers,
-            timeout_seconds=timeout_seconds,
-            policy=policy,
-            run_quantum=run_quantum,
-        )
+        # The failure-audit boundary begins BEFORE problem retrieval / policy resolution /
+        # construction (fourth review, Medium #3) — a failure in ANY stage yields a bounded
+        # failure audit under a stable attempt id, not just failures after construction.
         artifacts_root = self._settings.resolved_artifacts_dir()
-        stage = "verification"
+        attempt_id = new_id()
+        problem: SchedulingProblem | None = None
+        run: BenchmarkRun | None = None
+        stage = "problem-retrieval"
         try:
+            problem = self._require_problem(problem_id)
+            stage = "policy-resolution"
+            policy = get_policy(policy_id)
+            if policy is None:
+                raise ValidationError(f"unknown comparison policy id '{policy_id}'")
+            stage = "construction"
+            run = run_benchmark(
+                problem,
+                seed=seed,
+                shots=shots,
+                optimizer_iterations=optimizer_iterations,
+                qaoa_layers=qaoa_layers,
+                timeout_seconds=timeout_seconds,
+                policy=policy,
+                run_quantum=run_quantum,
+            )
+            stage = "verification"
             findings = verify_benchmark(problem, run)
             if generate_artifacts:
                 stage = "artifact-generation"
@@ -315,10 +325,18 @@ class OptimizationService:
             self._persist_benchmark(run, problem, findings, verified, receipt)
         except Exception as exc:
             # Idempotent cleanup of any staged/promoted artifacts + a durable failure audit in a
-            # SEPARATE transaction (the main one rolled back) — review Medium #3.
-            if generate_artifacts:
-                self._viz.cleanup(run.id)
-            self._record_failure_audit(stage=stage, benchmark_id=run.id, problem=problem, exc=exc)
+            # SEPARATE transaction (the main one rolled back) — review Medium #3. A cleanup
+            # failure is logged + audited but NEVER masks the original error.
+            scope_id = run.id if run is not None else attempt_id
+            if generate_artifacts and run is not None:
+                self._safe_cleanup(scope_id)
+            self._record_failure_audit(
+                stage=stage,
+                benchmark_id=scope_id,
+                problem=problem,
+                problem_id=problem_id,
+                exc=exc,
+            )
             raise
 
         _log.info(
@@ -382,16 +400,46 @@ class OptimizationService:
             )
             session.commit()
 
+    def _safe_cleanup(self, scope_id: str) -> None:
+        """Best-effort artifact cleanup that NEVER masks the original benchmark error (Medium #3).
+        A cleanup failure is logged + audited (bounded, no secrets) and then swallowed so the
+        caller can re-raise the original exception."""
+        try:
+            self._viz.cleanup(scope_id)
+        except Exception as cleanup_exc:
+            detail = {
+                "operation": "benchmark_cleanup",
+                "benchmark_attempt_id": scope_id,
+                "exception_class": type(cleanup_exc).__name__,
+                "error_code": "artifact_cleanup_failed",
+            }
+            _log.error("optimization.benchmark.cleanup_failed", **detail)
+            try:
+                with self._db.session() as session:
+                    SqlAlchemyMissionRepository(session).add_audit_event(
+                        AuditEvent(action=AuditAction.BENCHMARK_FAILED, detail=detail)
+                    )
+                    session.commit()
+            except Exception:  # pragma: no cover - DB itself unavailable; already logged
+                pass
+
     def _record_failure_audit(
-        self, *, stage: str, benchmark_id: str, problem: SchedulingProblem, exc: Exception
+        self,
+        *,
+        stage: str,
+        benchmark_id: str,
+        problem: SchedulingProblem | None,
+        problem_id: str,
+        exc: Exception,
     ) -> None:
         """Persist a bounded failure audit in its own short transaction; log-only if the DB is
-        unavailable. Contains NO secrets, signing key, or raw environment values (Medium #3)."""
+        unavailable. Contains NO secrets, signing key, or raw environment values (Medium #3).
+        ``problem`` may be None when the failure occurred before/while retrieving it."""
         detail = {
             "operation": "benchmark",
             "benchmark_attempt_id": benchmark_id,
-            "problem_id": problem.id,
-            "problem_checksum": problem.checksum,
+            "problem_id": problem.id if problem is not None else problem_id,
+            "problem_checksum": problem.checksum if problem is not None else None,
             "stage": stage,
             "exception_class": type(exc).__name__,
             "error_code": "benchmark_failed",
