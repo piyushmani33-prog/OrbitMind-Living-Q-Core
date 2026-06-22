@@ -94,6 +94,50 @@ the configuration seed, the evidence seeds, and the circuit-metadata seeds toget
 re-derived from fresh sampling (the samples are still independently re-decoded + re-evaluated).
 Re-running the sampler inside verification is out of scope for Phase 4A.
 
+## Execution-origin authentication (third review)
+Semantic verification (above) proves a benchmark is mathematically self-consistent; it does
+**not** prove the recorded samples came from an OrbitMind-controlled execution. A signed
+**benchmark execution receipt** (`optimization/receipts.py`) closes that gap.
+
+- **Trust boundary.** *Trusted:* the running OrbitMind process, its isolated quantum worker,
+  the signing component, the signing key (supplied OUTSIDE the database, via env), and the
+  reviewed code + policy registry. *Not trusted as evidence by itself:* persisted rows, API
+  data, artifact JSON, sidecars, mutable storage, imported records. *Not protected against:*
+  an attacker controlling the runtime, possessing the key, or replacing both code and signing
+  infrastructure.
+- **What it proves.** HMAC-SHA256 over a canonical payload (benchmark/problem ids + checksums,
+  policy snapshot checksum, association ids, config checksums, evidence-manifest checksum,
+  sample-map / parameter / circuit / software / artifact digests, worker nonce + output
+  digest). It proves a trusted runtime holding the secret issued the receipt **and** that the
+  persisted run still matches what was signed. It does **NOT** prove Qiskit/Aer is correct or
+  that any quantum advantage exists. The secret is never persisted, logged, returned, or
+  committed.
+- **Release gate.** Accepted quantum evidence requires a configured signer. With no signer the
+  computation runs diagnostically but stays **unaccepted** (provenance unavailable): a
+  non-positive conclusion, no scientific-memory edges, and the response reports it. A failed
+  receipt (changed payload/signature, unknown key, wrong benchmark/problem/policy/association,
+  reuse, wrong worker/artifact digest) blocks acceptance.
+- **Key rotation.** A signer key id is recorded; retired keys remain in the verification
+  keyring so historical receipts verify after a controlled rotation.
+
+## Cross-benchmark ownership + policy snapshot (third review)
+Every result carries server-set ownership anchors (benchmark id + internal problem id) and the
+comparison's association ids are bound to same-benchmark rows by composite database FKs
+(`uq_solver_runs_owner`, `fk_comparison_*_owner`). The verifier rejects cross-benchmark
+splicing, a different problem id under an identical checksum, nonexistent ids, and wrong solver
+kinds. The requested policy is anchored as a self-validating snapshot on `benchmark_runs`
+(not only the comparison); the comparison must match the parent anchor, so a coherent
+comparison-only `strict-v1`→`lenient-v1` swap fails. A persisted snapshot verifies against its
+own checksum, so an old benchmark stays verifiable after a registry retirement.
+
+## Sidecar authentication + failure audits (third review)
+Quantum sidecars are authenticated field-by-field against the rebuilt evidence manifest and the
+trusted run's ownership/policy anchors (not merely required to exist); a bounded overclaim
+validator rejects affirmative misleading claims while permitting explicit disclaimers. Artifacts
+are generated in a staging directory and atomically promoted on success; any failure removes the
+staging/final directories (no orphans) and records a durable, secret-free failure audit in a
+separate transaction.
+
 ## Observed bounded results (default fixtures, seed 7)
 - `default` → `quantum-competitive` (matched optimum 10; feasible-sample ratio 1.0).
 - `resource-bound` → `quantum-competitive` (matched optimum 15; feasible-sample ratio

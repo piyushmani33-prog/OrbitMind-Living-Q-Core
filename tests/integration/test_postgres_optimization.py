@@ -93,9 +93,35 @@ def test_cross_benchmark_comparison_update_is_rejected(pg_container: AppContaine
     assert _exec(pg_container, "SELECT 1")[0][0] == 1  # transaction recovers
 
 
+def test_execution_receipt_persists_on_postgres(pg_container: AppContainer) -> None:
+    """A verified benchmark persists a signed execution receipt (signer key id stored, secret
+    never) and is marked accepted on live PostgreSQL (third review, High #1)."""
+    svc = pg_container.optimization_service
+    problem = svc.create_problem(fixtures.fixture("default"))
+    run, findings = svc.benchmark(problem.id, seed=7, run_quantum=False)
+    assert all(f.passed for f in findings)
+    rows = _exec(
+        pg_container,
+        f"SELECT signer_key_id, signature, payload_checksum FROM "
+        f"benchmark_execution_receipts WHERE benchmark_id='{run.id}'",
+    )
+    assert len(rows) == 1 and rows[0][0] and rows[0][1] and rows[0][2]
+    accepted = _exec(
+        pg_container, f"SELECT verification_passed FROM benchmark_runs WHERE id='{run.id}'"
+    )[0][0]
+    assert accepted is True
+    # The signing secret is never stored anywhere in the receipt row.
+    payload = _exec(
+        pg_container,
+        "SELECT payload_json::text FROM benchmark_execution_receipts "
+        f"WHERE benchmark_id='{run.id}'",
+    )[0][0]
+    assert "secret" not in payload.lower()
+
+
 def test_schema_is_at_corrective_head_with_constraints(pg_container: AppContainer) -> None:
     head = _exec(pg_container, "SELECT version_num FROM alembic_version")[0][0]
-    assert head == "a3f8c1d2e4b5"
+    assert head == "c9a1b3e5d7f2"
     # Foreign keys created by the corrective migration are present.
     fks = {
         r[0]
