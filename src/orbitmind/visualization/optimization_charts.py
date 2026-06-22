@@ -59,19 +59,26 @@ class OptimizationVisualizationService:
         staging.mkdir(parents=True, exist_ok=True)
         return staging
 
-    def embed_receipt_into_sidecars(self, artifacts: list[dict[str, str]], receipt: object) -> None:
-        """Embed the signed execution receipt into every promoted sidecar for offline
-        authentication (fourth review, High #1). Receipt bytes are EXCLUDED from the digests the
-        receipt itself signs, so this does not invalidate the receipt."""
-        from orbitmind.optimization.receipts import BenchmarkExecutionReceipt, embed_receipt
+    def embed_receipt_into_sidecars(self, run: object, receipt: object) -> None:
+        """Embed each artifact's canonical entry + the complete canonical manifest + the signed
+        receipt into every promoted sidecar for offline authentication (fifth review, High #1).
+        Receipt/entry/manifest bytes are EXCLUDED from the digests the receipt itself signs, so
+        this does not invalidate the receipt."""
+        from orbitmind.optimization.models import BenchmarkRun
+        from orbitmind.optimization.receipts import (
+            BenchmarkExecutionReceipt,
+            embed_sidecar_evidence,
+        )
 
         assert isinstance(receipt, BenchmarkExecutionReceipt)
-        for art in artifacts:
+        assert isinstance(run, BenchmarkRun)
+        for art in run.artifacts:
             sidecar = ensure_within(self._root, self._root / art["sidecar_path"])
             if sidecar.is_file():
                 meta = json.loads(sidecar.read_text("utf-8"))
                 sidecar.write_text(
-                    json.dumps(embed_receipt(meta, receipt), indent=2), encoding="utf-8"
+                    json.dumps(embed_sidecar_evidence(meta, run, art, receipt), indent=2),
+                    encoding="utf-8",
                 )
 
     def cleanup(self, scope_id: str) -> CleanupResult:

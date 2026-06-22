@@ -327,11 +327,12 @@ class OptimizationService:
                     }
                 )
 
-            # Embed the signed receipt into the promoted sidecars for offline authentication
-            # (fourth review, High #1). Receipt bytes are excluded from what the receipt signs.
+            # Embed each artifact's canonical entry + the complete manifest + the signed receipt
+            # into the promoted sidecars for offline authentication (fifth review, High #1).
+            # These bytes are excluded from what the receipt signs.
             if verified and receipt is not None and run.artifacts:
                 stage = "artifact-receipt-embed"
-                self._viz.embed_receipt_into_sidecars(run.artifacts, receipt)
+                self._viz.embed_receipt_into_sidecars(run, receipt)
 
             stage = "persistence"
             self._persist_benchmark(run, problem, findings, verified, receipt)

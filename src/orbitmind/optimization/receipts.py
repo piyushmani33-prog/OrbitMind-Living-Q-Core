@@ -264,12 +264,60 @@ def software_version_digest(run: BenchmarkRun) -> str | None:
     return sha256_canonical_json(q.software_versions)
 
 
+_MEDIA_TYPES = {".png": "image/png", ".json": "application/json", ".txt": "text/plain"}
+
+
+def _media_type_for(path: str) -> str:
+    for ext, media in _MEDIA_TYPES.items():
+        if path.endswith(ext):
+            return media
+    return "application/octet-stream"
+
+
+def canonical_artifact_entry(run: BenchmarkRun, art: dict[str, str]) -> dict[str, Any]:
+    """One strict, signed artifact manifest entry (fifth review, High #1) — binds the artifact's
+    identity + type + checksum + media type to the benchmark/problem/result ownership and the
+    evidence/policy anchors. Receipt-envelope fields are deliberately excluded (the sidecar
+    carries the receipt separately) to keep the digest non-circular."""
+    c = run.comparison
+    q = run.quantum_experiment
+    snap = run.policy_snapshot or {}
+    return {
+        "artifact_type": str(art.get("type", "")),
+        "artifact_checksum": str(art.get("checksum", "")),
+        "media_type": _media_type_for(str(art.get("path", ""))),
+        "benchmark_id": run.id,
+        "problem_id": run.problem_id,
+        "problem_checksum": run.problem_checksum,
+        "exact_result_id": c.exact_result_id if c is not None else None,
+        "greedy_result_id": c.greedy_result_id if c is not None else None,
+        "quantum_experiment_id": (
+            (c.quantum_experiment_id if c is not None else None)
+            or (q.id if q is not None else None)
+        ),
+        "evidence_manifest_checksum": (
+            q.evidence.manifest_checksum if (q is not None and q.evidence is not None) else None
+        ),
+        "policy_snapshot_checksum": str(snap.get("checksum", "")),
+        "epistemic_status": "model-estimate",
+    }
+
+
+def canonical_artifact_manifest(run: BenchmarkRun) -> list[dict[str, Any]]:
+    """The ordered collection of canonical artifact entries the receipt digest is computed over."""
+    return [canonical_artifact_entry(run, a) for a in run.artifacts]
+
+
+def _manifest_digest(manifest: list[dict[str, Any]]) -> str:
+    return sha256_canonical_json(
+        sorted(manifest, key=lambda e: str(e.get("artifact_checksum", "")))
+    )
+
+
 def artifact_manifest_digest(run: BenchmarkRun) -> str | None:
     if not run.artifacts:
         return None
-    return sha256_canonical_json(
-        sorted([a.get("type", ""), a.get("checksum", "")] for a in run.artifacts)
-    )
+    return _manifest_digest(canonical_artifact_manifest(run))
 
 
 def worker_output_digest(run: BenchmarkRun) -> str:
@@ -452,10 +500,46 @@ def verify_receipt(
 RECEIPT_ENVELOPE_KEY = "execution_receipt"
 
 
+ARTIFACT_ENTRY_KEY = "artifact_entry"
+ARTIFACT_MANIFEST_KEY = "artifact_manifest"
+_REQUIRED_ENVELOPE_FIELDS = (
+    "receipt_id",
+    "payload_checksum",
+    "signer_key_id",
+    "signature_algorithm",
+    "signature",
+    "payload",
+)
+
+
+def embed_sidecar_evidence(
+    meta: dict[str, Any],
+    run: BenchmarkRun,
+    art: dict[str, str],
+    receipt: BenchmarkExecutionReceipt,
+) -> dict[str, Any]:
+    """Embed this artifact's canonical entry + the COMPLETE canonical manifest + the signed
+    receipt envelope into a sidecar (fifth review, High #1). Offline authentication then proves
+    the entry belongs to the signed manifest and that the manifest digest matches the receipt —
+    a valid receipt alone is not sufficient."""
+    return {
+        **meta,
+        ARTIFACT_ENTRY_KEY: canonical_artifact_entry(run, art),
+        ARTIFACT_MANIFEST_KEY: canonical_artifact_manifest(run),
+        RECEIPT_ENVELOPE_KEY: {
+            "receipt_id": receipt.payload.receipt_id,
+            "receipt_format_version": receipt.payload.receipt_format_version,
+            "payload_checksum": receipt.payload_checksum,
+            "signer_key_id": receipt.payload.signer_key_id,
+            "signature_algorithm": receipt.payload.signature_algorithm,
+            "signature": receipt.signature,
+            "payload": receipt.payload.model_dump(mode="json"),
+        },
+    }
+
+
 def embed_receipt(meta: dict[str, Any], receipt: BenchmarkExecutionReceipt) -> dict[str, Any]:
-    """Embed the completed signed receipt into a sidecar/summary dict (two-layer model: the
-    receipt signs the benchmark evidence; the sidecar then carries the receipt). Public metadata
-    only — never the signing secret."""
+    """Embed only the signed receipt envelope (used where no per-artifact entry applies)."""
     return {
         **meta,
         RECEIPT_ENVELOPE_KEY: {
@@ -471,14 +555,21 @@ def embed_receipt(meta: dict[str, Any], receipt: BenchmarkExecutionReceipt) -> d
 
 
 def authenticate_sidecar_offline(
-    meta: dict[str, Any], signers: dict[str, EvidenceReceiptSigner]
+    meta: dict[str, Any],
+    signers: dict[str, EvidenceReceiptSigner],
+    *,
+    artifact_checksum: str | None = None,
 ) -> tuple[bool, str]:
-    """Authenticate a sidecar WITHOUT database access (fourth review, High #1): verify the
-    embedded receipt's HMAC and that the sidecar's declared material fields are bound by the
-    signed receipt payload."""
+    """Authenticate a sidecar WITHOUT database access (fifth review, High #1). Beyond verifying
+    the embedded receipt's HMAC, this PROVES the sidecar's canonical artifact entry is a member
+    of the signed artifact manifest and recomputes the artifact-manifest digest, comparing it to
+    the receipt payload — so a valid receipt with the wrong manifest entry is rejected. When the
+    artifact file checksum is supplied it must equal the entry's checksum."""
     env = meta.get(RECEIPT_ENVELOPE_KEY)
     if not isinstance(env, dict):
         return False, "no-receipt-envelope"
+    if any(field not in env for field in _REQUIRED_ENVELOPE_FIELDS):
+        return False, "incomplete-receipt-envelope"
     try:
         receipt = BenchmarkExecutionReceipt.model_validate(
             {
@@ -508,6 +599,19 @@ def authenticate_sidecar_offline(
     ev = meta.get("quantum_evidence")
     if isinstance(ev, dict) and ev.get("manifest_checksum") != p.evidence_manifest_checksum:
         return False, "evidence-binding"
+    # Artifact-manifest membership + digest proof (the core of High #1).
+    entry = meta.get(ARTIFACT_ENTRY_KEY)
+    manifest = meta.get(ARTIFACT_MANIFEST_KEY)
+    if not isinstance(entry, dict) or not isinstance(manifest, list):
+        return False, "no-artifact-manifest"
+    if entry not in manifest:
+        return False, "entry-not-in-manifest"
+    if _manifest_digest(manifest) != p.artifact_manifest_digest:
+        return False, "artifact-manifest-digest"
+    if entry.get("benchmark_id") != p.benchmark_id or entry.get("problem_id") != p.problem_id:
+        return False, "entry-ownership"
+    if artifact_checksum is not None and entry.get("artifact_checksum") != artifact_checksum:
+        return False, "artifact-checksum"
     return True, "authentic"
 
 
