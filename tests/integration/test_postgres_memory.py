@@ -86,6 +86,7 @@ def pg_container(tmp_path: Path) -> AppContainer:
         artifacts_dir=tmp_path / "art",
         cache_dir=tmp_path / "cache",
         env="test",
+        evidence_signing_key="test-evidence-signing-key-0123456789abcdef",
     )
     container = AppContainer(settings=settings)
     container.init_storage()
@@ -108,7 +109,7 @@ def test_connection_and_dialect(pg_container: AppContainer) -> None:
 
 def test_migrations_at_head_and_memory_tables_exist(pg_container: AppContainer) -> None:
     head = _exec(pg_container, "SELECT version_num FROM alembic_version")[0][0]
-    assert head == "1673553df3f1"
+    assert head == "h4c5d6e7f8a9"  # current Alembic head (Phase 4A result ownership)
     present = {
         r[0]
         for r in _exec(

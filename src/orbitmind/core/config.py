@@ -9,6 +9,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Project root = three levels up from this file: src/orbitmind/core/config.py
@@ -101,6 +102,17 @@ class Settings(BaseSettings):
 
     # Controlled cache directory for raw source payloads (metadata lives in the DB).
     cache_dir: Path = PROJECT_ROOT / "cache"
+
+    # Evidence-receipt signing (third review, High #1). The secret is supplied OUTSIDE the
+    # database (env only) and is NEVER persisted/logged/returned. When unset, quantum evidence
+    # runs diagnostically but is never ACCEPTED (execution provenance unavailable). The
+    # active key id signs new receipts; retired keys can stay verifiable for historical receipts.
+    # Secrets use SecretStr so repr()/model_dump()/logs/validation errors never reveal them
+    # (fourth review, High #3). Read the plaintext only via .get_secret_value() in the signer.
+    evidence_signing_key: SecretStr = SecretStr("")
+    evidence_signing_key_id: str = "primary"
+    # Optional retired keys for historical verification: "keyid:secret,keyid2:secret2".
+    evidence_signing_retired_keys: SecretStr = SecretStr("")
 
     def resolved_ingestion_roots(self) -> tuple[Path, ...]:
         """Absolute, resolved allowlisted ingestion roots."""

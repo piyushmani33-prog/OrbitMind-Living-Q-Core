@@ -232,6 +232,8 @@ class MemoryGraphEdgeRow(Base):
     to_id: Mapped[str] = mapped_column(String(64), index=True)
     source: Mapped[str] = mapped_column(String(64))
     weight: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Benchmark that created this edge (fifth review, High #3). NULL for non-optimization edges.
+    benchmark_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime)
 
     __table_args__ = (Index("ix_memory_graph_edges_from", "from_kind", "from_id"),)

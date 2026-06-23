@@ -74,6 +74,22 @@ class AuditAction(StrEnum):
     MEMORY_RESULT_TRUNCATED = "memory.result_truncated"
     GRAPH_TRAVERSAL_REQUESTED = "memory.graph_traversal_requested"
 
+    # Phase 4A — bounded quantum optimization
+    OPTIMIZATION_PROBLEM_CREATED = "optimization.problem_created"
+    CLASSICAL_SOLVE_REQUESTED = "optimization.classical_solve_requested"
+    CLASSICAL_SOLVE_COMPLETED = "optimization.classical_solve_completed"
+    QUANTUM_EXPERIMENT_REQUESTED = "optimization.quantum_experiment_requested"
+    QUANTUM_EXPERIMENT_COMPLETED = "optimization.quantum_experiment_completed"
+    QUANTUM_UNSUPPORTED = "optimization.quantum_unsupported"
+    BENCHMARK_REQUESTED = "optimization.benchmark_requested"
+    BENCHMARK_COMPLETED = "optimization.benchmark_completed"
+    OPTIMIZATION_VERIFIED = "optimization.verified"
+    OPTIMIZATION_VERIFICATION_FAILED = "optimization.verification_failed"
+    OPTIMIZATION_ARTIFACT_GENERATED = "optimization.artifact_generated"
+    BENCHMARK_MEMORY_REGISTERED = "optimization.benchmark_memory_registered"
+    BENCHMARK_FAILED = "optimization.benchmark_failed"
+    BENCHMARK_INTEGRITY_FAILED = "optimization.benchmark_integrity_failed"
+
 
 class AuditEvent(BaseModel):
     """An append-only record of a lifecycle transition."""

@@ -66,6 +66,29 @@ class EvaluationRequest(BaseModel):
     k: int = Field(default=5, ge=1, le=50)
 
 
+class IntegrityAwareNeighbor(BaseModel):
+    """A graph neighbour annotated with optimization-evidence ownership + validity (final
+    acceptance, High #3). Optimization edges carry their owning benchmark and an independently
+    authenticated validity; generic/curated edges are ``not-optimization``."""
+
+    edge_kind: str
+    direction: str
+    entity_kind: str
+    entity_id: str
+    source: str
+    benchmark_id: str | None
+    evidence_validity: str  # "valid" | "integrity-failed" | "not-optimization"
+    integrity_status: str
+
+
+class IntegrityAwareNeighborsResult(BaseModel):
+    entity_id: str
+    depth: int
+    neighbors: list[IntegrityAwareNeighbor]
+    truncated: bool
+    disclaimer: str = MEMORY_DISCLAIMER
+
+
 __all__ = [
     "MEMORY_DISCLAIMER",
     "ChunkListResponse",
@@ -75,5 +98,7 @@ __all__ = [
     "DocumentListResponse",
     "EvaluationRequest",
     "IngestionResponse",
+    "IntegrityAwareNeighbor",
+    "IntegrityAwareNeighborsResult",
     "MemorySearchResponse",
 ]

@@ -51,3 +51,12 @@ class SecurityError(OrbitMindError):
 
     code = "security_error"
     http_status = 400
+
+
+class EvidenceNotAuthenticatedError(OrbitMindError):
+    """Persisted evidence exists but is not authenticated (no signer / unaccepted / failed
+    receipt). It is diagnostic only and must not be served as ordinary evidence (fifth review,
+    Medium #2)."""
+
+    code = "evidence_not_authenticated"
+    http_status = 409

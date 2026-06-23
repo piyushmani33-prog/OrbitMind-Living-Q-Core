@@ -62,7 +62,7 @@ Each item: **Source** (doc · section) · **Interpretation** · **Implementation
 
 18. **Disaster recovery** — *Vision §"PostgreSQL continuous archiving and PITR".* Impl: git rollback; missions reproducible-from-inputs; `RUNBOOK.md` SQLite backup/restore + Alembic downgrade. Gap: Postgres PITR, object-storage versioning, DR rehearsals. Target: **Phase 8.** **Status: planned.**
 
-19. **Qiskit & quantum boundaries** — *Vision/Brief §"Quantum Organ" (Sampler/Estimator, QAOA; simulator first, classical fallback; "prove value without quantum advantage"; qiskit-optimization no longer IBM-supported).* Impl: bounded adapter (ADR-0005), simulator self-test, off mission path, Bell experiment; QAOA/QUBO deferred. Gap: benchmarked QUBO/QAOA vs classical baseline. Target: **Phase 4.** **Status: implemented** (bounded adapter); optimization **deferred**. New risk **R-018**.
+19. **Qiskit & quantum boundaries** — *Vision/Brief §"Quantum Organ" (Sampler/Estimator, QAOA; simulator first, classical fallback; "prove value without quantum advantage"; qiskit-optimization no longer IBM-supported).* Impl: bounded adapter (ADR-0005) **plus a Phase 4A simulator-only QAOA/QUBO satellite-scheduling experiment** with mandatory classical baselines, an exhaustively-verified manual QUBO (no qiskit-optimization), a process-isolated whole-experiment timeout, tamper-resistant verification, and a policy that never claims quantum advantage (ADR-0024–0029). Accurate distinctions: bounded adapter = **implemented**; bounded simulator-only QAOA scheduling experiment = **implemented (Phase 4A)**; real hardware = **deferred**; production-mission control by quantum output = **intentionally prohibited**; general quantum advantage = **not claimed**; broader quantum optimization problems = **future work**. New risk **R-018** (qiskit-optimization not used).
 
 20. **Python version policy** — *Brief/Vision §"Python 3.12 production baseline; 3.14 needs lockfile validation".* Impl: ADR-0002 (3.12 baseline; dev on 3.14.4, wheels verified). Gap: none. Target: ongoing. **Status: implemented** (confirmed by references).
 
@@ -126,3 +126,12 @@ reversals.
 ADR-0001 (modular monolith), ADR-0003 (Postgres target via interfaces), ADR-0004
 (Temporal deferred behind an interface), ADR-0005 (bounded quantum), ADR-0006
 (epistemic status), ADR-0007 (orbital slice). The references validate all of these.
+
+## Phase 4A advance (2026-06-21) — bounded quantum optimization
+The references describe quantum as a **bounded, comparison-oriented capability**, never the
+core cognition engine. Phase 4A implements exactly that: a simulator-only QAOA experiment
+for satellite observation scheduling with **mandatory classical baselines**, independent
+verification, and an explicit no-quantum-advantage policy (ADR-0024–0029). The quantum
+layer remains an experimental adapter off the production mission path (ADR-0005), so this is
+a status advance ("bounded quantum" → "bounded quantum *exercised*"), not a reversal. The
+reconciliation matrix above remains valid.

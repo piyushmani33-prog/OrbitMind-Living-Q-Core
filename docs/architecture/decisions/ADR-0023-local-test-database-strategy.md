@@ -14,7 +14,7 @@ running a database server.
   fallback; PostgreSQL uses native full-text. Tests assert the SQLite behaviour by
   default and assert dialect *labelling* so the difference is explicit.
 - **PostgreSQL is opt-in locally** via Docker Compose
-  (`docker compose --profile postgres up -d`) with `ORBITMIND_DATABASE_URL` and the
+  (`docker compose --profile postgres up -d postgres`) with `ORBITMIND_DATABASE_URL` and the
   optional `psycopg` extra. PostgreSQL-specific behaviour (FTS index, `tsvector`
   selection) is **code-complete and migration-ready**, exercised by CI/integration when
   a PostgreSQL service is available, and skipped (not failed) when it is not.

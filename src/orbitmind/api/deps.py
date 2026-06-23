@@ -11,6 +11,7 @@ from orbitmind.core.config import Settings
 from orbitmind.memory.repository import SqlAlchemyMemoryRepository
 from orbitmind.memory.service import MemoryService
 from orbitmind.observability.service import ObservabilityService
+from orbitmind.optimization.service import OptimizationService
 from orbitmind.orchestration.orchestrator import PrimeOrchestrator
 from orbitmind.persistence.repositories import SqlAlchemyMissionRepository
 from orbitmind.persistence.smallbody_repository import SqlAlchemySmallBodyRepository
@@ -71,6 +72,10 @@ def get_small_body_repository(request: Request) -> Iterator[SqlAlchemySmallBodyR
 
 def get_memory_service(request: Request) -> MemoryService:
     return get_container(request).memory_service
+
+
+def get_optimization_service(request: Request) -> OptimizationService:
+    return get_container(request).optimization_service
 
 
 def get_memory_repository(request: Request) -> Iterator[SqlAlchemyMemoryRepository]:

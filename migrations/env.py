@@ -11,7 +11,8 @@ from alembic import context
 from sqlalchemy import engine_from_config, pool
 
 import orbitmind.persistence.memory_models
-import orbitmind.persistence.models  # noqa: F401 - register all ORM tables
+import orbitmind.persistence.models
+import orbitmind.persistence.optimization_models  # noqa: F401 - register optimization tables
 from orbitmind.core.config import get_settings
 from orbitmind.persistence.database import Base
 

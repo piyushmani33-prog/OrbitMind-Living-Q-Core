@@ -202,7 +202,7 @@ not truth and retrieval is not verification**: outputs are ranked, version-pinne
 - **Validated on real PostgreSQL 16.13 / psycopg 3.3.4 (2026-06-20):** fresh-DB migration
   to head, FTS GIN index verified, 13 live `postgres` integration tests, gold eval
   recall@5 = 1.0, `pg_dump`/`pg_restore` smoke test, and a CI service-container job. To
-  exercise it locally: `docker compose --profile postgres up -d` (host port **55432**;
+  exercise it locally: `docker compose --profile postgres up -d postgres` (host port **55432**;
   use `127.0.0.1` on Windows, not `localhost`).
 
 ### Endpoints
@@ -217,6 +217,37 @@ See [SCIENTIFIC_MEMORY.md](docs/architecture/SCIENTIFIC_MEMORY.md),
 [DETERMINISTIC_RETRIEVAL.md](docs/architecture/DETERMINISTIC_RETRIEVAL.md),
 [POSTGRESQL_ARCHITECTURE.md](docs/architecture/POSTGRESQL_ARCHITECTURE.md), and
 [POSTGRESQL_LOCAL_OPERATIONS.md](docs/operations/POSTGRESQL_LOCAL_OPERATIONS.md).
+
+## Bounded quantum optimization (Phase 4A)
+
+One **bounded, scientifically honest** experiment: satellite observation scheduling solved
+by deterministic classical baselines (exact + greedy) and a **simulator-only** QAOA, on the
+**same normalized instance**. The quantum layer is an **experimental adapter, NOT** the
+cognition engine; **general quantum advantage is never claimed** and an experimental result
+never controls a production mission.
+
+- **Mandatory classical baselines**; every schedule is independently re-verified by a shared
+  deterministic evaluator (a solver's own claim is never trusted).
+- **Manual QUBO** (no `qiskit-optimization`); `QUBO energy == −penalized_objective` is
+  **exhaustively verified** on tiny instances.
+- **Aer simulator only** — no real hardware, no IBM account, no API key, no network; fixed
+  seeds, bounded shots/iterations/timeout, full circuit metadata. Quantum is disabled with a
+  clear `unsupported` response when Aer is absent.
+- Policy-driven conclusions (`quantum-competitive` / `quantum-worse` / `quantum-infeasible` /
+  `equivalent-objective` / `insufficient-evidence` / `experiment-failed` / `classical-*-best`);
+  `quantum-competitive` means only that a bounded threshold was met — **not advantage**.
+
+### Endpoints
+`POST|GET /api/v1/optimization/problems[/{id}]`,
+`POST /api/v1/optimization/problems/{id}/solve/{classical|quantum}`,
+`POST /api/v1/optimization/problems/{id}/benchmark`,
+`GET /api/v1/optimization/runs[/{id}][/artifacts]`.
+
+See [QUANTUM_OPTIMIZATION_BOUNDARY.md](docs/architecture/QUANTUM_OPTIMIZATION_BOUNDARY.md),
+[SATELLITE_OBSERVATION_SCHEDULING.md](docs/architecture/SATELLITE_OBSERVATION_SCHEDULING.md),
+[QUBO_ENCODING.md](docs/architecture/QUBO_ENCODING.md),
+[QUANTUM_BENCHMARK_POLICY.md](docs/architecture/QUANTUM_BENCHMARK_POLICY.md), and
+[OPTIMIZATION_BENCHMARKS.md](docs/operations/OPTIMIZATION_BENCHMARKS.md).
 
 ## Testing
 
@@ -265,9 +296,9 @@ status, checksum). Binary images are never stored in the database.
 
 ## Roadmap
 
-Phase 2 real connectors → Phase 3A small-body intelligence → **Phase 3B scientific
-memory + deterministic retrieval (PostgreSQL; pgvector deferred/optional)** →
-Phase 4 bounded quantum-vs-classical optimization → Phase 5 advanced visuals →
+Phase 2 real connectors → Phase 3A small-body intelligence → Phase 3B scientific
+memory + deterministic retrieval (PostgreSQL) → **Phase 4A bounded classical-vs-quantum
+(Aer) scheduling benchmark** → Phase 4B+ optimization → Phase 5 advanced visuals →
 Phase 6 Tool Forge → Phase 7 Research Autopilot → Phase 8 cloud hardening.
 See [`docs/architecture/ROADMAP.md`](docs/architecture/ROADMAP.md).
 

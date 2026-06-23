@@ -29,7 +29,7 @@ assumption is **English** (`memory_fts_language`); it is configurable.
 ## Driver & profile
 The `psycopg` driver is an optional extra (`pip install -e .[postgres]`). A local
 PostgreSQL 16 profile is provided via Docker Compose
-(`docker compose --profile postgres up -d`) with a persistent named volume and a health
+(`docker compose --profile postgres up -d postgres`) with a persistent named volume and a health
 check. Credentials come from environment variables; `.env.example` holds safe
 placeholders. No database starts automatically; no cloud resource is created.
 

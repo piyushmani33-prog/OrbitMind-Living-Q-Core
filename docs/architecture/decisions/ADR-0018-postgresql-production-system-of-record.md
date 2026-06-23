@@ -18,7 +18,7 @@ introduces full-text retrieval, which benefits from a real RDBMS engine.
   of dialect details, so SQLite↔PostgreSQL is a configuration change
   (`ORBITMIND_DATABASE_URL`), not a domain change.
 - A local PostgreSQL profile is provided via Docker Compose
-  (`docker compose --profile postgres up -d`); the `psycopg` driver is an **optional**
+  (`docker compose --profile postgres up -d postgres`); the `psycopg` driver is an **optional**
   install extra (`pip install -e .[postgres]`).
 - **No destructive migration of user data.** Alembic migrations are additive; the
   Phase 3B migration only creates new tables/indexes and is reversible.

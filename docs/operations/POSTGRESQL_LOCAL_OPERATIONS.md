@@ -5,7 +5,7 @@ development (ADR-0023). Use this only to exercise PostgreSQL full-text retrieval
 
 ## Start / stop the local profile
 ```bash
-docker compose --profile postgres up -d      # start PostgreSQL 16 (named volume, healthcheck)
+docker compose --profile postgres up -d postgres      # start PostgreSQL 16 (named volume, healthcheck)
 docker compose --profile postgres ps         # check health
 docker compose --profile postgres down       # stop (keeps the volume)
 docker compose --profile postgres down -v    # stop and DELETE the data volume

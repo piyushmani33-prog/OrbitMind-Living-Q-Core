@@ -1,0 +1,296 @@
+"""SQLAlchemy ORM models for bounded scheduling optimization (Phase 4A).
+
+Additive tables. Rich pydantic records are stored as JSON for fidelity, with key columns
+promoted for querying. Binary artifacts are never stored here — only metadata + paths.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Any
+
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    CheckConstraint,
+    Float,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
+from sqlalchemy.orm import Mapped, mapped_column
+
+from orbitmind.persistence.database import Base, UTCDateTime
+
+
+class OptimizationProblemRow(Base):
+    __tablename__ = "optimization_problems"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    name: Mapped[str] = mapped_column(String(128))
+    # Canonical problem checksum is UNIQUE: creating the same problem twice is idempotent
+    # and concurrency-safe (review finding #9).
+    checksum: Mapped[str] = mapped_column(String(64), index=True, unique=True)
+    num_variables: Mapped[int] = mapped_column(Integer)
+    source: Mapped[str] = mapped_column(String(64))
+    provenance: Mapped[str] = mapped_column(Text)
+    epistemic_status: Mapped[str] = mapped_column(String(32))
+    limitations: Mapped[str] = mapped_column(Text)
+    problem_json: Mapped[dict[str, Any]] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, index=True)
+
+
+class ObservationOpportunityRow(Base):
+    __tablename__ = "observation_opportunities"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    problem_id: Mapped[str] = mapped_column(ForeignKey("optimization_problems.id"), index=True)
+    opportunity_id: Mapped[str] = mapped_column(String(64), index=True)
+    satellite_id: Mapped[str] = mapped_column(String(64), index=True)
+    target_id: Mapped[str] = mapped_column(String(64), index=True)
+    start_at: Mapped[datetime] = mapped_column(UTCDateTime)
+    end_at: Mapped[datetime] = mapped_column(UTCDateTime)
+    mission_value: Mapped[float] = mapped_column(Float)
+    duration_seconds: Mapped[float] = mapped_column(Float)
+    energy_cost: Mapped[float] = mapped_column(Float)
+    storage_cost: Mapped[float] = mapped_column(Float)
+    pointing_cost: Mapped[float] = mapped_column(Float)
+    priority: Mapped[int] = mapped_column(Integer)
+
+
+class SchedulingConstraintRow(Base):
+    __tablename__ = "scheduling_constraints"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    problem_id: Mapped[str] = mapped_column(ForeignKey("optimization_problems.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(32))
+    detail_json: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
+class BenchmarkRunRow(Base):
+    __tablename__ = "benchmark_runs"
+    # Composite-unique (id, problem_id) is the FK target that anchors every child row to BOTH the
+    # benchmark and its problem, so a benchmark cannot be reassigned to another problem while its
+    # children point at the original (fifth review, High #4).
+    __table_args__ = (UniqueConstraint("id", "problem_id", name="uq_benchmark_runs_id_problem"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    problem_id: Mapped[str | None] = mapped_column(
+        ForeignKey("optimization_problems.id"), nullable=True, index=True
+    )
+    problem_checksum: Mapped[str] = mapped_column(String(64), index=True)
+    conclusion: Mapped[str] = mapped_column(String(32))
+    verification_passed: Mapped[bool] = mapped_column(Boolean)
+    # Immutable server-owned policy anchor on the parent (third review, High #3).
+    policy_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    policy_version: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    policy_checksum: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    policy_snapshot_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, index=True)
+
+
+class SolverRunRow(Base):
+    __tablename__ = "solver_runs"
+    # Composite uniqueness lets the comparison reference (benchmark_id, id) via a composite FK
+    # so a result cannot be spliced in from another benchmark (third review, High #2). The
+    # role-aware composite unique (benchmark_id, id, problem_id, solver_kind) is the FK target for
+    # role-pinned comparison slots, and (benchmark_id, problem_id) is anchored to the parent
+    # benchmark+problem (fifth review, High #4).
+    __table_args__ = (
+        UniqueConstraint("benchmark_id", "id", name="uq_solver_runs_owner"),
+        UniqueConstraint(
+            "benchmark_id", "id", "problem_id", "solver_kind", name="uq_solver_runs_role_owner"
+        ),
+        ForeignKeyConstraint(
+            ["benchmark_id", "problem_id"],
+            ["benchmark_runs.id", "benchmark_runs.problem_id"],
+            name="fk_solver_runs_benchmark_problem",
+        ),
+        # Only the two classical solver roles may be persisted here; quantum lives in its own
+        # table (final acceptance, Medium). PostgreSQL rejects bogus/quantum/empty/mis-cased kinds.
+        CheckConstraint("solver_kind IN ('exact', 'greedy')", name="ck_solver_runs_kind"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    benchmark_id: Mapped[str | None] = mapped_column(
+        ForeignKey("benchmark_runs.id"), nullable=True, index=True
+    )
+    problem_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    problem_checksum: Mapped[str] = mapped_column(String(64), index=True)
+    solver_kind: Mapped[str] = mapped_column(String(24), index=True)
+    solver_name: Mapped[str] = mapped_column(String(64))
+    solver_version: Mapped[str] = mapped_column(String(16))
+    status: Mapped[str] = mapped_column(String(16))
+    optimality_status: Mapped[str] = mapped_column(String(16))
+    objective_value: Mapped[float | None] = mapped_column(Float, nullable=True)
+    known_optimum: Mapped[float | None] = mapped_column(Float, nullable=True)
+    objective_gap: Mapped[float | None] = mapped_column(Float, nullable=True)
+    feasible: Mapped[bool] = mapped_column(Boolean)
+    seed: Mapped[int] = mapped_column(Integer)
+    runtime_seconds: Mapped[float] = mapped_column(Float)
+    config_json: Mapped[dict[str, Any]] = mapped_column(JSON)
+    result_json: Mapped[dict[str, Any]] = mapped_column(JSON)
+    software_versions: Mapped[dict[str, str]] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, index=True)
+
+
+class QuantumExperimentRow(Base):
+    __tablename__ = "quantum_experiments"
+    __table_args__ = (
+        UniqueConstraint("benchmark_id", "id", name="uq_quantum_experiments_owner"),
+        # Anchor the quantum child to the parent benchmark + its problem (fifth review, High #4).
+        ForeignKeyConstraint(
+            ["benchmark_id", "problem_id"],
+            ["benchmark_runs.id", "benchmark_runs.problem_id"],
+            name="fk_quantum_benchmark_problem",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    benchmark_id: Mapped[str | None] = mapped_column(
+        ForeignKey("benchmark_runs.id"), nullable=True, index=True
+    )
+    problem_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    problem_checksum: Mapped[str] = mapped_column(String(64), index=True)
+    status: Mapped[str] = mapped_column(String(16))
+    qubits: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    depth: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    shots: Mapped[int] = mapped_column(Integer)
+    optimizer_iterations: Mapped[int] = mapped_column(Integer)
+    qaoa_layers: Mapped[int] = mapped_column(Integer)
+    total_shots: Mapped[int] = mapped_column(Integer)
+    distinct_samples: Mapped[int] = mapped_column(Integer)
+    feasible_sample_ratio: Mapped[float] = mapped_column(Float)
+    objective_gap: Mapped[float | None] = mapped_column(Float, nullable=True)
+    exact_optimum_in_samples: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    seed: Mapped[int] = mapped_column(Integer)
+    runtime_seconds: Mapped[float] = mapped_column(Float)
+    circuit_metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    experiment_json: Mapped[dict[str, Any]] = mapped_column(JSON)
+    software_versions: Mapped[dict[str, str]] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, index=True)
+
+
+class QuantumSampleResultRow(Base):
+    __tablename__ = "quantum_sample_results"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    experiment_id: Mapped[str] = mapped_column(ForeignKey("quantum_experiments.id"), index=True)
+    bitstring: Mapped[str] = mapped_column(String(32))
+    count: Mapped[int] = mapped_column(Integer)
+    probability: Mapped[float] = mapped_column(Float)
+    feasible: Mapped[bool] = mapped_column(Boolean)
+    raw_mission_value: Mapped[float] = mapped_column(Float)
+    objective_value: Mapped[float] = mapped_column(Float)
+    qubo_energy: Mapped[float] = mapped_column(Float)
+    violations_count: Mapped[int] = mapped_column(Integer)
+
+
+class BenchmarkComparisonRow(Base):
+    __tablename__ = "benchmark_comparisons"
+    # ROLE-AWARE composite FKs bind each association id to a row owned by the SAME benchmark + the
+    # SAME problem AND of the CORRECT solver role (fifth review, High #4): the exact slot may only
+    # reference a solver row with solver_kind='exact', the greedy slot only 'greedy'. The role
+    # columns are pinned by CHECK constraints, and (benchmark_id, problem_id) anchors to the parent.
+    __table_args__ = (
+        CheckConstraint("exact_solver_kind = 'exact'", name="ck_comparison_exact_role"),
+        CheckConstraint("greedy_solver_kind = 'greedy'", name="ck_comparison_greedy_role"),
+        ForeignKeyConstraint(
+            ["benchmark_id", "exact_result_id", "problem_id", "exact_solver_kind"],
+            [
+                "solver_runs.benchmark_id",
+                "solver_runs.id",
+                "solver_runs.problem_id",
+                "solver_runs.solver_kind",
+            ],
+            name="fk_comparison_exact_role_owner",
+        ),
+        ForeignKeyConstraint(
+            ["benchmark_id", "greedy_result_id", "problem_id", "greedy_solver_kind"],
+            [
+                "solver_runs.benchmark_id",
+                "solver_runs.id",
+                "solver_runs.problem_id",
+                "solver_runs.solver_kind",
+            ],
+            name="fk_comparison_greedy_role_owner",
+        ),
+        ForeignKeyConstraint(
+            ["benchmark_id", "quantum_experiment_id"],
+            ["quantum_experiments.benchmark_id", "quantum_experiments.id"],
+            name="fk_comparison_quantum_owner",
+        ),
+        ForeignKeyConstraint(
+            ["benchmark_id", "problem_id"],
+            ["benchmark_runs.id", "benchmark_runs.problem_id"],
+            name="fk_comparison_benchmark_problem",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    benchmark_id: Mapped[str | None] = mapped_column(
+        ForeignKey("benchmark_runs.id"), nullable=True, index=True
+    )
+    problem_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    problem_checksum: Mapped[str] = mapped_column(String(64), index=True)
+    conclusion: Mapped[str] = mapped_column(String(32))
+    exact_objective: Mapped[float | None] = mapped_column(Float, nullable=True)
+    greedy_objective: Mapped[float | None] = mapped_column(Float, nullable=True)
+    quantum_objective: Mapped[float | None] = mapped_column(Float, nullable=True)
+    known_optimum: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Association ids + objective gap + server-owned policy metadata (review findings #9/#17).
+    objective_gap: Mapped[float | None] = mapped_column(Float, nullable=True)
+    exact_result_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    greedy_result_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    quantum_experiment_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    # Fixed solver-role columns pinned by CHECK constraints (fifth review, High #4).
+    exact_solver_kind: Mapped[str] = mapped_column(String(24), default="exact")
+    greedy_solver_kind: Mapped[str] = mapped_column(String(24), default="greedy")
+    policy_id: Mapped[str] = mapped_column(String(64), default="strict-v1")
+    policy_version: Mapped[str] = mapped_column(String(16), default="1")
+    policy_checksum: Mapped[str] = mapped_column(String(64), default="")
+    rationale: Mapped[str] = mapped_column(Text)
+    thresholds_json: Mapped[dict[str, Any]] = mapped_column(JSON)
+    epistemic_status: Mapped[str] = mapped_column(String(32))
+    limitations: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, index=True)
+
+
+class OptimizationArtifactRow(Base):
+    __tablename__ = "optimization_artifacts"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    scope_id: Mapped[str] = mapped_column(ForeignKey("benchmark_runs.id"), index=True)
+    artifact_type: Mapped[str] = mapped_column(String(48))
+    path: Mapped[str] = mapped_column(Text)
+    sidecar_path: Mapped[str] = mapped_column(Text)
+    checksum: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime)
+
+
+class BenchmarkExecutionReceiptRow(Base):
+    """Signed evidence-origin receipt (third review, High #1). Stores ONLY public receipt
+    metadata — never the signing secret."""
+
+    __tablename__ = "benchmark_execution_receipts"
+    # Replay guard (fourth review, Medium #1): a signed payload + a worker nonce are each unique
+    # across receipts; the nonce is nullable for classical-only receipts (NULLs stay distinct).
+    __table_args__ = (
+        UniqueConstraint("payload_checksum", name="uq_execution_receipt_payload_checksum"),
+        UniqueConstraint("worker_execution_nonce", name="uq_execution_receipt_worker_nonce"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)  # receipt_id
+    benchmark_id: Mapped[str] = mapped_column(
+        ForeignKey("benchmark_runs.id"), index=True, unique=True
+    )
+    signer_key_id: Mapped[str] = mapped_column(String(64), index=True)
+    signature_algorithm: Mapped[str] = mapped_column(String(32))
+    payload_checksum: Mapped[str] = mapped_column(String(64))
+    signature: Mapped[str] = mapped_column(String(128))
+    worker_execution_nonce: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    payload_json: Mapped[dict[str, Any]] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, index=True)

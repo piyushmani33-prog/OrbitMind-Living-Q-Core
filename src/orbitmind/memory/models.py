@@ -81,6 +81,8 @@ class GraphEdgeKind(StrEnum):
     PRODUCED = "produced"
     DERIVES_FROM = "derives-from"
     CITES = "cites"
+    SOLVED_BY = "solved-by"  # Phase 4A
+    COMPARED_AGAINST = "compared-against"  # Phase 4A
 
 
 class EntityKind(StrEnum):
@@ -97,6 +99,13 @@ class EntityKind(StrEnum):
     SOURCE_POLICY = "source-policy"
     VERIFICATION_FINDING = "verification-finding"
     VISUAL_ARTIFACT = "visual-artifact"
+    # Phase 4A — optimization
+    OPTIMIZATION_PROBLEM = "optimization-problem"
+    SOLVER_RUN = "solver-run"
+    QUANTUM_EXPERIMENT = "quantum-experiment"
+    BENCHMARK_COMPARISON = "benchmark-comparison"
+    OPTIMIZATION_ARTIFACT = "optimization-artifact"
+    SCHEDULE = "schedule"
 
 
 class IngestionStatus(StrEnum):
@@ -409,6 +418,8 @@ class GraphEdge(BaseModel):
     to_ref: EntityReference
     source: str = "curated"
     weight: float | None = None
+    # Benchmark that created this edge, when applicable (fifth review, High #3).
+    benchmark_id: str | None = None
     created_at: datetime = Field(default_factory=utcnow)
 
 
@@ -417,6 +428,9 @@ class GraphNeighbor(BaseModel):
     direction: str  # "out" | "in"
     entity: EntityReference
     source: str
+    # Owning benchmark for optimization-generated edges (final acceptance, High #3); None for
+    # generic/curated edges.
+    benchmark_id: str | None = None
 
 
 class GraphNeighborsResult(BaseModel):

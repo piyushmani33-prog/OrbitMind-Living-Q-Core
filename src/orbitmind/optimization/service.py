@@ -1,0 +1,730 @@
+"""Optimization service facade: session + audit + verification + persistence + memory.
+
+Coordinates the deterministic core (problem/solvers/qubo/benchmark/verification) with
+persistence, bounded artifacts, and bounded scientific-memory entity links. An
+experimental quantum result never directly controls a production mission; it is recorded,
+verified, and compared only.
+"""
+
+from __future__ import annotations
+
+from pydantic import BaseModel, ConfigDict
+
+from orbitmind.core.config import Settings
+from orbitmind.core.errors import NotFoundError, ValidationError
+from orbitmind.core.ids import new_id
+from orbitmind.core.logging import get_logger
+from orbitmind.governance.audit import AuditAction, AuditEvent
+from orbitmind.memory.models import (
+    EntityKind,
+    EntityReference,
+    GraphEdge,
+    GraphEdgeKind,
+)
+from orbitmind.memory.repository import SqlAlchemyMemoryRepository
+from orbitmind.optimization.benchmark import proven_optimum, run_benchmark
+from orbitmind.optimization.evaluation import Evaluator
+from orbitmind.optimization.models import (
+    BenchmarkRun,
+    ComparisonConclusion,
+    ExperimentStatus,
+    QuantumExperiment,
+    SchedulingProblem,
+    SolverConfiguration,
+    SolverKind,
+    SolverResult,
+)
+from orbitmind.optimization.policy import DEFAULT_POLICY_ID, get_policy
+from orbitmind.optimization.problem import normalize_problem
+from orbitmind.optimization.quantum import run_quantum_experiment
+from orbitmind.optimization.receipts import (
+    BenchmarkExecutionReceipt,
+    EvidenceReceiptSigner,
+    build_receipt,
+    quantum_execution_receipt_eligible,
+    verify_receipt,
+)
+from orbitmind.optimization.solvers import solve_exact, solve_greedy
+from orbitmind.optimization.verification import benchmark_verified_for_evidence, verify_benchmark
+from orbitmind.persistence.database import Database
+from orbitmind.persistence.optimization_repository import SqlAlchemyOptimizationRepository
+from orbitmind.persistence.repositories import SqlAlchemyMissionRepository
+from orbitmind.quantum.adapter import quantum_available
+from orbitmind.verification.models import (
+    CheckCategory,
+    FindingStatus,
+    Severity,
+    VerificationFinding,
+)
+
+_log = get_logger("optimization.service")
+
+
+class AuthenticatedBenchmark(BaseModel):
+    """Result of read-time re-authentication of persisted benchmark evidence (Critical #2)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    found: bool
+    authenticated: bool = False
+    integrity_failed: bool = False
+    integrity_status: str = "ok"
+    receipt_status: str = "none"
+    run: BenchmarkRun | None = None
+    # Denormalized row scalars — always available, even when the JSON payload is malformed and the
+    # domain ``run`` could not be reconstructed (fifth review, High #2).
+    benchmark_id: str | None = None
+    problem_checksum: str | None = None
+    created_at_iso: str | None = None
+    artifact_count: int = 0
+    has_quantum: bool = False
+
+    def safe_conclusion(self) -> str | None:
+        """The conclusion to present publicly — non-positive unless re-authentication passed."""
+        if self.run is None or self.run.comparison is None:
+            return None
+        if not self.authenticated:
+            return ComparisonConclusion.INSUFFICIENT_EVIDENCE.value
+        return self.run.comparison.conclusion.value
+
+
+class OptimizationService:
+    def __init__(
+        self,
+        *,
+        settings: Settings,
+        database: Database,
+        receipt_signer: EvidenceReceiptSigner | None = None,
+        receipt_signers: dict[str, EvidenceReceiptSigner] | None = None,
+    ) -> None:
+        self._settings = settings
+        self._db = database
+        # Evidence-receipt signing (third review, High #1). ``receipt_signer`` signs new receipts
+        # (None => provenance unavailable, evidence stays unaccepted); ``receipt_signers`` maps
+        # key id -> signer for verification (incl. retired keys for historical receipts).
+        self._receipt_signer = receipt_signer
+        self._receipt_signers: dict[str, EvidenceReceiptSigner] = receipt_signers or (
+            {receipt_signer.key_id: receipt_signer} if receipt_signer is not None else {}
+        )
+        from orbitmind.visualization.optimization_charts import (
+            CleanupResult,
+            OptimizationVisualizationService,
+        )
+
+        self._cleanup_result_cls = CleanupResult
+        self._viz = OptimizationVisualizationService(settings.resolved_artifacts_dir())
+
+    # ---- problems ----------------------------------------------------------
+    def create_problem(self, problem: SchedulingProblem) -> SchedulingProblem:
+        normalized = normalize_problem(problem)
+        with self._db.session() as session:
+            audit = SqlAlchemyMissionRepository(session)
+            repo = SqlAlchemyOptimizationRepository(session)
+            persisted_id = repo.save_problem(normalized)
+            audit.add_audit_event(
+                AuditEvent(
+                    action=AuditAction.OPTIMIZATION_PROBLEM_CREATED,
+                    detail={
+                        "checksum": normalized.checksum,
+                        "num_vars": len(normalized.opportunities),
+                    },
+                )
+            )
+            session.commit()
+        # Idempotent: if the same canonical problem already existed, return the PERSISTED
+        # entity + its real id, not the freshly-generated (unpersisted) one (finding #9).
+        if persisted_id != normalized.id:
+            existing = self.get_problem(persisted_id)
+            if existing is not None:
+                return existing
+        return normalized
+
+    def get_problem(self, problem_id: str) -> SchedulingProblem | None:
+        with self._db.session() as session:
+            return SqlAlchemyOptimizationRepository(session).get_problem(problem_id)
+
+    def list_problems(self, limit: int, offset: int) -> tuple[int, list[SchedulingProblem]]:
+        with self._db.session() as session:
+            repo = SqlAlchemyOptimizationRepository(session)
+            return repo.count_problems(), repo.list_problems(limit, offset)
+
+    def _require_problem(self, problem_id: str) -> SchedulingProblem:
+        problem = self.get_problem(problem_id)
+        if problem is None:
+            raise NotFoundError("optimization problem not found")
+        return problem
+
+    # ---- standalone solves -------------------------------------------------
+    def solve_classical(
+        self, problem_id: str, *, solver_kind: SolverKind, seed: int, timeout_seconds: float
+    ) -> SolverResult:
+        problem = self._require_problem(problem_id)
+        evaluator = Evaluator(problem)
+        config = SolverConfiguration(
+            solver_kind=solver_kind, seed=seed, timeout_seconds=timeout_seconds
+        )
+        if solver_kind == SolverKind.EXACT:
+            result = solve_exact(problem, config, evaluator)
+        elif solver_kind == SolverKind.GREEDY:
+            result = solve_greedy(problem, config, evaluator)
+        else:
+            raise NotFoundError(f"unsupported classical solver: {solver_kind}")
+        # Independent re-verification of the reported objective/feasibility.
+        if result.schedule is not None:
+            recheck = evaluator.evaluate(set(result.schedule.selected_opportunity_ids))
+            if recheck.objective_value != (result.objective_value or recheck.objective_value):
+                result = result.model_copy(update={"status": ExperimentStatus.FAILED})
+        with self._db.session() as session:
+            audit = SqlAlchemyMissionRepository(session)
+            repo = SqlAlchemyOptimizationRepository(session)
+            audit.add_audit_event(
+                AuditEvent(
+                    action=AuditAction.CLASSICAL_SOLVE_REQUESTED, detail={"kind": solver_kind.value}
+                )
+            )
+            repo.save_solver_result(result, benchmark_id=None, problem_id=problem.id)
+            audit.add_audit_event(
+                AuditEvent(
+                    action=AuditAction.CLASSICAL_SOLVE_COMPLETED,
+                    detail={
+                        "kind": solver_kind.value,
+                        "objective": result.objective_value,
+                        "feasible": result.feasible,
+                        "status": result.status.value,
+                    },
+                )
+            )
+            session.commit()
+        return result
+
+    def solve_quantum(
+        self,
+        problem_id: str,
+        *,
+        seed: int,
+        shots: int,
+        optimizer_iterations: int,
+        qaoa_layers: int,
+        timeout_seconds: float,
+    ) -> QuantumExperiment:
+        problem = self._require_problem(problem_id)
+        config = SolverConfiguration(
+            solver_kind=SolverKind.QUANTUM_QAOA,
+            seed=seed,
+            timeout_seconds=timeout_seconds,
+            shots=shots,
+            optimizer_iterations=optimizer_iterations,
+            qaoa_layers=qaoa_layers,
+        )
+        with self._db.session() as session:
+            audit = SqlAlchemyMissionRepository(session)
+            repo = SqlAlchemyOptimizationRepository(session)
+            audit.add_audit_event(AuditEvent(action=AuditAction.QUANTUM_EXPERIMENT_REQUESTED))
+            if not quantum_available():
+                experiment = QuantumExperiment(
+                    problem_checksum=problem.checksum,
+                    status=ExperimentStatus.UNSUPPORTED,
+                    configuration=config,
+                    seed=seed,
+                    error="Aer/Qiskit not installed",
+                )
+                audit.add_audit_event(AuditEvent(action=AuditAction.QUANTUM_UNSUPPORTED))
+            else:
+                evaluator = Evaluator(problem)
+                exact = solve_exact(
+                    problem,
+                    SolverConfiguration(
+                        solver_kind=SolverKind.EXACT, seed=seed, timeout_seconds=timeout_seconds
+                    ),
+                    evaluator,
+                )
+                # A known optimum requires a COMPLETED, proven-optimal exact run (finding #10).
+                known_optimum, optimum_selection = proven_optimum(exact)
+                experiment = run_quantum_experiment(
+                    problem,
+                    config,
+                    evaluator,
+                    known_optimum=known_optimum,
+                    optimum_selection=optimum_selection,
+                )
+                audit.add_audit_event(
+                    AuditEvent(
+                        action=AuditAction.QUANTUM_EXPERIMENT_COMPLETED,
+                        detail={
+                            "status": experiment.status.value,
+                            "feasible_ratio": experiment.feasible_sample_ratio,
+                        },
+                    )
+                )
+            repo.save_quantum_experiment(experiment, benchmark_id=None, problem_id=problem.id)
+            session.commit()
+        return experiment
+
+    # ---- full benchmark ----------------------------------------------------
+    def benchmark(
+        self,
+        problem_id: str,
+        *,
+        seed: int = 1,
+        shots: int = 2048,
+        optimizer_iterations: int = 24,
+        qaoa_layers: int = 1,
+        timeout_seconds: float = 30.0,
+        run_quantum: bool = True,
+        generate_artifacts: bool = False,
+        policy_id: str = DEFAULT_POLICY_ID,
+    ) -> tuple[BenchmarkRun, list[VerificationFinding]]:
+        # The failure-audit boundary begins BEFORE problem retrieval / policy resolution /
+        # construction (fourth review, Medium #3) — a failure in ANY stage yields a bounded
+        # failure audit under a stable attempt id, not just failures after construction.
+        artifacts_root = self._settings.resolved_artifacts_dir()
+        attempt_id = new_id()
+        problem: SchedulingProblem | None = None
+        run: BenchmarkRun | None = None
+        stage = "problem-retrieval"
+        try:
+            problem = self._require_problem(problem_id)
+            stage = "policy-resolution"
+            policy = get_policy(policy_id)
+            if policy is None:
+                raise ValidationError(f"unknown comparison policy id '{policy_id}'")
+            stage = "construction"
+            run = run_benchmark(
+                problem,
+                seed=seed,
+                shots=shots,
+                optimizer_iterations=optimizer_iterations,
+                qaoa_layers=qaoa_layers,
+                timeout_seconds=timeout_seconds,
+                policy=policy,
+                run_quantum=run_quantum,
+            )
+            stage = "verification"
+            findings = verify_benchmark(problem, run)
+            if generate_artifacts:
+                stage = "artifact-generation"
+                artifacts = self._viz.generate(problem, run, findings, seed=seed)
+                run = run.model_copy(update={"artifacts": artifacts})
+                stage = "artifact-verification"
+                findings = verify_benchmark(problem, run, artifacts_root=artifacts_root)
+
+            # Evidence-origin authentication (third review, High #1): a signed execution receipt,
+            # modelled as a verification finding so it joins the release gate (no signer or a
+            # failed receipt leaves the benchmark UNACCEPTED).
+            receipt, receipt_finding = self._authorize_evidence(run, findings)
+            findings = [*findings, receipt_finding]
+            verified = benchmark_verified_for_evidence(findings)
+            if not verified and run.comparison is not None:
+                run = run.model_copy(
+                    update={
+                        "comparison": run.comparison.model_copy(
+                            update={
+                                "conclusion": ComparisonConclusion.INSUFFICIENT_EVIDENCE,
+                                "rationale": "verification failed; conclusion downgraded: "
+                                + run.comparison.rationale,
+                            }
+                        )
+                    }
+                )
+
+            # Embed each artifact's canonical entry + the complete manifest + the signed receipt
+            # into the promoted sidecars for offline authentication (fifth review, High #1).
+            # These bytes are excluded from what the receipt signs.
+            if verified and receipt is not None and run.artifacts:
+                stage = "artifact-receipt-embed"
+                self._viz.embed_receipt_into_sidecars(run, receipt)
+
+            stage = "persistence"
+            self._persist_benchmark(run, problem, findings, verified, receipt)
+        except Exception as exc:
+            # Idempotent cleanup of any staged/promoted artifacts + a durable failure audit in a
+            # SEPARATE transaction (the main one rolled back) — review Medium #3. A cleanup
+            # failure is logged + audited but NEVER masks the original error.
+            scope_id = run.id if run is not None else attempt_id
+            if generate_artifacts and run is not None:
+                self._safe_cleanup(scope_id)
+            self._record_failure_audit(
+                stage=stage,
+                benchmark_id=scope_id,
+                problem=problem,
+                problem_id=problem_id,
+                exc=exc,
+            )
+            raise
+
+        _log.info(
+            "optimization.benchmark",
+            conclusion=run.comparison.conclusion.value if run.comparison else "unknown",
+            verified=verified,
+        )
+        return run, findings
+
+    def _persist_benchmark(
+        self,
+        run: BenchmarkRun,
+        problem: SchedulingProblem,
+        findings: list[VerificationFinding],
+        verified: bool,
+        receipt: BenchmarkExecutionReceipt | None,
+    ) -> None:
+        with self._db.session() as session:
+            audit = SqlAlchemyMissionRepository(session)
+            repo = SqlAlchemyOptimizationRepository(session)
+            memory = SqlAlchemyMemoryRepository(session)
+            audit.add_audit_event(
+                AuditEvent(
+                    action=AuditAction.BENCHMARK_REQUESTED, detail={"problem": problem.checksum}
+                )
+            )
+            repo.save_benchmark(run, problem_id=problem.id, verification_passed=verified)
+            if verified and receipt is not None:
+                repo.save_receipt(receipt)
+            audit.add_audit_event(
+                AuditEvent(
+                    action=AuditAction.OPTIMIZATION_VERIFIED
+                    if verified
+                    else AuditAction.OPTIMIZATION_VERIFICATION_FAILED,
+                    detail={
+                        "checks": len(findings),
+                        "failed": sum(1 for f in findings if not f.passed),
+                    },
+                )
+            )
+            for art in run.artifacts:
+                audit.add_audit_event(
+                    AuditEvent(
+                        action=AuditAction.OPTIMIZATION_ARTIFACT_GENERATED,
+                        detail={"type": art["type"]},
+                    )
+                )
+            if verified:
+                self._register_memory_links(memory, problem, run)
+                audit.add_audit_event(AuditEvent(action=AuditAction.BENCHMARK_MEMORY_REGISTERED))
+            audit.add_audit_event(
+                AuditEvent(
+                    action=AuditAction.BENCHMARK_COMPLETED,
+                    detail={
+                        "conclusion": run.comparison.conclusion.value
+                        if run.comparison
+                        else "unknown",
+                        "verified": verified,
+                    },
+                )
+            )
+            session.commit()
+
+    def _safe_cleanup(self, scope_id: str) -> None:
+        """Best-effort artifact cleanup that NEVER masks the original benchmark error (Medium #3/
+        #4). Cleanup now returns an explicit CleanupResult; a real deletion failure is OBSERVABLE
+        — logged + audited (bounded, no secrets/paths) — then swallowed so the caller re-raises
+        the original exception. A defensive try also guards an unexpected raise from cleanup."""
+        try:
+            result = self._viz.cleanup(scope_id)
+        except Exception as exc:  # pragma: no cover - cleanup is designed not to raise
+            result = self._cleanup_result_cls(
+                success=False,
+                exception_type=type(exc).__name__,
+                safe_error_code="artifact-cleanup-failed",
+            )
+        if result.success:
+            return
+        detail = {
+            "operation": "benchmark_cleanup",
+            "benchmark_attempt_id": scope_id,
+            "exception_class": result.exception_type,
+            "error_code": result.safe_error_code or "artifact_cleanup_failed",
+        }
+        _log.error("optimization.benchmark.cleanup_failed", **detail)
+        try:
+            with self._db.session() as session:
+                SqlAlchemyMissionRepository(session).add_audit_event(
+                    AuditEvent(action=AuditAction.BENCHMARK_FAILED, detail=detail)
+                )
+                session.commit()
+        except Exception:  # pragma: no cover - DB itself unavailable; already logged
+            pass
+
+    def _record_failure_audit(
+        self,
+        *,
+        stage: str,
+        benchmark_id: str,
+        problem: SchedulingProblem | None,
+        problem_id: str,
+        exc: Exception,
+    ) -> None:
+        """Persist a bounded failure audit in its own short transaction; log-only if the DB is
+        unavailable. Contains NO secrets, signing key, or raw environment values (Medium #3).
+        ``problem`` may be None when the failure occurred before/while retrieving it."""
+        detail = {
+            "operation": "benchmark",
+            "benchmark_attempt_id": benchmark_id,
+            "problem_id": problem.id if problem is not None else problem_id,
+            "problem_checksum": problem.checksum if problem is not None else None,
+            "stage": stage,
+            "exception_class": type(exc).__name__,
+            "error_code": "benchmark_failed",
+        }
+        try:
+            with self._db.session() as session:
+                SqlAlchemyMissionRepository(session).add_audit_event(
+                    AuditEvent(action=AuditAction.BENCHMARK_FAILED, detail=detail)
+                )
+                session.commit()
+        except Exception:  # pragma: no cover - final fallback when the DB itself is unavailable
+            _log.error("optimization.benchmark.failure", **detail)
+
+    def _authorize_evidence(
+        self, run: BenchmarkRun, findings: list[VerificationFinding]
+    ) -> tuple[BenchmarkExecutionReceipt | None, VerificationFinding]:
+        """Build + verify a signed execution receipt and express it as a release finding.
+
+        When no signer is configured the evidence runs diagnostically but is never accepted
+        (execution provenance unavailable); a failed receipt likewise blocks acceptance.
+        """
+
+        def finding(passed: bool, explanation: str) -> VerificationFinding:
+            return VerificationFinding(
+                check_id="opt.execution_receipt",
+                severity=Severity.INFO if passed else Severity.CRITICAL,
+                status=FindingStatus.PASSED if passed else FindingStatus.FAILED,
+                explanation=explanation,
+                category=CheckCategory.PROVENANCE,
+            )
+
+        # Only build a receipt over an otherwise-clean benchmark; a semantically invalid run is
+        # already non-positive and must not be signed as accepted evidence.
+        if not benchmark_verified_for_evidence(findings):
+            return None, finding(False, "benchmark failed semantic verification; not signed")
+        # A quantum experiment that is not a completed worker run can NEVER receive a trusted
+        # receipt (fourth review, Critical #1): no fabricated nonce, no acceptance.
+        q = run.quantum_experiment
+        if q is not None and not quantum_execution_receipt_eligible(q):
+            return None, finding(
+                False,
+                f"quantum experiment status '{q.status.value}' is not a completed worker run; "
+                "no execution receipt is issued",
+            )
+        if self._receipt_signer is None:
+            return None, finding(
+                False, "execution provenance unavailable: no evidence signer configured"
+            )
+        receipt = build_receipt(run, signer=self._receipt_signer)
+        result = verify_receipt(receipt, run=run, signers=self._receipt_signers)
+        if not result.ok:
+            return None, finding(False, f"execution receipt invalid: {', '.join(result.reasons)}")
+        return receipt, finding(True, "execution receipt signed + verified by the trusted runtime")
+
+    def _register_memory_links(
+        self, memory: SqlAlchemyMemoryRepository, problem: SchedulingProblem, run: BenchmarkRun
+    ) -> None:
+        """Bounded, specific entity links only — NO broad scientific claims (section 16)."""
+        problem_ref = EntityReference(kind=EntityKind.OPTIMIZATION_PROBLEM, entity_id=problem.id)
+        exact_id = None
+        for result in run.solver_results:
+            run_ref = EntityReference(kind=EntityKind.SOLVER_RUN, entity_id=result.id)
+            memory.add_graph_edge(
+                GraphEdge(
+                    from_ref=problem_ref,
+                    edge_kind=GraphEdgeKind.SOLVED_BY,
+                    to_ref=run_ref,
+                    source="phase4a-benchmark",
+                    benchmark_id=run.id,
+                )
+            )
+            if result.schedule is not None:
+                memory.add_graph_edge(
+                    GraphEdge(
+                        from_ref=run_ref,
+                        edge_kind=GraphEdgeKind.PRODUCED,
+                        to_ref=EntityReference(kind=EntityKind.SCHEDULE, entity_id=result.id),
+                        source="phase4a-benchmark",
+                        benchmark_id=run.id,
+                    )
+                )
+            if result.solver_kind == SolverKind.EXACT:
+                exact_id = result.id
+        if run.quantum_experiment is not None and exact_id is not None:
+            memory.add_graph_edge(
+                GraphEdge(
+                    from_ref=EntityReference(
+                        kind=EntityKind.QUANTUM_EXPERIMENT, entity_id=run.quantum_experiment.id
+                    ),
+                    edge_kind=GraphEdgeKind.COMPARED_AGAINST,
+                    to_ref=EntityReference(kind=EntityKind.SOLVER_RUN, entity_id=exact_id),
+                    source="phase4a-benchmark",
+                    benchmark_id=run.id,
+                )
+            )
+        if run.comparison is not None:
+            comp_ref = EntityReference(
+                kind=EntityKind.BENCHMARK_COMPARISON, entity_id=run.comparison.id
+            )
+            for art in run.artifacts:
+                memory.add_graph_edge(
+                    GraphEdge(
+                        from_ref=comp_ref,
+                        edge_kind=GraphEdgeKind.SUPPORTED_BY,
+                        to_ref=EntityReference(
+                            kind=EntityKind.OPTIMIZATION_ARTIFACT, entity_id=art["checksum"]
+                        ),
+                        source="phase4a-benchmark",
+                        benchmark_id=run.id,
+                    )
+                )
+
+    def benchmark_evidence_edges(self, benchmark_id: str, limit: int = 200) -> list[dict[str, str]]:
+        """Return ONLY the memory edges created by this benchmark (fifth review, High #3), so one
+        benchmark's integrity status never affects another benchmark's edges."""
+        with self._db.session() as session:
+            rows = SqlAlchemyMemoryRepository(session).edges_for_benchmark(benchmark_id, limit)
+            return [
+                {
+                    "edge_kind": r.edge_kind,
+                    "direction": "out",
+                    "entity_kind": r.to_kind,
+                    "entity_id": r.to_id,
+                }
+                for r in rows
+            ]
+
+    # ---- reads (re-authenticated; fourth review, Critical #2) ---------------
+    def _authenticate(
+        self,
+        problem: SchedulingProblem,
+        run: BenchmarkRun,
+        receipt: BenchmarkExecutionReceipt | None,
+    ) -> tuple[bool, str, list[VerificationFinding]]:
+        """Re-run semantic + receipt verification over a reconstructed benchmark. Pure (no I/O
+        beyond re-solving). Returns (authenticated, receipt_status, findings)."""
+        artifacts_root = self._settings.resolved_artifacts_dir() if run.artifacts else None
+        # Read-time: artifacts authenticate via the SAME detached sidecar routine offline
+        # consumers use (final acceptance, High #1) — pass the verification keyring.
+        findings = verify_benchmark(
+            problem, run, artifacts_root=artifacts_root, signers=self._receipt_signers
+        )
+        semantic_ok = benchmark_verified_for_evidence(findings)
+        if receipt is None:
+            return False, "none", findings
+        receipt_ok = verify_receipt(receipt, run=run, signers=self._receipt_signers).ok
+        status = "signed" if receipt_ok else "integrity-failed"
+        return (semantic_ok and receipt_ok), status, findings
+
+    def read_benchmark_evidence(self, benchmark_id: str) -> AuthenticatedBenchmark:
+        """Load + REAUTHENTICATE persisted benchmark evidence (never trust verification_passed
+        alone). Malformed persisted evidence + sample-row disagreements FAIL CLOSED rather than
+        raising, and any integrity failure writes an audit in a separate transaction."""
+        with self._db.session() as session:
+            repo = SqlAlchemyOptimizationRepository(session)
+            res = repo.load_evidence(benchmark_id)
+            stored = repo.get_benchmark(benchmark_id)
+            stored_accepted = bool(stored and stored.verification_passed)
+        if not res.found:
+            return AuthenticatedBenchmark(found=False)
+
+        # Malformed or self-inconsistent persisted evidence is an integrity failure regardless of
+        # the stored verification flag (fifth review, Critical + High #2).
+        if not res.is_ok:
+            self._record_integrity_audit(
+                benchmark_id=benchmark_id,
+                problem_id=res.problem_id,
+                problem_checksum=res.problem_checksum,
+                status=res.integrity_status,
+            )
+            return AuthenticatedBenchmark(
+                found=True,
+                authenticated=False,
+                integrity_failed=True,
+                integrity_status=res.integrity_status,
+                receipt_status="integrity-failed",
+                run=res.run,
+                benchmark_id=res.benchmark_id,
+                problem_checksum=res.problem_checksum,
+                created_at_iso=res.created_at_iso,
+                artifact_count=res.artifact_count,
+                has_quantum=res.has_quantum,
+            )
+
+        assert res.problem is not None and res.run is not None
+        authenticated, receipt_status, _findings = self._authenticate(
+            res.problem, res.run, res.receipt
+        )
+        integrity_failed = stored_accepted and not authenticated
+        if integrity_failed:
+            self._record_integrity_audit(
+                benchmark_id=benchmark_id,
+                problem_id=res.problem_id,
+                problem_checksum=res.problem_checksum,
+                status="integrity-failed",
+            )
+        return AuthenticatedBenchmark(
+            found=True,
+            authenticated=authenticated,
+            integrity_failed=integrity_failed,
+            integrity_status=("integrity-failed" if integrity_failed else "ok"),
+            receipt_status=("integrity-failed" if integrity_failed else receipt_status),
+            run=res.run,
+            benchmark_id=res.benchmark_id,
+            problem_checksum=res.problem_checksum,
+            created_at_iso=res.created_at_iso,
+            artifact_count=res.artifact_count,
+            has_quantum=res.has_quantum,
+        )
+
+    def _record_integrity_audit(
+        self,
+        *,
+        benchmark_id: str,
+        problem_id: str | None,
+        problem_checksum: str | None,
+        status: str,
+    ) -> None:
+        detail = {
+            "operation": "benchmark_read",
+            "benchmark_attempt_id": benchmark_id,
+            "problem_id": problem_id,
+            "problem_checksum": problem_checksum,
+            "integrity_status": status,
+            "error_code": "evidence_integrity_failed",
+        }
+        try:
+            with self._db.session() as session:
+                SqlAlchemyMissionRepository(session).add_audit_event(
+                    AuditEvent(action=AuditAction.BENCHMARK_INTEGRITY_FAILED, detail=detail)
+                )
+                session.commit()
+        except Exception:  # pragma: no cover - final fallback when the DB itself is unavailable
+            _log.error("optimization.benchmark.integrity_failed", **detail)
+
+    def get_run(self, run_id: str) -> SolverResult | QuantumExperiment | None:
+        with self._db.session() as session:
+            return SqlAlchemyOptimizationRepository(session).get_solver_run(run_id)
+
+    def list_run_summaries(self, limit: int, offset: int) -> list[AuthenticatedBenchmark]:
+        with self._db.session() as session:
+            ids = SqlAlchemyOptimizationRepository(session).list_benchmark_ids(limit, offset)
+        return [self.read_benchmark_evidence(bid) for bid in ids]
+
+    def list_runs(self, limit: int, offset: int) -> list[dict[str, object]]:
+        with self._db.session() as session:
+            return SqlAlchemyOptimizationRepository(session).list_runs(limit, offset)
+
+    def get_artifacts(self, scope_id: str) -> list[dict[str, str]]:
+        """Return safe, path-free artifact metadata (third review, Medium #2). Internal
+        filesystem paths (path/sidecar_path/root/tmp) never leave the service."""
+        media = {".png": "image/png", ".json": "application/json", ".txt": "text/plain"}
+        with self._db.session() as session:
+            rows = SqlAlchemyOptimizationRepository(session).get_artifacts(scope_id)
+            return [
+                {
+                    "id": r.id,
+                    "type": r.artifact_type,
+                    "checksum": r.checksum,
+                    "created_at": r.created_at.isoformat(),
+                    "media_type": next(
+                        (m for ext, m in media.items() if r.path.endswith(ext)),
+                        "application/octet-stream",
+                    ),
+                }
+                for r in rows
+            ]

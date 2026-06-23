@@ -14,6 +14,11 @@ import httpx
 from orbitmind.core.config import Settings, get_settings
 from orbitmind.memory.service import MemoryService
 from orbitmind.observability.service import ObservabilityService
+from orbitmind.optimization.receipts import (
+    EvidenceReceiptSigner,
+    HmacSha256EvidenceReceiptSigner,
+)
+from orbitmind.optimization.service import OptimizationService
 from orbitmind.orchestration.orchestrator import PrimeOrchestrator
 from orbitmind.orchestration.source_resolver import SourceResolver
 from orbitmind.persistence.database import Database
@@ -36,6 +41,72 @@ from orbitmind.space.propagation import PropagationService
 from orbitmind.verification.checks import VerificationService
 from orbitmind.visualization.charts import VisualizationService
 from orbitmind.visualization.smallbody_charts import SmallBodyVisualizationService
+
+_MIN_SIGNING_KEY_BYTES = 32
+# Non-empty placeholders that must be REJECTED (an empty key is the legitimate no-signer mode).
+_PLACEHOLDER_KEYS = frozenset(
+    {"changeme", "change-me", "placeholder", "secret", "your-key-here", "example"}
+)
+
+
+def _validate_signing_secret(secret: str) -> bytes:
+    """Validate + decode a configured signing secret (fourth review, High #3). Rejects known
+    placeholders and weak keys (< 32 bytes UTF-8). Errors never echo the secret. Callers must
+    invoke this only for a NON-empty secret (an empty key = legitimate no-signer mode)."""
+    if secret.strip().lower() in _PLACEHOLDER_KEYS:
+        raise ValueError("evidence signing key is a known placeholder; refusing to use it")
+    material = secret.encode("utf-8")
+    if len(material) < _MIN_SIGNING_KEY_BYTES:
+        raise ValueError(f"evidence signing key too short: needs >= {_MIN_SIGNING_KEY_BYTES} bytes")
+    return material
+
+
+def _build_evidence_signers(
+    settings: Settings,
+) -> tuple[EvidenceReceiptSigner | None, dict[str, EvidenceReceiptSigner]]:
+    """Build the active receipt signer + the verification keyring (incl. retired verify-only
+    keys) from configuration ONLY (never the DB; fourth review, High #3). There is NO implicit
+    test-environment signer — tests inject a signer explicitly. With no configured key the active
+    signer is None and accepted quantum evidence is impossible (diagnostic, unaccepted mode).
+    Active and retired key ids must be distinct; key material is never logged.
+    """
+    signers: dict[str, EvidenceReceiptSigner] = {}
+    seen_material: set[bytes] = set()
+    # Malformed retired-key entries FAIL STARTUP — they are never silently skipped (fifth review,
+    # Low #2). Only purely blank segments (e.g. a trailing comma) are tolerated.
+    for raw_entry in settings.evidence_signing_retired_keys.get_secret_value().split(","):
+        entry = raw_entry.strip()
+        if not entry:
+            continue
+        if ":" not in entry:
+            raise ValueError("malformed retired signing key entry (expected 'key-id:secret')")
+        kid, _, sec = entry.partition(":")
+        kid, sec = kid.strip(), sec.strip()
+        if not kid:
+            raise ValueError("retired signing key entry has a blank key id")
+        if not sec:
+            raise ValueError("retired signing key entry has a blank secret")
+        material = _validate_signing_secret(sec)  # rejects placeholder/weak material
+        if kid in signers:
+            raise ValueError("duplicate evidence signing key id")
+        if material in seen_material:
+            raise ValueError("duplicate evidence signing key material")
+        signers[kid] = HmacSha256EvidenceReceiptSigner(material, kid)
+        seen_material.add(material)
+    active: EvidenceReceiptSigner | None = None
+    raw_active = settings.evidence_signing_key.get_secret_value()
+    if raw_active.strip():  # empty = legitimate no-signer mode; non-empty is fully validated
+        kid = settings.evidence_signing_key_id.strip()
+        if not kid:
+            raise ValueError("an active signing key is configured but its key id is blank")
+        material = _validate_signing_secret(raw_active)
+        if kid in signers:
+            raise ValueError("active signing key id duplicates a retired key id")
+        if material in seen_material:
+            raise ValueError("active signing key material duplicates a retired key")
+        active = HmacSha256EvidenceReceiptSigner(material, kid)
+        signers[kid] = active
+    return active, signers
 
 
 class AppContainer:
@@ -114,6 +185,15 @@ class AppContainer:
 
         # --- Phase 3B: scientific memory service ---
         self.memory_service = MemoryService(settings=self.settings, database=self.database)
+
+        # --- Phase 4A: bounded quantum optimization service ---
+        signer, signers = _build_evidence_signers(self.settings)
+        self.optimization_service = OptimizationService(
+            settings=self.settings,
+            database=self.database,
+            receipt_signer=signer,
+            receipt_signers=signers,
+        )
 
     def init_storage(self) -> None:
         """Ensure the schema exists and the source catalog is recorded (local/dev)."""

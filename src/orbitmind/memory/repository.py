@@ -506,8 +506,22 @@ class SqlAlchemyMemoryRepository:
                 to_id=edge.to_ref.entity_id,
                 source=edge.source,
                 weight=edge.weight,
+                benchmark_id=edge.benchmark_id,
                 created_at=edge.created_at,
             )
+        )
+
+    def edges_for_benchmark(self, benchmark_id: str, limit: int) -> list[MemoryGraphEdgeRow]:
+        """Select ONLY the edges created by the given benchmark (fifth review, High #3)."""
+        return list(
+            self._s.execute(
+                select(MemoryGraphEdgeRow)
+                .where(MemoryGraphEdgeRow.benchmark_id == benchmark_id)
+                .order_by(MemoryGraphEdgeRow.created_at)
+                .limit(limit)
+            )
+            .scalars()
+            .all()
         )
 
     def edges_from(self, entity_id: str, limit: int) -> list[MemoryGraphEdgeRow]:
