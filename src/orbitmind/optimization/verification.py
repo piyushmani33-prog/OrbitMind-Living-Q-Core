@@ -46,6 +46,7 @@ from orbitmind.optimization.problem import problem_checksum, variable_order
 from orbitmind.optimization.qubo import build_qubo, qubo_energy
 from orbitmind.optimization.receipts import (
     ARTIFACT_VERIFICATION_STATE,
+    QUANTUM_ARTIFACT_TYPES,
     EvidenceReceiptSigner,
     _media_type_for,
     authenticate_sidecar_offline,
@@ -1117,15 +1118,21 @@ def _verify_artifacts(
                     and "seed" in meta
                 )
                 meta_ok = fields_ok and bounded_ok
-                # A quantum sidecar's evidence block is authenticated against the rebuilt manifest
-                # (not merely required to exist).
+                # A quantum sidecar's evidence block is authenticated against the INDEPENDENTLY
+                # rebuilt manifest (final nested-sidecar acceptance). For a quantum artifact the
+                # block must be PRESENT and match every rebuilt field; a removed/None block is an
+                # integrity failure (closing the prior bypass where ``claim is None`` silently
+                # passed). A non-quantum artifact must NOT carry an evidence block.
                 claim = meta.get("quantum_evidence")
-                if claim is not None and manifest is not None:
-                    evidence_ok = evidence_matches_manifest(
-                        QuantumEvidence.model_validate(claim), manifest
-                    )[0]
-                elif claim is not None and manifest is None:
-                    evidence_ok = False  # evidence claimed but no quantum run
+                if str(art.get("type")) in QUANTUM_ARTIFACT_TYPES:
+                    if claim is None or manifest is None:
+                        evidence_ok = False
+                    else:
+                        evidence_ok = evidence_matches_manifest(
+                            QuantumEvidence.model_validate(claim), manifest
+                        )[0]
+                elif claim is not None:
+                    evidence_ok = False  # classical artifact must not carry quantum evidence
                 no_forbidden = not contains_overclaim(raw)
             except Exception:
                 meta_ok = False

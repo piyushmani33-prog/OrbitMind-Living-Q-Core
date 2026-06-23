@@ -23,7 +23,7 @@ import hmac
 from datetime import timedelta
 from typing import Any, Literal, Protocol, runtime_checkable
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, StrictBool, StrictInt
 
 from orbitmind.core.checksums import sha256_canonical_json
 from orbitmind.core.ids import new_id
@@ -122,6 +122,10 @@ class ReceiptPayload(BaseModel):
     greedy_config_checksum: str
     quantum_config_checksum: str | None
     evidence_manifest_checksum: str | None
+    # Digest over the COMPLETE quantum evidence (every field, not only the manifest subset), so a
+    # change to ANY nested evidence field — shots, seeds, software versions, limitations, proof
+    # status — invalidates the receipt (final nested-sidecar acceptance). None for a classical run.
+    quantum_evidence_digest: str | None
     sample_map_digest: str | None
     selected_parameter_digest: str | None
     circuit_metadata_digest: str | None
@@ -345,6 +349,19 @@ def scientific_metadata_digest(run: BenchmarkRun) -> str:
     return sha256_canonical_json({"solvers": solvers, "quantum": quantum, "comparison": comparison})
 
 
+def quantum_evidence_digest(run: BenchmarkRun) -> str | None:
+    """Digest over the COMPLETE self-describing quantum evidence (final nested-sidecar acceptance).
+    Unlike ``evidence_manifest_checksum`` — which covers only the authoritative server-derived
+    subset — this binds EVERY persisted evidence field (shots, optimizer iterations, QAOA layers,
+    transpile level, seeds, software versions, penalty proof, limitations, …). The canonical JSON
+    form here is byte-for-byte what the sidecar embeds (``evidence.model_dump(mode="json")``), so a
+    valid sidecar's recomputed digest equals the signed value and ANY nested mutation breaks it."""
+    q = run.quantum_experiment
+    if q is None or q.evidence is None:
+        return None
+    return sha256_canonical_json(q.evidence.model_dump(mode="json"))
+
+
 def selected_parameter_digest(run: BenchmarkRun) -> str | None:
     q = run.quantum_experiment
     if q is None or q.circuit_metadata is None:
@@ -385,6 +402,48 @@ SIDECAR_ARTIFACT_LIMITATIONS = (
 ARTIFACT_EPISTEMIC_STATUS = "model-estimate"
 ARTIFACT_VERIFICATION_STATE = "verified"
 SIDECAR_FORMAT_VERSION = "1"
+# Artifact types whose sidecar MUST carry the self-describing quantum evidence block. This is keyed
+# off the receipt-BOUND ``artifact_type`` in the signed canonical entry — never an unsigned sidecar
+# field — so an attacker cannot relabel a quantum artifact to dodge the evidence requirement.
+QUANTUM_ARTIFACT_TYPES = frozenset({"quantum_sample_distribution", "quantum_circuit_diagram"})
+
+
+class QuantumEvidenceSidecarV1(BaseModel):
+    """STRICT model for the nested ``quantum_evidence`` block (final nested-sidecar acceptance).
+
+    Mirrors EXACTLY the persisted ``QuantumEvidence`` contract (no invented fields). ``extra=
+    "forbid"`` rejects unknown keys; every field is mandatory (no defaults), so a removed/empty
+    block fails; scalar knobs use ``StrictInt``/``StrictBool`` so a Boolean cannot satisfy an
+    integer field and a numeric string cannot satisfy a numeric field. Collections stay lenient so
+    the JSON-serialized form round-trips (a tuple is emitted as a list); exact VALUE binding is
+    proven separately against the signed ``quantum_evidence_digest``. ``qubit_to_variable`` and
+    ``seeds`` use string keys because that is the JSON-serialized shape the sidecar embeds."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    problem_checksum: str
+    qubo_checksum: str
+    variable_mapping: tuple[str, ...]
+    qubit_to_variable: dict[str, str]
+    bit_order: str
+    encoded_constraints: tuple[str, ...]
+    unencoded_constraints: tuple[str, ...]
+    penalty_value: float
+    penalty_source: str
+    penalty_sufficient: StrictBool
+    penalty_satisfying_assignment_exists: StrictBool
+    penalty_proof_status: str
+    penalty_proof_method: str
+    manifest_checksum: str
+    post_verification_required: StrictBool
+    simulator_backend: str
+    shots: StrictInt
+    optimizer_iterations: StrictInt
+    qaoa_layers: StrictInt
+    transpile_level: StrictInt
+    seeds: dict[str, StrictInt]
+    software_versions: dict[str, str]
+    limitations: str
 
 
 def canonical_artifact_entry(run: BenchmarkRun, art: dict[str, str]) -> dict[str, Any]:
@@ -538,6 +597,7 @@ def _build_payload(run: BenchmarkRun, signer: EvidenceReceiptSigner) -> ReceiptP
             else None
         ),
         evidence_manifest_checksum=(q.evidence.manifest_checksum if q and q.evidence else None),
+        quantum_evidence_digest=quantum_evidence_digest(run),
         sample_map_digest=sample_map_digest(run),
         selected_parameter_digest=selected_parameter_digest(run),
         circuit_metadata_digest=circuit_metadata_digest(run),
@@ -612,6 +672,7 @@ def verify_receipt(
         # Recompute every canonical digest from the current run.
         for name, expected_value in (
             ("evidence-manifest", p.evidence_manifest_checksum),
+            ("quantum-evidence", p.quantum_evidence_digest),
             ("sample-map", p.sample_map_digest),
             ("selected-parameter", p.selected_parameter_digest),
             ("circuit-metadata", p.circuit_metadata_digest),
@@ -709,14 +770,21 @@ class ArtifactSidecarV1(BaseModel):
     software_versions: dict[str, str]
     seed: int
     epistemic_status: str
-    verification_summary: dict[str, Any]
     verification_state: str
     checksum: str
     limitations: str
+    # ``verification_summary`` is DELIBERATELY ABSENT (final nested-sidecar acceptance, Option B):
+    # the build-time finding counts were non-authoritative display data that could not be
+    # independently reconstructed online (build/read finding sets differ). The authoritative
+    # verified status is the receipt-bound ``verification_state`` + the checksum-bound
+    # benchmark_summary.json content. ``extra="forbid"`` now REJECTS any sidecar that still carries
+    # a ``verification_summary`` field, so a forged/contradictory summary fails closed.
     quantum_evidence: dict[str, Any] | None = None
-    # The nested evidence is kept permissive + optional HERE so the downstream membership /
-    # strict-entry / envelope checks report their SPECIFIC reasons (a missing one is still rejected
-    # downstream, never trusted); this model's job is to reject UNKNOWN top-level fields.
+    # ``quantum_evidence`` is kept as an optional permissive ``dict`` HERE so a list/string value is
+    # rejected at this layer while the dedicated strict ``QuantumEvidenceSidecarV1`` parse +
+    # required-presence + signed-digest binding in ``authenticate_sidecar_offline`` report the
+    # SPECIFIC reason. The other nested evidence is permissive so downstream membership / strict-
+    # entry / envelope checks report their own reasons.
     artifact_entry: dict[str, Any] | None = None
     artifact_manifest: list[dict[str, Any]] | None = None
     execution_receipt: dict[str, Any] | None = None
@@ -827,9 +895,6 @@ def authenticate_sidecar_offline(
         or meta.get("policy_snapshot_checksum") != p.policy_checksum
     ):
         return False, "sidecar-binding"
-    ev = meta.get("quantum_evidence")
-    if isinstance(ev, dict) and ev.get("manifest_checksum") != p.evidence_manifest_checksum:
-        return False, "evidence-binding"
     # Artifact-manifest membership + digest proof (the core of High #1).
     entry = meta.get(ARTIFACT_ENTRY_KEY)
     manifest = meta.get(ARTIFACT_MANIFEST_KEY)
@@ -870,6 +935,29 @@ def authenticate_sidecar_offline(
     for sidecar_key, entry_value in duplicated.items():
         if sidecar_key not in meta or meta[sidecar_key] != entry_value:
             return False, "duplicate-field-mismatch"
+    # Nested quantum-evidence authentication (final nested-sidecar acceptance). The decision is
+    # keyed on the receipt-BOUND ``artifact_type`` (proven above via the signed manifest digest),
+    # never an unsigned sidecar field. For a quantum artifact the block must be PRESENT, strictly
+    # shaped (no unknown/missing fields, no Boolean-as-int / numeric-string-as-int), AND its
+    # COMPLETE canonical form must equal the signed full-evidence digest — so removing, emptying,
+    # extending, or contradicting ANY field (shots/seeds/limitations/proof/…) fails. A non-quantum
+    # artifact must NOT carry an evidence block at all.
+    is_quantum_artifact = entry.get("artifact_type") in QUANTUM_ARTIFACT_TYPES
+    raw_evidence = meta.get("quantum_evidence")
+    if is_quantum_artifact:
+        if raw_evidence is None:
+            return False, "missing-quantum-evidence"
+        try:
+            QuantumEvidenceSidecarV1.model_validate(raw_evidence)
+        except Exception:
+            return False, "malformed-quantum-evidence"
+        if sha256_canonical_json(raw_evidence) != p.quantum_evidence_digest:
+            return False, "quantum-evidence-digest"
+        # Defense in depth: the manifest subset must also equal the separately signed value.
+        if raw_evidence.get("manifest_checksum") != p.evidence_manifest_checksum:
+            return False, "evidence-binding"
+    elif raw_evidence is not None:
+        return False, "unexpected-quantum-evidence"
     return True, "authentic"
 
 
@@ -877,6 +965,8 @@ def _recompute_digest(run: BenchmarkRun, name: str) -> str | None:
     q = run.quantum_experiment
     if name == "evidence-manifest":
         return q.evidence.manifest_checksum if q and q.evidence else None
+    if name == "quantum-evidence":
+        return quantum_evidence_digest(run)
     if name == "sample-map":
         return sample_map_digest(run)
     if name == "selected-parameter":
