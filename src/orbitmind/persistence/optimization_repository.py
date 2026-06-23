@@ -84,9 +84,7 @@ class PersistedBenchmarkThresholds(BaseModel):
     competitive_relative_gap: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
     min_feasible_sample_ratio: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
 
-    @field_validator(
-        "competitive_relative_gap", "min_feasible_sample_ratio", mode="before"
-    )
+    @field_validator("competitive_relative_gap", "min_feasible_sample_ratio", mode="before")
     @classmethod
     def _require_real_number(cls, value: object) -> object:
         # Reject before Pydantic coercion. bool is an int subclass -> reject explicitly; a JSON

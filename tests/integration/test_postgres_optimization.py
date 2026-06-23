@@ -285,6 +285,53 @@ def test_child_sample_tamper_detected_on_postgres(pg_container: AppContainer) ->
     assert auth.integrity_failed and auth.integrity_status == "sample-row-mismatch"
 
 
+def test_selected_evidence_tamper_detected_on_postgres(pg_container: AppContainer) -> None:
+    """Tampering the denormalized selected evaluation in experiment_json fails read auth on live
+    PostgreSQL (final acceptance, High 1)."""
+    svc = pg_container.optimization_service
+    problem = svc.create_problem(fixtures.fixture("default"))
+    run, _ = svc.benchmark(problem.id, seed=7, shots=128, optimizer_iterations=6, run_quantum=True)
+    q = run.quantum_experiment
+    if q is None or q.status.value != "completed" or q.selected_evaluation is None:
+        pytest.skip("quantum experiment did not complete with a selected evaluation")
+    assert svc.read_benchmark_evidence(run.id).authenticated
+    with pg_container.database.engine.begin() as conn:
+        conn.execute(
+            text(
+                "UPDATE quantum_experiments SET experiment_json = jsonb_set(experiment_json::jsonb,"
+                "'{selected_evaluation,objective_value}', '999') WHERE id=:e"
+            ),
+            {"e": q.id},
+        )
+    auth = svc.read_benchmark_evidence(run.id)
+    assert auth.integrity_failed and not auth.authenticated
+
+
+@pytest.mark.parametrize(
+    "raw",
+    ['{"competitive_relative_gap": "0.0", "min_feasible_sample_ratio": "0.05"}', "{}"],
+)
+def test_string_and_empty_thresholds_fail_closed_on_postgres(
+    pg_container: AppContainer, raw: str
+) -> None:
+    """A numeric-string or empty persisted thresholds object fails closed on live PostgreSQL —
+    never coerced or defaulted (final acceptance, Medium / High 2)."""
+    svc = pg_container.optimization_service
+    problem = svc.create_problem(fixtures.fixture("default"))
+    run, _ = svc.benchmark(problem.id, seed=7, run_quantum=False)
+    assert svc.read_benchmark_evidence(run.id).authenticated
+    with pg_container.database.engine.begin() as conn:
+        conn.execute(
+            text(
+                "UPDATE benchmark_comparisons SET thresholds_json=:t::jsonb WHERE benchmark_id=:b"
+            ),
+            {"t": raw, "b": run.id},
+        )
+    auth = svc.read_benchmark_evidence(run.id)
+    assert auth.found and auth.integrity_failed and auth.run is None
+    assert auth.integrity_status == "malformed-persisted-evidence"
+
+
 def test_execution_receipt_persists_on_postgres(pg_container: AppContainer) -> None:
     """A verified benchmark persists a signed execution receipt (signer key id stored, secret
     never) and is marked accepted on live PostgreSQL (third review, High #1)."""
