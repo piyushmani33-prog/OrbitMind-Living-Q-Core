@@ -128,6 +128,10 @@ class ReceiptPayload(BaseModel):
     software_version_digest: str | None
     artifact_manifest_digest: str | None
     scientific_metadata_digest: str
+    best_feasible_sample_digest: str | None
+    best_infeasible_sample_digest: str | None
+    selected_schedule_digest: str | None
+    selected_evaluation_digest: str | None
     # None for a benchmark with no completed quantum worker (the parent NEVER fabricates one).
     worker_execution_nonce: str | None
     worker_output_digest: str
@@ -233,6 +237,22 @@ def _config_checksum(result_config: dict[str, Any] | None) -> str | None:
     return sha256_canonical_json(result_config) if result_config is not None else None
 
 
+def _canonical_full_sample(s: Any | None) -> list[Any] | None:
+    """The COMPLETE canonical record for a single sample (final acceptance, High 1)."""
+    if s is None:
+        return None
+    return [
+        s.bitstring,
+        s.count,
+        s.probability,
+        s.feasible,
+        s.raw_mission_value,
+        s.objective_value,
+        s.qubo_energy,
+        s.violations_count,
+    ]
+
+
 def sample_map_digest(run: BenchmarkRun) -> str | None:
     """Digest over the COMPLETE ordered collection of canonical sample records (final acceptance,
     Critical 1): every persisted sample field is bound, so a coordinated parent+child mutation of
@@ -240,20 +260,63 @@ def sample_map_digest(run: BenchmarkRun) -> str | None:
     q = run.quantum_experiment
     if q is None or not q.samples:
         return None
-    rows = sorted(
-        [
-            s.bitstring,
-            s.count,
-            s.probability,
-            s.feasible,
-            s.raw_mission_value,
-            s.objective_value,
-            s.qubo_energy,
-            s.violations_count,
-        ]
-        for s in q.samples
-    )
+    rows = sorted(_canonical_full_sample(s) or [] for s in q.samples)
     return sha256_canonical_json(rows)
+
+
+def best_feasible_sample_digest(run: BenchmarkRun) -> str | None:
+    """Bind the COMPLETE denormalized best-feasible sample (final acceptance, High 1)."""
+    q = run.quantum_experiment
+    if q is None:
+        return None
+    return sha256_canonical_json(_canonical_full_sample(q.best_feasible_sample))
+
+
+def best_infeasible_sample_digest(run: BenchmarkRun) -> str | None:
+    """Bind the COMPLETE denormalized best-infeasible sample (final acceptance, High 1)."""
+    q = run.quantum_experiment
+    if q is None:
+        return None
+    return sha256_canonical_json(_canonical_full_sample(q.best_infeasible_sample))
+
+
+def selected_schedule_digest(run: BenchmarkRun) -> str | None:
+    """Bind the canonical selected schedule (problem checksum + ordered selected ids + producer)."""
+    q = run.quantum_experiment
+    if q is None or q.selected_schedule is None:
+        return None
+    sched = q.selected_schedule
+    return sha256_canonical_json(
+        {
+            "problem_checksum": sched.problem_checksum,
+            "selected_opportunity_ids": list(sched.selected_opportunity_ids),
+            "produced_by": sched.produced_by,
+        }
+    )
+
+
+def selected_evaluation_digest(run: BenchmarkRun) -> str | None:
+    """Bind the COMPLETE canonical selected evaluation (final acceptance, High 1)."""
+    q = run.quantum_experiment
+    if q is None or q.selected_evaluation is None:
+        return None
+    ev = q.selected_evaluation
+    return sha256_canonical_json(
+        {
+            "problem_checksum": ev.problem_checksum,
+            "selected_opportunity_ids": list(ev.selected_opportunity_ids),
+            "feasible": ev.feasible,
+            "raw_mission_value": ev.raw_mission_value,
+            "weighted_mission_value": ev.weighted_mission_value,
+            "constraint_penalty": ev.constraint_penalty,
+            "penalized_objective": ev.penalized_objective,
+            "objective_value": ev.objective_value,
+            "total_energy": ev.total_energy,
+            "total_storage": ev.total_storage,
+            "violations": sorted([v.kind.value, v.detail, v.magnitude] for v in ev.violations),
+            "violations_count": len(ev.violations),
+        }
+    )
 
 
 def scientific_metadata_digest(run: BenchmarkRun) -> str:
@@ -455,6 +518,10 @@ def _build_payload(run: BenchmarkRun, signer: EvidenceReceiptSigner) -> ReceiptP
         software_version_digest=software_version_digest(run),
         artifact_manifest_digest=artifact_manifest_digest(run),
         scientific_metadata_digest=scientific_metadata_digest(run),
+        best_feasible_sample_digest=best_feasible_sample_digest(run),
+        best_infeasible_sample_digest=best_infeasible_sample_digest(run),
+        selected_schedule_digest=selected_schedule_digest(run),
+        selected_evaluation_digest=selected_evaluation_digest(run),
         worker_execution_nonce=(q.execution_nonce if eligible and q is not None else None),
         worker_output_digest=worker_output_digest(run),
         issued_at=utcnow().isoformat(),
@@ -525,6 +592,10 @@ def verify_receipt(
             ("software-version", p.software_version_digest),
             ("artifact-manifest", p.artifact_manifest_digest),
             ("scientific-metadata", p.scientific_metadata_digest),
+            ("best-feasible-sample", p.best_feasible_sample_digest),
+            ("best-infeasible-sample", p.best_infeasible_sample_digest),
+            ("selected-schedule", p.selected_schedule_digest),
+            ("selected-evaluation", p.selected_evaluation_digest),
         ):
             if expected_value != _recompute_digest(run, name):
                 reasons.append(f"{name}-digest")
@@ -728,4 +799,12 @@ def _recompute_digest(run: BenchmarkRun, name: str) -> str | None:
         return artifact_manifest_digest(run)
     if name == "scientific-metadata":
         return scientific_metadata_digest(run)
+    if name == "best-feasible-sample":
+        return best_feasible_sample_digest(run)
+    if name == "best-infeasible-sample":
+        return best_infeasible_sample_digest(run)
+    if name == "selected-schedule":
+        return selected_schedule_digest(run)
+    if name == "selected-evaluation":
+        return selected_evaluation_digest(run)
     return None  # pragma: no cover

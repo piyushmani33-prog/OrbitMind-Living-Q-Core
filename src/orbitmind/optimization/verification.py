@@ -29,6 +29,7 @@ from orbitmind.optimization.models import (
     PenaltyProofStatus,
     QuantumEvidence,
     QuantumExperiment,
+    ScheduleEvaluation,
     SchedulingProblem,
     SolverConfiguration,
     SolverKind,
@@ -68,6 +69,36 @@ def _num(value: float | None) -> float:
     valid zero objective. Use an explicit ``is None`` check.
     """
     return value if value is not None else math.nan
+
+
+def _evaluation_matches(
+    persisted: ScheduleEvaluation | None,
+    recomputed: ScheduleEvaluation,
+    problem_checksum_value: str,
+) -> bool:
+    """Every material field of the persisted selected evaluation must equal the INDEPENDENTLY
+    recomputed evaluation (final acceptance, High 1). ``evaluated_at`` is excluded (a timestamp)."""
+    if persisted is None:
+        return False
+    p, r = persisted, recomputed
+    scalars = (
+        "raw_mission_value",
+        "weighted_mission_value",
+        "constraint_penalty",
+        "penalized_objective",
+        "objective_value",
+        "total_energy",
+        "total_storage",
+    )
+    if any(abs(_num(getattr(p, n)) - _num(getattr(r, n))) > _TOL for n in scalars):
+        return False
+    if p.problem_checksum != problem_checksum_value or p.problem_checksum != r.problem_checksum:
+        return False
+    if p.selected_opportunity_ids != r.selected_opportunity_ids or p.feasible != r.feasible:
+        return False
+    p_v = sorted((v.kind.value, v.detail, round(v.magnitude, 9)) for v in p.violations)
+    r_v = sorted((v.kind.value, v.detail, round(v.magnitude, 9)) for v in r.violations)
+    return p_v == r_v
 
 
 def _f(
@@ -554,18 +585,31 @@ def _verify_quantum(
             values={"recomputed": expected_ratio, "reported": qexp.feasible_sample_ratio},
         )
     )
-    # Best feasible/infeasible recomputed from observed samples.
+    # Best feasible/infeasible recomputed from observed samples. EVERY field of the denormalized
+    # selected samples must equal the independently recomputed observed sample (final acceptance,
+    # High 1) — not just the bitstring.
     rep_bf = qexp.best_feasible_sample
     best_feasible_ok = (rep_bf is None) == (recomputed_best_feasible is None)
     if rep_bf is not None and recomputed_best_feasible is not None:
-        best_feasible_ok = (
-            best_feasible_ok and rep_bf.bitstring == recomputed_best_feasible.bitstring
-        )
+        best_feasible_ok = best_feasible_ok and rep_bf == recomputed_best_feasible
     out.append(
         _f(
             "opt.quantum_best_feasible",
             best_feasible_ok,
-            "reported best-feasible sample matches the best feasible OBSERVED sample",
+            "reported best-feasible sample matches the best feasible OBSERVED sample (all fields)",
+            category=CheckCategory.MATHEMATICS,
+            severity=Severity.CRITICAL,
+        )
+    )
+    rep_bi = qexp.best_infeasible_sample
+    best_infeasible_ok = (rep_bi is None) == (recomputed_best_infeasible is None)
+    if rep_bi is not None and recomputed_best_infeasible is not None:
+        best_infeasible_ok = best_infeasible_ok and rep_bi == recomputed_best_infeasible
+    out.append(
+        _f(
+            "opt.quantum_best_infeasible",
+            best_infeasible_ok,
+            "reported best-infeasible sample matches the deterministic best infeasible sample",
             category=CheckCategory.MATHEMATICS,
             severity=Severity.CRITICAL,
         )
@@ -580,13 +624,29 @@ def _verify_quantum(
                 severity=Severity.CRITICAL,
             )
         )
+        canonical_eval = evaluator.evaluate_bitstring(rep_bf.bitstring)
+        sched = qexp.selected_schedule
+        schedule_ok = (
+            sched is not None
+            and sched.selected_opportunity_ids == canonical_eval.selected_opportunity_ids
+            and sched.problem_checksum == problem.checksum
+            and sched.produced_by == "quantum-qaoa"  # server-owned canonical producer
+        )
         out.append(
             _f(
                 "opt.quantum_selected_schedule",
-                qexp.selected_schedule is not None
-                and qexp.selected_schedule.selected_opportunity_ids
-                == evaluator.evaluate_bitstring(rep_bf.bitstring).selected_opportunity_ids,
-                "selected schedule decodes from the selected sample under the canonical bit order",
+                schedule_ok,
+                "selected schedule (ids + problem checksum + canonical producer) decodes from the "
+                "selected sample",
+                category=CheckCategory.MATHEMATICS,
+                severity=Severity.CRITICAL,
+            )
+        )
+        out.append(
+            _f(
+                "opt.quantum_selected_evaluation",
+                _evaluation_matches(qexp.selected_evaluation, canonical_eval, problem.checksum),
+                "selected evaluation independently recomputed from the selected sample matches",
                 category=CheckCategory.MATHEMATICS,
                 severity=Severity.CRITICAL,
             )
