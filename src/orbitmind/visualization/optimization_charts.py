@@ -167,7 +167,12 @@ class OptimizationVisualizationService:
                 "software_versions": software,
                 "seed": seed,
                 "epistemic_status": ARTIFACT_EPISTEMIC_STATUS,
-                "verification_summary": verification,
+                # NOTE: the build-time finding counts are NOT embedded in the authenticated sidecar
+                # (final nested-sidecar acceptance, Option B). They are non-authoritative display
+                # data that cannot be independently reconstructed online; the authoritative verified
+                # status is ``verification_state`` (receipt-bound) plus the checksum-bound
+                # benchmark_summary.json content. ``ArtifactSidecarV1`` (extra="forbid") rejects any
+                # sidecar that still carries a ``verification_summary`` field.
                 "verification_state": ARTIFACT_VERIFICATION_STATE,
                 "checksum": checksum,
                 "limitations": _DISCLAIMER,
