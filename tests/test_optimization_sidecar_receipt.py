@@ -180,6 +180,8 @@ def test_offline_auth_rejects_envelope_tamper(container: AppContainer, mutate, e
         ("artifact_type", "forged_type"),
         ("limitations", "rewritten benign caveat"),
         ("epistemic_status", "verified-fact"),
+        ("verification_state", "FORGED"),  # acceptance audit: was accepted before
+        ("media_type", "application/forged"),  # acceptance audit: was accepted before
         ("sidecar_format_version", "9"),
     ],
 )
@@ -216,3 +218,42 @@ def test_online_detached_auth_rejects_copied_sidecar_from_other_benchmark(
     sidecar_a.write_text(sidecar_b.read_text("utf-8"), encoding="utf-8")
     auth = svc.read_benchmark_evidence(run_a.id)
     assert auth.integrity_failed and not auth.authenticated
+
+
+# --- final acceptance, High 2: forged top-level verification_state / media_type + strict entry ---
+@pytest.mark.parametrize("field", ["verification_state", "media_type"])
+def test_offline_auth_rejects_forged_top_level_state(container: AppContainer, field: str) -> None:
+    signers, sidecar, _run = _summary_sidecar(container)
+    meta = json.loads(sidecar.read_text("utf-8"))
+    meta[field] = "FORGED"  # top-level duplicate the audit showed was accepted
+    ok, reason = authenticate_sidecar_offline(meta, signers)
+    assert not ok and reason == "duplicate-field-mismatch"
+
+
+def test_offline_auth_rejects_entry_with_extra_field(container: AppContainer) -> None:
+    signers, sidecar, _run = _summary_sidecar(container)
+    meta = json.loads(sidecar.read_text("utf-8"))
+    meta[ARTIFACT_ENTRY_KEY] = {**meta[ARTIFACT_ENTRY_KEY], "smuggled": "x"}
+    ok, reason = authenticate_sidecar_offline(meta, signers)
+    assert not ok and reason == "malformed-artifact-entry"
+
+
+def test_offline_auth_rejects_entry_missing_field(container: AppContainer) -> None:
+    signers, sidecar, _run = _summary_sidecar(container)
+    meta = json.loads(sidecar.read_text("utf-8"))
+    entry = dict(meta[ARTIFACT_ENTRY_KEY])
+    del entry["verification_state"]
+    meta[ARTIFACT_ENTRY_KEY] = entry
+    ok, reason = authenticate_sidecar_offline(meta, signers)
+    assert not ok and reason == "malformed-artifact-entry"
+
+
+def test_valid_sidecar_still_authenticates_after_hardening(container: AppContainer) -> None:
+    signers, sidecar, _run = _summary_sidecar(container)
+    meta = json.loads(sidecar.read_text("utf-8"))
+    assert meta["media_type"] == meta[ARTIFACT_ENTRY_KEY]["media_type"]
+    assert meta["verification_state"] == meta[ARTIFACT_ENTRY_KEY]["verification_state"]
+    ok, reason = authenticate_sidecar_offline(
+        meta, signers, artifact_checksum=meta[ARTIFACT_ENTRY_KEY]["artifact_checksum"]
+    )
+    assert ok, reason

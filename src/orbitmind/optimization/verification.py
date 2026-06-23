@@ -45,8 +45,10 @@ from orbitmind.optimization.policy import (
 from orbitmind.optimization.problem import problem_checksum, variable_order
 from orbitmind.optimization.qubo import build_qubo, qubo_energy
 from orbitmind.optimization.receipts import (
+    ARTIFACT_VERIFICATION_STATE,
     RECEIPT_ENVELOPE_KEY,
     EvidenceReceiptSigner,
+    _media_type_for,
     authenticate_sidecar_offline,
 )
 from orbitmind.optimization.solvers import solve_exact, solve_greedy
@@ -1103,6 +1105,8 @@ def _verify_artifacts(
                     "comparison_algorithm_version": algo_version,
                     "artifact_type": art.get("type"),
                     "checksum": actual,
+                    "media_type": _media_type_for(str(art.get("path", ""))),
+                    "verification_state": ARTIFACT_VERIFICATION_STATE,
                 }
                 fields_ok = all(k in meta and meta[k] == v for k, v in required_equal.items())
                 bounded_ok = (

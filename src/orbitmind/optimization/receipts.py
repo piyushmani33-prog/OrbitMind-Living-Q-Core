@@ -420,6 +420,29 @@ def canonical_artifact_entry(run: BenchmarkRun, art: dict[str, str]) -> dict[str
     }
 
 
+class CanonicalArtifactEntry(BaseModel):
+    """STRICT model for one canonical artifact entry (final acceptance, High 2): every field is
+    mandatory and unknown fields are rejected, so a forged entry that adds/removes a field fails."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    artifact_id: str
+    artifact_type: str
+    artifact_checksum: str
+    media_type: str
+    limitations: str
+    epistemic_status: str
+    verification_state: str
+    benchmark_id: str
+    problem_id: str | None
+    problem_checksum: str
+    exact_result_id: str | None
+    greedy_result_id: str | None
+    quantum_experiment_id: str | None
+    evidence_manifest_checksum: str | None
+    policy_snapshot_checksum: str
+
+
 def canonical_artifact_manifest(run: BenchmarkRun) -> list[dict[str, Any]]:
     """The ordered collection of canonical artifact entries the receipt digest is computed over."""
     return [canonical_artifact_entry(run, a) for a in run.artifacts]
@@ -757,6 +780,14 @@ def authenticate_sidecar_offline(
     manifest = meta.get(ARTIFACT_MANIFEST_KEY)
     if not isinstance(entry, dict) or not isinstance(manifest, list):
         return False, "no-artifact-manifest"
+    # STRICT validation: the entry + EVERY manifest entry must be a complete canonical entry with
+    # no missing/extra fields (final acceptance, High 2).
+    try:
+        CanonicalArtifactEntry.model_validate(entry)
+        for item in manifest:
+            CanonicalArtifactEntry.model_validate(item)
+    except Exception:
+        return False, "malformed-artifact-entry"
     if entry not in manifest:
         return False, "entry-not-in-manifest"
     if _manifest_digest(manifest) != p.artifact_manifest_digest:
@@ -766,12 +797,15 @@ def authenticate_sidecar_offline(
     if artifact_checksum is not None and entry.get("artifact_checksum") != artifact_checksum:
         return False, "artifact-checksum"
     # Every duplicated top-level sidecar field must EXACTLY equal the signed canonical entry — no
-    # field may have a default that turns absence into trusted data (final acceptance, High #1).
+    # field may have a default that turns absence into trusted data (final acceptance, High 1/2).
+    # This now includes media_type + verification_state (the acceptance audit forged both).
     duplicated = {
         "artifact_type": entry.get("artifact_type"),
         "checksum": entry.get("artifact_checksum"),
+        "media_type": entry.get("media_type"),
         "limitations": entry.get("limitations"),
         "epistemic_status": entry.get("epistemic_status"),
+        "verification_state": entry.get("verification_state"),
         "benchmark_id": entry.get("benchmark_id"),
         "problem_id": entry.get("problem_id"),
         "problem_checksum": entry.get("problem_checksum"),

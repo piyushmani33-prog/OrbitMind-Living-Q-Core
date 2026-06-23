@@ -145,12 +145,15 @@ class OptimizationVisualizationService:
         artifacts: list[dict[str, str]] = []
 
         def emit(name: str, art_type: str, solver: str) -> None:
+            from orbitmind.optimization.receipts import _media_type_for
+
             path = scope / name
             checksum = sha256_file(path)
             sidecar = path.with_suffix(path.suffix + ".json")
             body: dict[str, object] = {
                 "sidecar_format_version": "1",
                 "artifact_type": art_type,
+                "media_type": _media_type_for(name),
                 # Ownership + policy anchor authenticated by the verifier (third review, High #4).
                 "benchmark_id": run.id,
                 "problem_id": run.problem_id,
