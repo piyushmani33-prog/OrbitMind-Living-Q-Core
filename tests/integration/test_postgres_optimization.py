@@ -234,6 +234,40 @@ def test_benchmark_problem_reassignment_is_rejected(pg_container: AppContainer) 
     assert _exec(pg_container, "SELECT 1")[0][0] == 1
 
 
+def test_missing_envelope_fails_online_on_postgres(pg_container: AppContainer) -> None:
+    """Deleting the receipt envelope from a sidecar fails read authentication on live PostgreSQL
+    (final sidecar acceptance, High 1)."""
+    import json
+
+    svc = pg_container.optimization_service
+    problem = svc.create_problem(fixtures.fixture("default"))
+    run, _ = svc.benchmark(problem.id, seed=7, run_quantum=False, generate_artifacts=True)
+    assert svc.read_benchmark_evidence(run.id).authenticated
+    sidecar = pg_container.settings.resolved_artifacts_dir() / (run.artifacts[0]["path"] + ".json")
+    meta = json.loads(sidecar.read_text("utf-8"))
+    del meta["execution_receipt"]
+    sidecar.write_text(json.dumps(meta), encoding="utf-8")
+    auth = svc.read_benchmark_evidence(run.id)
+    assert auth.integrity_failed and not auth.authenticated
+
+
+def test_unknown_sidecar_field_fails_online_on_postgres(pg_container: AppContainer) -> None:
+    """A forged unknown top-level sidecar field fails read authentication on live PostgreSQL
+    (final sidecar acceptance, High 2)."""
+    import json
+
+    svc = pg_container.optimization_service
+    problem = svc.create_problem(fixtures.fixture("default"))
+    run, _ = svc.benchmark(problem.id, seed=7, run_quantum=False, generate_artifacts=True)
+    assert svc.read_benchmark_evidence(run.id).authenticated
+    sidecar = pg_container.settings.resolved_artifacts_dir() / (run.artifacts[0]["path"] + ".json")
+    meta = json.loads(sidecar.read_text("utf-8"))
+    meta["exact_result_id"] = "FORGED"
+    sidecar.write_text(json.dumps(meta), encoding="utf-8")
+    auth = svc.read_benchmark_evidence(run.id)
+    assert auth.integrity_failed and not auth.authenticated
+
+
 def test_malformed_solver_json_fails_closed_on_postgres(pg_container: AppContainer) -> None:
     """A corrupt persisted solver result_json must FAIL CLOSED on live PostgreSQL — classified as
     malformed, never raised as a 500 (fifth review, High #2)."""
