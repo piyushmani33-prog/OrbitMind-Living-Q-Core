@@ -323,7 +323,8 @@ def test_string_and_empty_thresholds_fail_closed_on_postgres(
     with pg_container.database.engine.begin() as conn:
         conn.execute(
             text(
-                "UPDATE benchmark_comparisons SET thresholds_json=:t::jsonb WHERE benchmark_id=:b"
+                "UPDATE benchmark_comparisons SET thresholds_json=CAST(:t AS jsonb) "
+                "WHERE benchmark_id=:b"
             ),
             {"t": raw, "b": run.id},
         )
