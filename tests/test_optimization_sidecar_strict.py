@@ -59,7 +59,7 @@ def test_missing_envelope_fails_online_read(container: AppContainer) -> None:
 
 def test_missing_envelope_endpoints(client_container) -> None:
     client, container = client_container
-    svc, run, sidecar = _accepted_with_artifacts(container)
+    _svc, run, sidecar = _accepted_with_artifacts(container)
     meta = json.loads(sidecar.read_text("utf-8"))
     del meta[RECEIPT_ENVELOPE_KEY]
     sidecar.write_text(json.dumps(meta), encoding="utf-8")
@@ -118,7 +118,7 @@ def test_unknown_top_level_field_fails_offline(container: AppContainer, field: s
     svc, _run, sidecar = _accepted_with_artifacts(container)
     meta = json.loads(sidecar.read_text("utf-8"))
     meta[field] = "FORGED"  # a field NOT in the declared sidecar schema
-    ok, reason = authenticate_sidecar_offline(meta, svc._receipt_signers)
+    ok, _reason = authenticate_sidecar_offline(meta, svc._receipt_signers)
     assert not ok, f"forged top-level {field} was accepted"
 
 
