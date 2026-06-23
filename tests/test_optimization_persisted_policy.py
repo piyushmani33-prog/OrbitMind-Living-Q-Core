@@ -27,6 +27,12 @@ def _accepted(container: AppContainer) -> str:
         {"competitive_relative_gap": "x", "min_feasible_sample_ratio": 0.05},  # wrong type
         {"competitive_relative_gap": float("inf"), "min_feasible_sample_ratio": 0.05},  # non-finite
         {"competitive_relative_gap": 2.0, "min_feasible_sample_ratio": 0.05},  # out of range
+        {"competitive_relative_gap": "0.0", "min_feasible_sample_ratio": "0.05"},  # numeric strings
+        {"competitive_relative_gap": False, "min_feasible_sample_ratio": True},  # booleans
+        {"competitive_relative_gap": "1", "min_feasible_sample_ratio": 0.05},  # string "1"
+        {"competitive_relative_gap": "", "min_feasible_sample_ratio": 0.05},  # empty string
+        {"competitive_relative_gap": None, "min_feasible_sample_ratio": 0.05},  # null
+        {"competitive_relative_gap": [0.0], "min_feasible_sample_ratio": 0.05},  # list
     ],
 )
 def test_malformed_persisted_thresholds_fail_closed(
@@ -54,8 +60,22 @@ def test_strict_dto_rejects_each_malformed_input() -> None:
         PersistedBenchmarkThresholds.model_validate(
             {"competitive_relative_gap": float("nan"), "min_feasible_sample_ratio": 0.05}
         )
+    # Numeric strings + booleans are NEVER coerced (final acceptance, Medium).
+    for bad in (
+        {"competitive_relative_gap": "0.0", "min_feasible_sample_ratio": "0.05"},
+        {"competitive_relative_gap": False, "min_feasible_sample_ratio": True},
+        {"competitive_relative_gap": "1", "min_feasible_sample_ratio": 0.05},
+        {"competitive_relative_gap": None, "min_feasible_sample_ratio": 0.05},
+    ):
+        with pytest.raises(ValidationError):
+            PersistedBenchmarkThresholds.model_validate(bad)
     # A complete, in-range pair is accepted.
     ok = PersistedBenchmarkThresholds.model_validate(
         {"competitive_relative_gap": 0.25, "min_feasible_sample_ratio": 0.33}
     )
     assert ok.competitive_relative_gap == 0.25
+    # JSON integers 0/1 are accepted as valid numbers (documented decision).
+    ints = PersistedBenchmarkThresholds.model_validate(
+        {"competitive_relative_gap": 0, "min_feasible_sample_ratio": 1}
+    )
+    assert ints.competitive_relative_gap == 0.0 and ints.min_feasible_sample_ratio == 1.0

@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -68,18 +68,34 @@ class EvidenceLoadResult:
 
 
 class PersistedBenchmarkThresholds(BaseModel):
-    """STRICT persistence-only DTO for stored comparison thresholds (final acceptance, High #2).
+    """STRICT persistence-only DTO for stored comparison thresholds (final acceptance, High #2 +
+    Medium).
 
     No defaults: a persisted ``{}`` / partial JSON, an extra field, a non-finite value, or an
-    out-of-range value is malformed evidence — NOT an excuse to synthesize trusted defaults. This
-    is used ONLY when reading historical persisted evidence; new server policies still create
-    thresholds with their own defaults.
+    out-of-range value is malformed evidence — NOT an excuse to synthesize trusted defaults. JSON
+    numeric STRINGS (``"0.0"``) and booleans (``true``/``false``) are NEVER coerced — Python bool
+    is an int subtype, so it is rejected explicitly. JSON integers (``0``/``1``) are accepted as
+    valid numbers (documented decision). Used ONLY when reading historical persisted evidence; new
+    server policies still create thresholds with their own defaults.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     competitive_relative_gap: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
     min_feasible_sample_ratio: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
+
+    @field_validator(
+        "competitive_relative_gap", "min_feasible_sample_ratio", mode="before"
+    )
+    @classmethod
+    def _require_real_number(cls, value: object) -> object:
+        # Reject before Pydantic coercion. bool is an int subclass -> reject explicitly; a JSON
+        # numeric string ("0.0") must never be accepted. Only a real int/float is a valid number.
+        if isinstance(value, bool):
+            raise ValueError("boolean is not a valid threshold")
+        if type(value) not in (int, float):
+            raise ValueError("threshold must be a JSON number, not a string/bool/null/collection")
+        return value
 
 
 def _persisted_thresholds(raw: Any) -> BenchmarkThresholds:
