@@ -21,7 +21,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 from datetime import timedelta
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict
 
@@ -384,6 +384,7 @@ SIDECAR_ARTIFACT_LIMITATIONS = (
 )
 ARTIFACT_EPISTEMIC_STATUS = "model-estimate"
 ARTIFACT_VERIFICATION_STATE = "verified"
+SIDECAR_FORMAT_VERSION = "1"
 
 
 def canonical_artifact_entry(run: BenchmarkRun, art: dict[str, str]) -> dict[str, Any]:
@@ -397,6 +398,7 @@ def canonical_artifact_entry(run: BenchmarkRun, art: dict[str, str]) -> dict[str
     snap = run.policy_snapshot or {}
     checksum = str(art.get("checksum", ""))
     return {
+        "sidecar_format_version": SIDECAR_FORMAT_VERSION,  # receipt-bound (final acceptance)
         "artifact_id": checksum,  # content-addressed identity
         "artifact_type": str(art.get("type", "")),
         "artifact_checksum": checksum,
@@ -426,6 +428,7 @@ class CanonicalArtifactEntry(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    sidecar_format_version: str
     artifact_id: str
     artifact_type: str
     artifact_checksum: str
@@ -666,17 +669,57 @@ RECEIPT_ENVELOPE_KEY = "execution_receipt"
 
 ARTIFACT_ENTRY_KEY = "artifact_entry"
 ARTIFACT_MANIFEST_KEY = "artifact_manifest"
-# The receipt envelope must contain EXACTLY these keys (final acceptance, High #1): a missing key
-# or an extra key fails closed, and every duplicated value is cross-checked against the payload.
-_REQUIRED_ENVELOPE_FIELDS = (
-    "receipt_id",
-    "receipt_format_version",
-    "payload_checksum",
-    "signer_key_id",
-    "signature_algorithm",
-    "signature",
-    "payload",
-)
+
+
+class PublicReceiptEnvelope(BaseModel):
+    """Strict public receipt envelope embedded in a sidecar (final acceptance, High 2). Exactly
+    these keys; the secret is never present."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    receipt_id: str
+    receipt_format_version: str
+    payload_checksum: str
+    signer_key_id: str
+    signature_algorithm: str
+    signature: str
+    payload: dict[str, Any]
+
+
+class ArtifactSidecarV1(BaseModel):
+    """ONE strict, versioned sidecar schema (final acceptance, High 2). ``extra="forbid"`` rejects
+    ANY unknown top-level field, so a forged top-level value (artifact_id, exact_result_id, …) can
+    no longer slip in as unsigned metadata. The duplicated top-level compatibility fields are
+    declared here AND cross-checked for exact equality against the signed canonical artifact entry
+    in ``authenticate_sidecar_offline``; the security-critical values are receipt-bound through the
+    entry/manifest digest."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    sidecar_format_version: Literal["1"]
+    artifact_type: str
+    media_type: str
+    benchmark_id: str
+    problem_id: str | None
+    problem_checksum: str
+    policy_snapshot_checksum: str
+    comparison_algorithm_version: str
+    solver: str
+    created_at: str
+    software_versions: dict[str, str]
+    seed: int
+    epistemic_status: str
+    verification_summary: dict[str, Any]
+    verification_state: str
+    checksum: str
+    limitations: str
+    quantum_evidence: dict[str, Any] | None = None
+    # The nested evidence is kept permissive + optional HERE so the downstream membership /
+    # strict-entry / envelope checks report their SPECIFIC reasons (a missing one is still rejected
+    # downstream, never trusted); this model's job is to reject UNKNOWN top-level fields.
+    artifact_entry: dict[str, Any] | None = None
+    artifact_manifest: list[dict[str, Any]] | None = None
+    execution_receipt: dict[str, Any] | None = None
 
 
 def embed_sidecar_evidence(
@@ -735,8 +778,20 @@ def authenticate_sidecar_offline(
     env = meta.get(RECEIPT_ENVELOPE_KEY)
     if not isinstance(env, dict):
         return False, "no-receipt-envelope"
-    if set(env) != set(_REQUIRED_ENVELOPE_FIELDS):  # missing OR extra key fails closed
+    # Strict envelope: exactly the required keys (extra="forbid") with the right types — a missing
+    # key, an extra key, or a non-dict payload fails closed (final acceptance, High 2).
+    try:
+        PublicReceiptEnvelope.model_validate(env)
+    except Exception:
         return False, "incomplete-receipt-envelope"
+    # STRICT top-level schema: parse the ENTIRE sidecar through the versioned model so any unknown
+    # top-level field (forged artifact_id / result id / extra metadata) fails (final acceptance,
+    # High 2). The envelope-presence check above runs first so a missing envelope still reports
+    # ``no-receipt-envelope``.
+    try:
+        ArtifactSidecarV1.model_validate(meta)
+    except Exception:
+        return False, "unknown-sidecar-field"
     try:
         receipt = BenchmarkExecutionReceipt.model_validate(
             {
@@ -800,6 +855,7 @@ def authenticate_sidecar_offline(
     # field may have a default that turns absence into trusted data (final acceptance, High 1/2).
     # This now includes media_type + verification_state (the acceptance audit forged both).
     duplicated = {
+        "sidecar_format_version": entry.get("sidecar_format_version"),
         "artifact_type": entry.get("artifact_type"),
         "checksum": entry.get("artifact_checksum"),
         "media_type": entry.get("media_type"),
