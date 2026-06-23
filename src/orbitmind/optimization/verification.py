@@ -46,7 +46,6 @@ from orbitmind.optimization.problem import problem_checksum, variable_order
 from orbitmind.optimization.qubo import build_qubo, qubo_energy
 from orbitmind.optimization.receipts import (
     ARTIFACT_VERIFICATION_STATE,
-    RECEIPT_ENVELOPE_KEY,
     EvidenceReceiptSigner,
     _media_type_for,
     authenticate_sidecar_offline,
@@ -1079,15 +1078,17 @@ def _verify_artifacts(
         meta_ok = False
         evidence_ok = True
         no_forbidden = True
-        # Read-time only: if the sidecar carries the embedded receipt, authenticate it with the
-        # SAME detached routine offline consumers use (final acceptance, High #1). None => not
-        # applicable (no signers, or no embedded receipt yet at build time) => no failure.
+        # When a verification keyring is configured (read-time), every promoted artifact of a
+        # receipt-authenticated benchmark is authenticated with the SAME detached routine offline
+        # consumers use — UNCONDITIONALLY (final acceptance, High 1). A MISSING receipt envelope is
+        # NOT a skip: the strict validator returns ``no-receipt-envelope`` and this finding fails.
+        # None => not applicable (no signers / build time, before the receipt is embedded).
         detached_ok: bool | None = None
         if sidecar_target.is_file():
             try:
                 raw = sidecar_target.read_text("utf-8")
                 meta = json.loads(raw)
-                if signers is not None and isinstance(meta, dict) and RECEIPT_ENVELOPE_KEY in meta:
+                if signers and isinstance(meta, dict):
                     detached_ok = authenticate_sidecar_offline(
                         meta, signers, artifact_checksum=actual
                     )[0]
