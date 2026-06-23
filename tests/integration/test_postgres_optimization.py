@@ -268,6 +268,86 @@ def test_unknown_sidecar_field_fails_online_on_postgres(pg_container: AppContain
     assert auth.integrity_failed and not auth.authenticated
 
 
+@pytest.mark.skipif(
+    not __import__("orbitmind.quantum.adapter", fromlist=["quantum_available"]).quantum_available(),
+    reason="qiskit/qiskit-aer not installed",
+)
+def test_nested_quantum_evidence_tamper_fails_online_on_postgres(
+    pg_container: AppContainer,
+) -> None:
+    """Deleting / contradicting the nested quantum_evidence block in a quantum sidecar fails read
+    authentication on live PostgreSQL (final nested-sidecar acceptance)."""
+    import json
+
+    svc = pg_container.optimization_service
+    problem = svc.create_problem(fixtures.fixture("default"))
+    run, _ = svc.benchmark(
+        problem.id,
+        seed=7,
+        shots=128,
+        optimizer_iterations=6,
+        run_quantum=True,
+        generate_artifacts=True,
+    )
+    q = run.quantum_experiment
+    if q is None or q.status.value != "completed":
+        pytest.skip("quantum experiment did not complete")
+    assert svc.read_benchmark_evidence(run.id).authenticated
+    root = pg_container.settings.resolved_artifacts_dir()
+    qside = next(a for a in run.artifacts if a["type"] == "quantum_sample_distribution")
+    sidecar = root / (qside["path"] + ".json")
+    base = sidecar.read_text("utf-8")
+    # 1) removed block
+    meta = json.loads(base)
+    meta.pop("quantum_evidence")
+    sidecar.write_text(json.dumps(meta), encoding="utf-8")
+    auth = svc.read_benchmark_evidence(run.id)
+    assert auth.integrity_failed and not auth.authenticated
+    # 2) contradicted field (well-shaped but altered shots)
+    meta = json.loads(base)
+    meta["quantum_evidence"]["shots"] = 999999
+    sidecar.write_text(json.dumps(meta), encoding="utf-8")
+    auth = svc.read_benchmark_evidence(run.id)
+    assert auth.integrity_failed and not auth.authenticated
+    sidecar.write_text(base, encoding="utf-8")  # restore
+    assert svc.read_benchmark_evidence(run.id).authenticated
+
+
+@pytest.mark.skipif(
+    not __import__("orbitmind.quantum.adapter", fromlist=["quantum_available"]).quantum_available(),
+    reason="qiskit/qiskit-aer not installed",
+)
+def test_nested_verification_summary_present_fails_online_on_postgres(
+    pg_container: AppContainer,
+) -> None:
+    """A forged verification_summary (an unknown, unsigned field under Option B) fails read
+    authentication on live PostgreSQL (final nested-sidecar acceptance)."""
+    import json
+
+    svc = pg_container.optimization_service
+    problem = svc.create_problem(fixtures.fixture("default"))
+    run, _ = svc.benchmark(
+        problem.id,
+        seed=7,
+        shots=128,
+        optimizer_iterations=6,
+        run_quantum=True,
+        generate_artifacts=True,
+    )
+    q = run.quantum_experiment
+    if q is None or q.status.value != "completed":
+        pytest.skip("quantum experiment did not complete")
+    assert svc.read_benchmark_evidence(run.id).authenticated
+    root = pg_container.settings.resolved_artifacts_dir()
+    qside = next(a for a in run.artifacts if a["type"] == "quantum_sample_distribution")
+    sidecar = root / (qside["path"] + ".json")
+    meta = json.loads(sidecar.read_text("utf-8"))
+    meta["verification_summary"] = {"checks": 1, "failed": 0, "passed": True}  # forged "all passed"
+    sidecar.write_text(json.dumps(meta), encoding="utf-8")
+    auth = svc.read_benchmark_evidence(run.id)
+    assert auth.integrity_failed and not auth.authenticated
+
+
 def test_malformed_solver_json_fails_closed_on_postgres(pg_container: AppContainer) -> None:
     """A corrupt persisted solver result_json must FAIL CLOSED on live PostgreSQL — classified as
     malformed, never raised as a 500 (fifth review, High #2)."""
