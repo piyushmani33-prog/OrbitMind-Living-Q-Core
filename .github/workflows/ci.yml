@@ -22,7 +22,11 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+          # The quantum extra (Qiskit + Aer) is required so the bounded QAOA benchmark
+          # COMPLETES in CI exactly as it does locally; without it quantum benchmarks
+          # downgrade to insufficient-evidence and the quantum-gated tests would skip,
+          # diverging from the 666-passed local baseline.
+          pip install -e ".[dev,quantum]"
 
       - name: Ruff (lint)
         run: python -m ruff check .
@@ -68,10 +72,12 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install dependencies (incl. PostgreSQL driver)
+      - name: Install dependencies (incl. PostgreSQL driver + quantum adapter)
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[postgres,dev]"
+          # quantum extra: the live-PostgreSQL quantum tamper/persistence tests must RUN
+          # (43 passed, not skipped) — they require a completed Aer QAOA experiment.
+          pip install -e ".[postgres,dev,quantum]"
 
       - name: Alembic migration applies to PostgreSQL head
         run: python -m alembic upgrade head
