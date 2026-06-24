@@ -282,6 +282,131 @@ def test_result_model_rejects_optimal_with_greedy_solver() -> None:
         ObservationPlanningResult.model_validate(payload)
 
 
+def test_result_model_rejects_failed_with_optimal_label() -> None:
+    with pytest.raises(PydanticValidationError):
+        ObservationPlanningResult(
+            request_checksum="request",
+            source_mode=ObservationPlanningSourceMode.DECLARED,
+            status=PlanningResultStatus.FAILED,
+            optimality_label=PlanningOptimalityLabel.OPTIMAL,
+        )
+
+
+def test_result_model_rejects_invalid_with_optimal_label() -> None:
+    with pytest.raises(PydanticValidationError):
+        ObservationPlanningResult(
+            request_checksum="request",
+            source_mode=ObservationPlanningSourceMode.DECLARED,
+            status=PlanningResultStatus.INVALID,
+            optimality_label=PlanningOptimalityLabel.OPTIMAL,
+        )
+
+
+def test_result_model_rejects_timed_out_with_optimal_label() -> None:
+    result = plan_observation_request(
+        _declared_request(),
+        exact_solver=_fake_exact_with_status(
+            ExperimentStatus.TIMED_OUT, OptimalityStatus.UNKNOWN, selected={"OPP-A"}
+        ),
+        allow_greedy_fallback=False,
+    )
+    payload = result.model_dump(mode="python")
+    payload["optimality_label"] = PlanningOptimalityLabel.OPTIMAL
+
+    with pytest.raises(PydanticValidationError):
+        ObservationPlanningResult.model_validate(payload)
+
+
+def test_result_model_rejects_unsupported_with_optimal_label() -> None:
+    result = plan_observation_request(
+        _declared_request(),
+        exact_solver=_fake_exact_with_status(
+            ExperimentStatus.UNSUPPORTED, OptimalityStatus.UNKNOWN, selected=set()
+        ),
+        allow_greedy_fallback=False,
+    )
+    payload = result.model_dump(mode="python")
+    payload["optimality_label"] = PlanningOptimalityLabel.OPTIMAL
+
+    with pytest.raises(PydanticValidationError):
+        ObservationPlanningResult.model_validate(payload)
+
+
+def test_result_model_rejects_infeasible_with_optimal_label() -> None:
+    result = plan_observation_request(
+        _declared_request(
+            opportunities=(
+                _opp("OPP-A", start_min=0, end_min=60),
+                _opp("OPP-B", start_min=30, end_min=90),
+            ),
+            constraints=ConstraintSet(mandatory=("OPP-A", "OPP-B")),
+        )
+    )
+    payload = result.model_dump(mode="python")
+    payload["optimality_label"] = PlanningOptimalityLabel.OPTIMAL
+
+    with pytest.raises(PydanticValidationError):
+        ObservationPlanningResult.model_validate(payload)
+
+
+def test_result_model_accepts_failed_with_unknown_label() -> None:
+    result = ObservationPlanningResult(
+        request_checksum="request",
+        source_mode=ObservationPlanningSourceMode.DECLARED,
+        status=PlanningResultStatus.FAILED,
+        optimality_label=PlanningOptimalityLabel.UNKNOWN,
+    )
+
+    assert result.status == PlanningResultStatus.FAILED
+
+
+def test_result_model_accepts_invalid_with_unknown_label() -> None:
+    result = ObservationPlanningResult(
+        request_checksum="request",
+        source_mode=ObservationPlanningSourceMode.DECLARED,
+        status=PlanningResultStatus.INVALID,
+        optimality_label=PlanningOptimalityLabel.UNKNOWN,
+    )
+
+    assert result.status == PlanningResultStatus.INVALID
+
+
+def test_result_model_accepts_infeasible_with_infeasible_label() -> None:
+    result = plan_observation_request(
+        _declared_request(
+            opportunities=(
+                _opp("OPP-A", start_min=0, end_min=60),
+                _opp("OPP-B", start_min=30, end_min=90),
+            ),
+            constraints=ConstraintSet(mandatory=("OPP-A", "OPP-B")),
+        )
+    )
+
+    assert ObservationPlanningResult.model_validate(result.model_dump(mode="python"))
+
+
+def test_result_model_accepts_genuine_exact_verified_optimal() -> None:
+    result = plan_observation_request(_declared_request())
+
+    assert result.optimality_label == PlanningOptimalityLabel.OPTIMAL
+    assert ObservationPlanningResult.model_validate(result.model_dump(mode="python"))
+
+
+def test_result_model_accepts_greedy_verified_heuristic() -> None:
+    result = plan_observation_request(
+        _declared_request(
+            opportunities=(
+                _opp("OPP-A", start_min=0, end_min=30, value=5.0),
+                _opp("OPP-B", start_min=40, end_min=70, value=6.0),
+            ),
+            limits=SchedulingProblemLimits(max_variables=2, exact_max_variables=1),
+        )
+    )
+
+    assert result.optimality_label == PlanningOptimalityLabel.HEURISTIC
+    assert ObservationPlanningResult.model_validate(result.model_dump(mode="python"))
+
+
 def test_independent_evaluation_checksum_mismatch_returns_failed_result(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

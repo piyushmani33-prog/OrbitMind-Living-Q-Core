@@ -296,6 +296,28 @@ class ObservationPlanningResult(BaseModel):
 
     @model_validator(mode="after")
     def _check_consistency(self) -> ObservationPlanningResult:
+        if (
+            self.status != PlanningResultStatus.VERIFIED_FEASIBLE
+            and self.optimality_label == PlanningOptimalityLabel.OPTIMAL
+        ):
+            raise ValueError("only verified-feasible results can be labelled optimal")
+        if (
+            self.status
+            in {
+                PlanningResultStatus.FAILED,
+                PlanningResultStatus.INVALID,
+                PlanningResultStatus.TIMED_OUT,
+                PlanningResultStatus.UNSUPPORTED,
+            }
+            and self.optimality_label != PlanningOptimalityLabel.UNKNOWN
+        ):
+            raise ValueError("non-feasible non-success results require unknown optimality")
+        if (
+            self.status == PlanningResultStatus.INFEASIBLE
+            and self.optimality_label != PlanningOptimalityLabel.INFEASIBLE
+        ):
+            raise ValueError("infeasible planning results must use the infeasible label")
+
         if self.status == PlanningResultStatus.INVALID:
             if self.feasible:
                 raise ValueError("invalid planning results cannot be feasible")
