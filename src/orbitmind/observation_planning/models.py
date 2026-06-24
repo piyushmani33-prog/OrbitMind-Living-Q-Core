@@ -20,13 +20,17 @@ from orbitmind.core.errors import ValidationError
 from orbitmind.core.timeutils import ensure_utc
 from orbitmind.optimization import fixtures
 from orbitmind.optimization.models import (
+    CandidateSchedule,
     ConstraintSet,
+    ExperimentStatus,
     ObservationOpportunity,
     ObservationTarget,
     SatelliteResource,
+    ScheduleEvaluation,
     SchedulingObjective,
     SchedulingProblem,
     SchedulingProblemLimits,
+    SolverResult,
 )
 from orbitmind.optimization.problem import normalize_problem
 
@@ -59,6 +63,33 @@ class PlanningVerificationLabel(StrEnum):
 
     VERIFIED_FIXTURE_PLAN = "verified-fixture-plan"
     VERIFIED_DECLARED_OPPORTUNITY_PLAN = "verified-declared-opportunity-plan"
+
+
+class AuthoritativePlanningSolver(StrEnum):
+    """Classical solver selected as the authoritative Phase 4B.1 planning source."""
+
+    EXACT = "exact"
+    GREEDY = "greedy"
+
+
+class PlanningResultStatus(StrEnum):
+    """Typed in-memory planning outcomes for the non-persistent Phase 4B.1 boundary."""
+
+    VERIFIED_FEASIBLE = "verified-feasible"
+    INFEASIBLE = "infeasible"
+    TIMED_OUT = "timed-out"
+    UNSUPPORTED = "unsupported"
+    INVALID = "invalid"
+    FAILED = "failed"
+
+
+class PlanningOptimalityLabel(StrEnum):
+    """Honest optimality labels for classically generated observation plans."""
+
+    OPTIMAL = "optimal"
+    HEURISTIC = "heuristic"
+    INFEASIBLE = "infeasible"
+    UNKNOWN = "unknown"
 
 
 class PlanningHorizon(BaseModel):
@@ -192,6 +223,29 @@ class RequestToProblemTranslation(BaseModel):
     problem: SchedulingProblem
     verification_label: PlanningVerificationLabel
     limitations: tuple[str, ...]
+
+
+class ObservationPlanningResult(BaseModel):
+    """Immutable in-memory result for authoritative classical observation planning."""
+
+    model_config = ConfigDict(frozen=True)
+
+    request_checksum: str
+    problem_checksum: str = ""
+    source_mode: ObservationPlanningSourceMode
+    selected_solver: AuthoritativePlanningSolver | None = None
+    solver_execution_status: ExperimentStatus | None = None
+    status: PlanningResultStatus
+    optimality_label: PlanningOptimalityLabel
+    verification_label: PlanningVerificationLabel | None = None
+    limitations: tuple[str, ...] = ()
+    schedule: CandidateSchedule | None = None
+    authoritative_result: SolverResult | None = None
+    independent_evaluation: ScheduleEvaluation | None = None
+    feasible: bool = False
+    objective_value: float | None = None
+    fallback_history: tuple[SolverResult, ...] = ()
+    verification_errors: tuple[str, ...] = ()
 
 
 def _dt(value: object) -> str:
