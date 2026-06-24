@@ -1,4 +1,12 @@
-"""Repository for minimal Phase 4B observation-planning persistence."""
+"""Repository for minimal Phase 4B observation-planning persistence.
+
+Observation plans are created only for ``verified-feasible`` runs by repository policy and
+domain validation. A database-level guard that constrains ``observation_plans`` to only those
+runs would require duplicating mutable run-status columns, triggers, or heavier composite-key
+machinery that would complicate SQLite/PostgreSQL parity. Direct database tampering remains
+outside this Phase 4B.1 persistence boundary; a future additive migration can strengthen this if
+that trade-off becomes worthwhile.
+"""
 
 from __future__ import annotations
 
@@ -17,6 +25,7 @@ from orbitmind.observation_planning.models import (
     ObservationPlanningRequest,
     ObservationPlanningResult,
     ObservationPlanningScientificIdentity,
+    PlanningOptimalityLabel,
     PlanningResultStatus,
     planning_request_checksum,
 )
@@ -81,9 +90,13 @@ class SqlAlchemyObservationPlanningRepository:
         self._s = session
 
     def create_planning_request(
-        self, request: ObservationPlanningRequest, *, owner_id: str | None = None
+        self,
+        request: ObservationPlanningRequest,
+        *,
+        owner_id: str | None = None,
+        use_savepoint: bool = True,
     ) -> StoredObservationPlanningRequest:
-        resolved_owner = _owner(owner_id or request.requested_by)
+        resolved_owner = normalize_owner_id(request.requested_by if owner_id is None else owner_id)
         checksum = planning_request_checksum(request)
         if request.idempotency_key is not None:
             existing = self._find_request_by_idempotency(resolved_owner, request.idempotency_key)
@@ -102,21 +115,29 @@ class SqlAlchemyObservationPlanningRepository:
             idempotency_key=request.idempotency_key,
             created_at=utcnow(),
         )
-        try:
-            with self._s.begin_nested():
-                self._s.add(row)
-                self._s.flush()
-        except IntegrityError:
-            self._s.expire_all()
-            if request.idempotency_key is None:
-                raise
-            existing = self._find_request_by_idempotency(resolved_owner, request.idempotency_key)
-            if existing is None:
-                raise
-            stored = self._row_to_request(existing)
-            if stored.request_checksum != checksum:
-                raise ValidationError("idempotency key reused with a different request") from None
-            return stored
+        if use_savepoint:
+            try:
+                with self._s.begin_nested():
+                    self._s.add(row)
+                    self._s.flush()
+            except IntegrityError:
+                self._s.expire_all()
+                if request.idempotency_key is None:
+                    raise
+                existing = self._find_request_by_idempotency(
+                    resolved_owner, request.idempotency_key
+                )
+                if existing is None:
+                    raise
+                stored = self._row_to_request(existing)
+                if stored.request_checksum != checksum:
+                    raise ValidationError(
+                        "idempotency key reused with a different request"
+                    ) from None
+                return stored
+        else:
+            self._s.add(row)
+            self._s.flush()
         return self._row_to_request(row)
 
     def get_planning_request(
@@ -125,17 +146,27 @@ class SqlAlchemyObservationPlanningRepository:
         row = self._request_row(request_id, _owner(owner_id))
         return self._row_to_request(row) if row is not None else None
 
+    def get_planning_request_by_idempotency(
+        self, *, owner_id: str, idempotency_key: str
+    ) -> StoredObservationPlanningRequest | None:
+        """Return an owner-scoped idempotent request, if one exists."""
+
+        row = self._find_request_by_idempotency(_owner(owner_id), idempotency_key)
+        return self._row_to_request(row) if row is not None else None
+
     def persist_planning_result(
         self,
         *,
         request_id: str,
         owner_id: str,
         result: ObservationPlanningResult,
+        use_savepoint: bool = True,
     ) -> StoredObservationPlanningRun:
         resolved_owner = _owner(owner_id)
         request = self.get_planning_request(request_id, owner_id=resolved_owner)
         if request is None:
             raise NotFoundError("observation-planning request not found")
+        validate_persistable_planning_result(result)
         if request.request_checksum != result.request_checksum:
             raise ValidationError("planning result request checksum does not match request")
         identity = result.scientific_identity
@@ -183,25 +214,40 @@ class SqlAlchemyObservationPlanningRepository:
             created_at=now,
             completed_at=now,
         )
-        try:
-            with self._s.begin_nested():
-                self._s.add(run)
-                self._s.flush()
-                if result.status == PlanningResultStatus.VERIFIED_FEASIBLE:
-                    self._s.add(_plan_row(run_id, resolved_owner, result, identity_checksum))
-                self._s.flush()
-        except IntegrityError:
-            self._s.expire_all()
-            existing = self._find_run_by_identity(request_id, identity_checksum)
-            if existing is None:
-                raise
-            return self._row_to_run(existing)
+        if use_savepoint:
+            try:
+                with self._s.begin_nested():
+                    self._s.add(run)
+                    self._s.flush()
+                    if result.status == PlanningResultStatus.VERIFIED_FEASIBLE:
+                        self._s.add(_plan_row(run_id, resolved_owner, result, identity_checksum))
+                    self._s.flush()
+            except IntegrityError:
+                self._s.expire_all()
+                existing = self._find_run_by_identity(request_id, identity_checksum)
+                if existing is None:
+                    raise
+                return self._row_to_run(existing)
+        else:
+            self._s.add(run)
+            self._s.flush()
+            if result.status == PlanningResultStatus.VERIFIED_FEASIBLE:
+                self._s.add(_plan_row(run_id, resolved_owner, result, identity_checksum))
+            self._s.flush()
         return self._row_to_run(run)
 
     def get_planning_run(
         self, run_id: str, *, owner_id: str
     ) -> StoredObservationPlanningRun | None:
         row = self._run_row(run_id, _owner(owner_id))
+        return self._row_to_run(row) if row is not None else None
+
+    def get_planning_run_by_scientific_identity(
+        self, *, request_id: str, identity_checksum: str
+    ) -> StoredObservationPlanningRun | None:
+        """Return a deterministic run for a request + scientific identity, if present."""
+
+        row = self._find_run_by_identity(request_id, identity_checksum)
         return self._row_to_run(row) if row is not None else None
 
     def get_observation_plan(self, plan_id: str, *, owner_id: str) -> StoredObservationPlan | None:
@@ -369,10 +415,34 @@ class SqlAlchemyObservationPlanningRepository:
         )
 
 
-def _owner(owner_id: str) -> str:
+def normalize_owner_id(owner_id: str) -> str:
+    """Validate and return an explicit owner identifier."""
+
     if not owner_id or owner_id.strip() != owner_id:
         raise ValidationError("owner_id must be non-empty and unpadded")
     return owner_id
+
+
+def validate_persistable_planning_result(result: ObservationPlanningResult) -> None:
+    """Reject planning results that are outside the persistence contract."""
+
+    if result.status == PlanningResultStatus.INVALID:
+        raise ValidationError("invalid observation-planning results are not persistable")
+    if not result.problem_checksum or result.problem_checksum.strip() != result.problem_checksum:
+        raise ValidationError("persisted planning results require a non-empty problem checksum")
+    if len(result.problem_checksum) != 64:
+        raise ValidationError("persisted planning results require a 64-character problem checksum")
+    if result.status != PlanningResultStatus.VERIFIED_FEASIBLE and result.feasible:
+        raise ValidationError("non-success planning results cannot be persisted as feasible")
+    if (
+        result.status != PlanningResultStatus.VERIFIED_FEASIBLE
+        and result.optimality_label == PlanningOptimalityLabel.OPTIMAL
+    ):
+        raise ValidationError("non-success planning results cannot be persisted as optimal")
+
+
+def _owner(owner_id: str) -> str:
+    return normalize_owner_id(owner_id)
 
 
 def _plan_row(

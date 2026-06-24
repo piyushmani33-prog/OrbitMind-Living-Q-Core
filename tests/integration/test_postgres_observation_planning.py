@@ -13,10 +13,12 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
+from orbitmind.core.errors import ValidationError
 from orbitmind.observation_planning import (
     ObservationPlanningRequest,
     ObservationPlanningSourceMode,
     PlanningHorizon,
+    execute_observation_planning,
     plan_observation_request,
 )
 from orbitmind.optimization.models import (
@@ -100,6 +102,36 @@ def _request(
     )
 
 
+def _invalid_reference_request(
+    *,
+    owner: str = "owner-a",
+    idempotency_key: str | None = "pg-invalid",
+) -> ObservationPlanningRequest:
+    base = dt.datetime(2026, 6, 21, 10, 0, tzinfo=dt.UTC)
+    return ObservationPlanningRequest(
+        name="postgres invalid reference request",
+        horizon=_horizon(),
+        source_mode=ObservationPlanningSourceMode.DECLARED,
+        fixture_name=None,
+        opportunities=(
+            ObservationOpportunity(
+                id="OPP-BAD",
+                satellite_id="SAT-MISSING",
+                target_id="T1",
+                window=TimeWindow(start=base, end=base + dt.timedelta(minutes=30)),
+                mission_value=5.0,
+                duration_seconds=1800.0,
+                energy_cost=1.0,
+                storage_cost=1.0,
+            ),
+        ),
+        satellites=(SatelliteResource(id="SAT-A", energy_capacity=10.0, storage_capacity=10.0),),
+        targets=(ObservationTarget(id="T1"),),
+        requested_by=owner,
+        idempotency_key=idempotency_key,
+    )
+
+
 def _persist_result(db: Database) -> tuple[str, str, str]:
     request = _request(idempotency_key="pg-idempotent")
     result = plan_observation_request(request)
@@ -156,6 +188,114 @@ def test_postgres_owner_scoped_idempotency(pg_db: Database) -> None:
 
     assert first.id == same.id
     assert first.id != other.id
+
+
+def test_postgres_orchestration_reuses_request_and_run(pg_db: Database) -> None:
+    with pg_db.session() as session:
+        first = execute_observation_planning(
+            session=session,
+            owner_id="owner-a",
+            request=_request(idempotency_key="orchestrated"),
+        )
+        second = execute_observation_planning(
+            session=session,
+            owner_id="owner-a",
+            request=_request(idempotency_key="orchestrated"),
+        )
+        session.commit()
+
+    assert first.request_created is True
+    assert first.run_created is True
+    assert first.plan_created is True
+    assert second.request_id == first.request_id
+    assert second.run_id == first.run_id
+    assert second.plan_id == first.plan_id
+    assert second.request_created is False
+    assert second.run_created is False
+    assert second.plan_created is False
+
+
+def test_postgres_orchestration_invalid_result_rolls_back_new_request(pg_db: Database) -> None:
+    with pg_db.session() as session:
+        with pytest.raises(ValidationError, match="not persistable"):
+            execute_observation_planning(
+                session=session,
+                owner_id="owner-a",
+                request=_invalid_reference_request(),
+            )
+        session.commit()
+
+    assert _exec(pg_db, "SELECT count(*) FROM observation_planning_requests")[0][0] == 0
+    assert _exec(pg_db, "SELECT count(*) FROM observation_planning_runs")[0][0] == 0
+    assert _exec(pg_db, "SELECT count(*) FROM observation_plans")[0][0] == 0
+
+
+def test_postgres_repository_idempotency_integrity_race_recovers(
+    pg_db: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    request = _request(idempotency_key="pg-race")
+    with pg_db.session() as session:
+        repo = SqlAlchemyObservationPlanningRepository(session)
+        existing = repo.create_planning_request(request)
+        original_find = repo._find_request_by_idempotency
+        calls = 0
+
+        def racing_find(owner_id: str, idempotency_key: str) -> object:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return None
+            return original_find(owner_id, idempotency_key)
+
+        monkeypatch.setattr(repo, "_find_request_by_idempotency", racing_find)
+        raced = repo.create_planning_request(request)
+        session.commit()
+
+    assert raced.id == existing.id
+    assert calls >= 2
+    rows = _exec(
+        pg_db,
+        "SELECT id FROM observation_planning_requests "
+        "WHERE owner_id='owner-a' AND idempotency_key='pg-race'",
+    )
+    assert rows == [(existing.id,)]
+
+
+def test_postgres_deleting_request_with_dependent_run_is_restricted(pg_db: Database) -> None:
+    request_id, run_id, plan_id = _persist_result(pg_db)
+    with pg_db.engine.connect() as conn:
+        trans = conn.begin()
+        with pytest.raises(IntegrityError):
+            conn.execute(
+                text("DELETE FROM observation_planning_requests WHERE id=:request_id"),
+                {"request_id": request_id},
+            )
+        trans.rollback()
+
+    assert (
+        _exec(
+            pg_db,
+            "SELECT count(*) FROM observation_planning_requests WHERE id=:request_id",
+            {"request_id": request_id},
+        )[0][0]
+        == 1
+    )
+    assert (
+        _exec(
+            pg_db,
+            "SELECT count(*) FROM observation_planning_runs WHERE id=:run_id",
+            {"run_id": run_id},
+        )[0][0]
+        == 1
+    )
+    assert (
+        _exec(
+            pg_db,
+            "SELECT count(*) FROM observation_plans WHERE id=:plan_id",
+            {"plan_id": plan_id},
+        )[0][0]
+        == 1
+    )
 
 
 def test_postgres_owner_composite_fk_rejects_run_reassignment(pg_db: Database) -> None:
