@@ -25,11 +25,13 @@ from orbitmind.optimization.models import (
     ExperimentStatus,
     ObservationOpportunity,
     ObservationTarget,
+    OptimalityStatus,
     SatelliteResource,
     ScheduleEvaluation,
     SchedulingObjective,
     SchedulingProblem,
     SchedulingProblemLimits,
+    SolverKind,
     SolverResult,
 )
 from orbitmind.optimization.problem import normalize_problem
@@ -220,9 +222,28 @@ class RequestToProblemTranslation(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     request_checksum: str
+    source_mode: ObservationPlanningSourceMode
     problem: SchedulingProblem
     verification_label: PlanningVerificationLabel
     limitations: tuple[str, ...]
+
+
+class ObservationPlanningScientificIdentity(BaseModel):
+    """Deterministic identity for scientific comparison, excluding runtime metadata."""
+
+    model_config = ConfigDict(frozen=True)
+
+    request_checksum: str
+    problem_checksum: str
+    source_mode: ObservationPlanningSourceMode
+    selected_solver: AuthoritativePlanningSolver | None
+    selected_opportunity_ids: tuple[str, ...] | None
+    status: PlanningResultStatus
+    optimality_label: PlanningOptimalityLabel
+    verification_label: PlanningVerificationLabel | None
+    feasible: bool
+    objective_value: float | None
+    fallback_attempts: tuple[tuple[SolverKind, ExperimentStatus], ...] = ()
 
 
 class ObservationPlanningResult(BaseModel):
@@ -246,6 +267,108 @@ class ObservationPlanningResult(BaseModel):
     objective_value: float | None = None
     fallback_history: tuple[SolverResult, ...] = ()
     verification_errors: tuple[str, ...] = ()
+
+    @property
+    def scientific_identity(self) -> ObservationPlanningScientificIdentity:
+        """Return the deterministic scientific identity, excluding runtime metadata."""
+
+        return ObservationPlanningScientificIdentity(
+            request_checksum=self.request_checksum,
+            problem_checksum=self.problem_checksum,
+            source_mode=self.source_mode,
+            selected_solver=self.selected_solver,
+            selected_opportunity_ids=(
+                self.schedule.selected_opportunity_ids if self.schedule is not None else None
+            ),
+            status=self.status,
+            optimality_label=self.optimality_label,
+            verification_label=self.verification_label,
+            feasible=self.feasible,
+            objective_value=(
+                self.independent_evaluation.objective_value
+                if self.independent_evaluation is not None
+                else None
+            ),
+            fallback_attempts=tuple(
+                (attempt.solver_kind, attempt.status) for attempt in self.fallback_history
+            ),
+        )
+
+    @model_validator(mode="after")
+    def _check_consistency(self) -> ObservationPlanningResult:
+        if self.status == PlanningResultStatus.INVALID:
+            if self.feasible:
+                raise ValueError("invalid planning results cannot be feasible")
+            if self.authoritative_result is not None:
+                raise ValueError("invalid planning results cannot carry solver evidence")
+            return self
+
+        if self.status == PlanningResultStatus.VERIFIED_FEASIBLE:
+            if not self.feasible:
+                raise ValueError("verified-feasible results must set feasible=True")
+            if self.independent_evaluation is None:
+                raise ValueError("verified-feasible results require independent evaluation")
+            if not self.independent_evaluation.feasible:
+                raise ValueError("verified-feasible results require feasible evaluation")
+            if self.schedule is None:
+                raise ValueError("verified-feasible results require a schedule")
+        elif self.feasible:
+            raise ValueError("non-success planning results cannot set feasible=True")
+
+        if self.authoritative_result is None:
+            if self.status not in {
+                PlanningResultStatus.INVALID,
+                PlanningResultStatus.FAILED,
+            }:
+                raise ValueError("solver-backed planning results require authoritative evidence")
+            return self
+
+        if self.solver_execution_status != self.authoritative_result.status:
+            raise ValueError("solver_execution_status must match authoritative result status")
+        if self.authoritative_result.problem_checksum != self.problem_checksum:
+            raise ValueError("authoritative result problem checksum must match planning result")
+        if self.independent_evaluation is not None:
+            if self.independent_evaluation.problem_checksum != self.problem_checksum:
+                raise ValueError("evaluation problem checksum must match planning result")
+            if self.objective_value is not None and not math.isclose(
+                self.objective_value,
+                self.independent_evaluation.objective_value,
+                rel_tol=0.0,
+                abs_tol=1e-9,
+            ):
+                raise ValueError("objective value must match independent evaluation")
+        elif self.objective_value is not None:
+            raise ValueError("objective value requires independent evaluation")
+
+        if self.feasible and self.schedule is None:
+            raise ValueError("feasible planning results require a schedule")
+
+        if self.optimality_label == PlanningOptimalityLabel.OPTIMAL:
+            if self.selected_solver != AuthoritativePlanningSolver.EXACT:
+                raise ValueError("only exact planning results can be labelled optimal")
+            if self.authoritative_result.optimality_status != OptimalityStatus.OPTIMAL:
+                raise ValueError("optimal planning results require proven exact optimality")
+        if (
+            self.optimality_label == PlanningOptimalityLabel.HEURISTIC
+            and self.selected_solver == AuthoritativePlanningSolver.EXACT
+            and self.authoritative_result.optimality_status == OptimalityStatus.OPTIMAL
+        ):
+            raise ValueError("proven exact optimality cannot be labelled heuristic")
+
+        if self.status == PlanningResultStatus.TIMED_OUT and (
+            self.solver_execution_status != ExperimentStatus.TIMED_OUT or self.feasible
+        ):
+            raise ValueError("timed-out planning results must carry timed-out solver status")
+        if self.status == PlanningResultStatus.UNSUPPORTED and (
+            self.solver_execution_status != ExperimentStatus.UNSUPPORTED or self.feasible
+        ):
+            raise ValueError("unsupported planning results must carry unsupported solver status")
+        if self.status == PlanningResultStatus.VERIFIED_FEASIBLE and (
+            self.solver_execution_status != ExperimentStatus.COMPLETED
+        ):
+            raise ValueError("verified-feasible results require completed solver execution")
+
+        return self
 
 
 def _dt(value: object) -> str:
@@ -409,6 +532,7 @@ def translate_request_to_problem(
     _require_within_horizon(normalized, request)
     return RequestToProblemTranslation(
         request_checksum=planning_request_checksum(request),
+        source_mode=request.source_mode,
         problem=normalized,
         verification_label=label,
         limitations=limitations,

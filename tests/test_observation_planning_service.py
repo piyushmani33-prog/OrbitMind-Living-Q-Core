@@ -7,16 +7,20 @@ import datetime as dt
 from typing import Any
 
 import pytest
+from pydantic import ValidationError as PydanticValidationError
 
+import orbitmind.observation_planning.service as planning_service
 from orbitmind.observation_planning import (
     AuthoritativePlanningSolver,
     ObservationPlanningRequest,
+    ObservationPlanningResult,
     ObservationPlanningSourceMode,
     PlanningHorizon,
     PlanningOptimalityLabel,
     PlanningResultStatus,
     PlanningVerificationLabel,
     plan_observation_request,
+    translate_request_to_problem,
 )
 from orbitmind.optimization.evaluation import Evaluator
 from orbitmind.optimization.models import (
@@ -89,25 +93,6 @@ def _declared_request(
         targets=targets or (ObservationTarget(id="T1"),),
         constraints=constraints or ConstraintSet(),
         limits=limits or SchedulingProblemLimits(),
-    )
-
-
-def _scientific_identity(result: object) -> tuple[object, ...]:
-    planning = result
-    assert hasattr(planning, "schedule")
-    schedule = planning.schedule
-    evaluation = planning.independent_evaluation
-    return (
-        planning.request_checksum,
-        planning.problem_checksum,
-        planning.source_mode,
-        planning.selected_solver,
-        planning.status,
-        planning.optimality_label,
-        schedule.selected_opportunity_ids if schedule else None,
-        evaluation.objective_value if evaluation else None,
-        evaluation.feasible if evaluation else None,
-        planning.verification_label,
     )
 
 
@@ -222,7 +207,358 @@ def test_same_request_produces_identical_scientific_result_twice() -> None:
     first = plan_observation_request(request)
     second = plan_observation_request(request)
 
-    assert _scientific_identity(first) == _scientific_identity(second)
+    assert first.scientific_identity == second.scientific_identity
+
+
+def test_runtime_ids_and_timestamps_do_not_affect_scientific_identity() -> None:
+    result = plan_observation_request(_declared_request())
+    assert result.authoritative_result is not None
+    altered_solver_result = result.authoritative_result.model_copy(
+        update={
+            "id": "different-id",
+            "started_at": dt.datetime(2026, 6, 21, 10, 1, tzinfo=dt.UTC),
+            "finished_at": dt.datetime(2026, 6, 21, 10, 2, tzinfo=dt.UTC),
+            "runtime_seconds": 99.0,
+        }
+    )
+    altered = result.model_copy(update={"authoritative_result": altered_solver_result})
+
+    assert altered.scientific_identity == result.scientific_identity
+
+
+def test_exact_wrong_problem_checksum_returns_failed_result() -> None:
+    def wrong_checksum_exact(
+        problem: SchedulingProblem,
+        config: SolverConfiguration,
+        evaluator: Evaluator | None = None,
+    ) -> SolverResult:
+        ev = (evaluator or Evaluator(problem)).evaluate({"OPP-A"})
+        return build_result(
+            solver_kind=SolverKind.EXACT,
+            solver_name="wrong-checksum",
+            solver_version="test",
+            problem_checksum="not-the-problem-checksum",
+            config=config,
+            evaluation=ev,
+            status=ExperimentStatus.COMPLETED,
+            optimality=OptimalityStatus.OPTIMAL,
+            known_optimum=ev.objective_value,
+            runtime_seconds=0.0,
+            evaluated_candidates=1,
+            limitations="wrong checksum",
+        )
+
+    result = plan_observation_request(_declared_request(), exact_solver=wrong_checksum_exact)
+
+    assert result.status == PlanningResultStatus.FAILED
+    assert result.authoritative_result is None
+    assert result.independent_evaluation is not None
+    assert "problem checksum" in " ".join(result.verification_errors)
+
+
+def test_result_model_rejects_verified_feasible_with_false_feasible() -> None:
+    result = plan_observation_request(_declared_request())
+    payload = result.model_dump(mode="python")
+    payload["feasible"] = False
+
+    with pytest.raises(PydanticValidationError):
+        ObservationPlanningResult.model_validate(payload)
+
+
+def test_result_model_rejects_optimal_with_greedy_solver() -> None:
+    result = plan_observation_request(
+        _declared_request(
+            opportunities=(
+                _opp("OPP-A", start_min=0, end_min=30, value=5.0),
+                _opp("OPP-B", start_min=40, end_min=70, value=6.0),
+            ),
+            limits=SchedulingProblemLimits(max_variables=2, exact_max_variables=1),
+        )
+    )
+    payload = result.model_dump(mode="python")
+    payload["optimality_label"] = PlanningOptimalityLabel.OPTIMAL
+
+    with pytest.raises(PydanticValidationError):
+        ObservationPlanningResult.model_validate(payload)
+
+
+def test_independent_evaluation_checksum_mismatch_returns_failed_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_evaluator = Evaluator
+
+    class WrongChecksumEvaluator:
+        def __init__(self, problem: SchedulingProblem) -> None:
+            self._inner = real_evaluator(problem)
+            self.order = self._inner.order
+
+        def evaluate(self, selected: set[str]) -> object:
+            ev = self._inner.evaluate(selected)
+            return ev.model_copy(update={"problem_checksum": "wrong-evaluation-checksum"})
+
+    def exact_ignoring_fake_evaluator(
+        problem: SchedulingProblem,
+        config: SolverConfiguration,
+        evaluator: Evaluator | None = None,
+    ) -> SolverResult:
+        real = real_evaluator(problem)
+        ev = real.evaluate({"OPP-A"})
+        return build_result(
+            solver_kind=SolverKind.EXACT,
+            solver_name="exact-real-eval",
+            solver_version="test",
+            problem_checksum=problem.checksum,
+            config=config,
+            evaluation=ev,
+            status=ExperimentStatus.COMPLETED,
+            optimality=OptimalityStatus.OPTIMAL,
+            known_optimum=ev.objective_value,
+            runtime_seconds=0.0,
+            evaluated_candidates=1,
+            limitations="real eval",
+        )
+
+    monkeypatch.setattr(planning_service, "Evaluator", WrongChecksumEvaluator)
+
+    result = plan_observation_request(
+        _declared_request(),
+        exact_solver=exact_ignoring_fake_evaluator,
+    )
+
+    assert result.status == PlanningResultStatus.FAILED
+    assert result.independent_evaluation is None
+    assert "evaluation problem checksum" in " ".join(result.verification_errors)
+
+
+def test_solver_objective_mismatch_returns_failed_result() -> None:
+    def wrong_objective_exact(
+        problem: SchedulingProblem,
+        config: SolverConfiguration,
+        evaluator: Evaluator | None = None,
+    ) -> SolverResult:
+        ev = (evaluator or Evaluator(problem)).evaluate({"OPP-A"})
+        result = build_result(
+            solver_kind=SolverKind.EXACT,
+            solver_name="wrong-objective",
+            solver_version="test",
+            problem_checksum=problem.checksum,
+            config=config,
+            evaluation=ev,
+            status=ExperimentStatus.COMPLETED,
+            optimality=OptimalityStatus.OPTIMAL,
+            known_optimum=ev.objective_value,
+            runtime_seconds=0.0,
+            evaluated_candidates=1,
+            limitations="wrong objective",
+        )
+        return result.model_copy(update={"objective_value": ev.objective_value + 1.0})
+
+    result = plan_observation_request(_declared_request(), exact_solver=wrong_objective_exact)
+
+    assert result.status == PlanningResultStatus.FAILED
+    assert "objective" in " ".join(result.verification_errors)
+
+
+def test_exact_completed_result_without_schedule_is_not_verified() -> None:
+    result = plan_observation_request(
+        _declared_request(),
+        exact_solver=_fake_exact_with_status(
+            ExperimentStatus.COMPLETED, OptimalityStatus.OPTIMAL, selected=set()
+        ),
+    )
+    assert result.authoritative_result is not None
+    without_schedule = result.authoritative_result.model_copy(
+        update={
+            "schedule": None,
+            "evaluation": None,
+            "objective_value": None,
+            "feasible": False,
+        }
+    )
+
+    def exact_without_schedule(
+        problem: SchedulingProblem,
+        config: SolverConfiguration,
+        evaluator: Evaluator | None = None,
+    ) -> SolverResult:
+        return without_schedule.model_copy(update={"problem_checksum": problem.checksum})
+
+    no_schedule = plan_observation_request(
+        _declared_request(),
+        exact_solver=exact_without_schedule,
+    )
+
+    assert no_schedule.status == PlanningResultStatus.INFEASIBLE
+    assert no_schedule.schedule is None
+    assert no_schedule.feasible is False
+
+
+def test_exact_timeout_with_greedy_fallback_disabled() -> None:
+    result = plan_observation_request(
+        _declared_request(),
+        exact_solver=_fake_exact_with_status(
+            ExperimentStatus.TIMED_OUT, OptimalityStatus.UNKNOWN, selected={"OPP-A"}
+        ),
+        allow_greedy_fallback=False,
+    )
+
+    assert result.status == PlanningResultStatus.TIMED_OUT
+    assert result.selected_solver == AuthoritativePlanningSolver.EXACT
+    assert result.feasible is False
+    assert result.fallback_history == ()
+
+
+def test_exact_unsupported_with_greedy_fallback_disabled() -> None:
+    result = plan_observation_request(
+        _declared_request(),
+        exact_solver=_fake_exact_with_status(
+            ExperimentStatus.UNSUPPORTED, OptimalityStatus.UNKNOWN, selected=set()
+        ),
+        allow_greedy_fallback=False,
+    )
+
+    assert result.status == PlanningResultStatus.UNSUPPORTED
+    assert result.selected_solver == AuthoritativePlanningSolver.EXACT
+    assert result.fallback_history == ()
+
+
+def test_greedy_failure_after_exact_timeout_is_failed_not_verified() -> None:
+    def failed_greedy(
+        problem: SchedulingProblem,
+        config: SolverConfiguration,
+        evaluator: Evaluator | None = None,
+    ) -> SolverResult:
+        return build_result(
+            solver_kind=SolverKind.GREEDY,
+            solver_name="failed-greedy",
+            solver_version="test",
+            problem_checksum=problem.checksum,
+            config=config,
+            evaluation=None,
+            status=ExperimentStatus.FAILED,
+            optimality=OptimalityStatus.UNKNOWN,
+            known_optimum=None,
+            runtime_seconds=0.0,
+            evaluated_candidates=0,
+            limitations="failed greedy",
+        )
+
+    result = plan_observation_request(
+        _declared_request(),
+        exact_solver=_fake_exact_with_status(
+            ExperimentStatus.TIMED_OUT, OptimalityStatus.UNKNOWN, selected=set()
+        ),
+        greedy_solver=failed_greedy,
+    )
+
+    assert result.status == PlanningResultStatus.FAILED
+    assert result.feasible is False
+    assert result.fallback_history[0].status == ExperimentStatus.TIMED_OUT
+
+
+def test_injected_contradictory_solver_result_is_not_verified() -> None:
+    def contradictory_exact(
+        problem: SchedulingProblem,
+        config: SolverConfiguration,
+        evaluator: Evaluator | None = None,
+    ) -> SolverResult:
+        ev = (evaluator or Evaluator(problem)).evaluate({"OPP-A"})
+        result = build_result(
+            solver_kind=SolverKind.EXACT,
+            solver_name="contradictory-exact",
+            solver_version="test",
+            problem_checksum=problem.checksum,
+            config=config,
+            evaluation=ev,
+            status=ExperimentStatus.TIMED_OUT,
+            optimality=OptimalityStatus.OPTIMAL,
+            known_optimum=ev.objective_value,
+            runtime_seconds=0.0,
+            evaluated_candidates=1,
+            limitations="contradictory",
+        )
+        return result
+
+    result = plan_observation_request(
+        _declared_request(),
+        exact_solver=contradictory_exact,
+        allow_greedy_fallback=False,
+    )
+
+    assert result.status == PlanningResultStatus.TIMED_OUT
+    assert result.status != PlanningResultStatus.VERIFIED_FEASIBLE
+
+
+def test_evaluator_exception_is_not_converted_to_verified_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_evaluator = Evaluator
+
+    class RaisingEvaluator:
+        def __init__(self, problem: SchedulingProblem) -> None:
+            self.order = real_evaluator(problem).order
+
+        def evaluate(self, selected: set[str]) -> object:
+            raise RuntimeError("independent evaluator failure")
+
+    def exact_ignoring_raising_evaluator(
+        problem: SchedulingProblem,
+        config: SolverConfiguration,
+        evaluator: Evaluator | None = None,
+    ) -> SolverResult:
+        real = real_evaluator(problem)
+        ev = real.evaluate({"OPP-A"})
+        return build_result(
+            solver_kind=SolverKind.EXACT,
+            solver_name="exact-before-evaluator-failure",
+            solver_version="test",
+            problem_checksum=problem.checksum,
+            config=config,
+            evaluation=ev,
+            status=ExperimentStatus.COMPLETED,
+            optimality=OptimalityStatus.OPTIMAL,
+            known_optimum=ev.objective_value,
+            runtime_seconds=0.0,
+            evaluated_candidates=1,
+            limitations="real eval",
+        )
+
+    monkeypatch.setattr(planning_service, "Evaluator", RaisingEvaluator)
+
+    with pytest.raises(RuntimeError, match="independent evaluator failure"):
+        plan_observation_request(
+            _declared_request(),
+            exact_solver=exact_ignoring_raising_evaluator,
+        )
+
+
+def test_fixture_and_declared_source_mode_are_explicit_on_translation() -> None:
+    fixture = translate_request_to_problem(
+        ObservationPlanningRequest(name="fixture", horizon=_horizon(), fixture_name="default")
+    )
+    declared = translate_request_to_problem(_declared_request())
+
+    assert fixture.source_mode == ObservationPlanningSourceMode.FIXTURE
+    assert declared.source_mode == ObservationPlanningSourceMode.DECLARED
+
+
+def test_service_uses_translation_source_mode_not_problem_source_string(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    translation = translate_request_to_problem(_declared_request())
+    mismatched_problem = translation.problem.model_copy(
+        update={"source": "observation-planning-fixture"}
+    )
+    mismatched_translation = translation.model_copy(update={"problem": mismatched_problem})
+
+    def translate(_: ObservationPlanningRequest) -> object:
+        return mismatched_translation
+
+    monkeypatch.setattr(planning_service, "translate_request_to_problem", translate)
+
+    result = plan_observation_request(_declared_request())
+
+    assert result.source_mode == ObservationPlanningSourceMode.DECLARED
 
 
 def test_returned_schedule_independently_evaluates_as_feasible() -> None:

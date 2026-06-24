@@ -10,7 +10,6 @@ from orbitmind.observation_planning.models import (
     AuthoritativePlanningSolver,
     ObservationPlanningRequest,
     ObservationPlanningResult,
-    ObservationPlanningSourceMode,
     PlanningOptimalityLabel,
     PlanningResultStatus,
     RequestToProblemTranslation,
@@ -139,16 +138,25 @@ def _finalize_result(
             verification_errors.append("solver objective does not match independent evaluation")
 
     if verification_errors:
+        safe_result = solver_result if solver_result.problem_checksum == problem.checksum else None
+        safe_evaluation = (
+            independent_evaluation
+            if independent_evaluation is not None
+            and independent_evaluation.problem_checksum == problem.checksum
+            else None
+        )
         return _build_planning_result(
             translation=translation,
             solver=solver,
-            solver_result=solver_result,
-            independent_evaluation=independent_evaluation,
+            solver_result=safe_result,
+            independent_evaluation=safe_evaluation,
             fallback_history=fallback_history,
             status=PlanningResultStatus.FAILED,
             optimality_label=PlanningOptimalityLabel.UNKNOWN,
             feasible=False,
             verification_errors=tuple(verification_errors),
+            solver_execution_status=solver_result.status,
+            solver_limitations=solver_result.limitations,
         )
 
     status, optimality_label, feasible = _classify_result(
@@ -200,30 +208,40 @@ def _build_planning_result(
     *,
     translation: RequestToProblemTranslation,
     solver: AuthoritativePlanningSolver,
-    solver_result: SolverResult,
+    solver_result: SolverResult | None,
     independent_evaluation: ScheduleEvaluation | None,
     fallback_history: tuple[SolverResult, ...],
     status: PlanningResultStatus,
     optimality_label: PlanningOptimalityLabel,
     feasible: bool,
     verification_errors: tuple[str, ...],
+    solver_execution_status: ExperimentStatus | None = None,
+    solver_limitations: str = "",
 ) -> ObservationPlanningResult:
     objective = (
         independent_evaluation.objective_value if independent_evaluation is not None else None
     )
+    resolved_solver_status = (
+        solver_execution_status
+        if solver_execution_status is not None
+        else (solver_result.status if solver_result is not None else None)
+    )
+    resolved_limitations = (
+        solver_limitations if solver_result is None else solver_result.limitations
+    )
     return ObservationPlanningResult(
         request_checksum=translation.request_checksum,
         problem_checksum=translation.problem.checksum,
-        source_mode=_translation_source_mode(translation),
+        source_mode=translation.source_mode,
         selected_solver=solver,
-        solver_execution_status=solver_result.status,
+        solver_execution_status=resolved_solver_status,
         status=status,
         optimality_label=optimality_label,
         verification_label=translation.verification_label,
         limitations=tuple(
-            item for item in (*translation.limitations, solver_result.limitations) if item
+            item for item in (*translation.limitations, resolved_limitations) if item
         ),
-        schedule=solver_result.schedule,
+        schedule=solver_result.schedule if solver_result is not None else None,
         authoritative_result=solver_result,
         independent_evaluation=independent_evaluation,
         feasible=feasible,
@@ -231,11 +249,3 @@ def _build_planning_result(
         fallback_history=fallback_history,
         verification_errors=verification_errors,
     )
-
-
-def _translation_source_mode(
-    translation: RequestToProblemTranslation,
-) -> ObservationPlanningSourceMode:
-    if translation.problem.source == "observation-planning-declared":
-        return ObservationPlanningSourceMode.DECLARED
-    return ObservationPlanningSourceMode.FIXTURE
