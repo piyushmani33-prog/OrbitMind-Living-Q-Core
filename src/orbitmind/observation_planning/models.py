@@ -7,8 +7,11 @@ receipt work. It turns a bounded planning request into the existing Phase 4A
 
 from __future__ import annotations
 
+import math
+from collections.abc import Iterable
 from datetime import datetime, timedelta
 from enum import StrEnum
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -27,6 +30,12 @@ from orbitmind.optimization.models import (
 )
 from orbitmind.optimization.problem import normalize_problem
 
+_MAX_OPPORTUNITIES = 24
+_MAX_ASSETS = 24
+_MAX_TARGETS = 24
+_MAX_MANDATORY_IDS = 24
+_MAX_MUTUAL_EXCLUSION_GROUPS = 276  # 24 * 23 / 2 complete pairwise conflict graph.
+_MAX_MUTUAL_EXCLUSION_MEMBERS = 2
 _MAX_HORIZON = timedelta(hours=48)
 _FIXTURE_LIMITATION = (
     "fixture-backed observation-planning prototype; access-window geometry is not computed; "
@@ -97,6 +106,9 @@ class ObservationPlanningRequest(BaseModel):
 
     @model_validator(mode="after")
     def _check_source_shape(self) -> ObservationPlanningRequest:
+        self._check_request_bounds()
+        self._check_ids()
+        self._check_finite_values()
         if self.source_mode == ObservationPlanningSourceMode.FIXTURE:
             if not self.fixture_name:
                 raise ValueError("fixture_name is required for fixture-backed planning")
@@ -116,6 +128,60 @@ class ObservationPlanningRequest(BaseModel):
                 raise ValueError("declared-opportunity planning requires declared targets")
         return self
 
+    def _check_request_bounds(self) -> None:
+        max_opportunities = min(self.limits.max_variables, _MAX_OPPORTUNITIES)
+        if len(self.opportunities) > max_opportunities:
+            raise ValueError(f"opportunities must contain at most {max_opportunities} entries")
+        if len(self.satellites) > _MAX_ASSETS:
+            raise ValueError(f"satellites/assets must contain at most {_MAX_ASSETS} entries")
+        if len(self.targets) > _MAX_TARGETS:
+            raise ValueError(f"targets must contain at most {_MAX_TARGETS} entries")
+        max_mandatory = min(max_opportunities, _MAX_MANDATORY_IDS)
+        if len(self.constraints.mandatory) > max_mandatory:
+            raise ValueError(f"mandatory IDs must contain at most {max_mandatory} entries")
+        if len(self.constraints.mutually_exclusive) > _MAX_MUTUAL_EXCLUSION_GROUPS:
+            raise ValueError(
+                "mutual-exclusion constraints must contain at most "
+                f"{_MAX_MUTUAL_EXCLUSION_GROUPS} groups"
+            )
+        for group in self.constraints.mutually_exclusive:
+            if len(group) != _MAX_MUTUAL_EXCLUSION_MEMBERS:
+                raise ValueError("each mutual-exclusion group must contain exactly two IDs")
+
+    def _check_ids(self) -> None:
+        _require_unique_ids((opp.id for opp in self.opportunities), "opportunity")
+        _require_unique_ids((sat.id for sat in self.satellites), "satellite")
+        _require_unique_ids((target.id for target in self.targets), "target")
+        for opp in self.opportunities:
+            _require_clean_id(opp.satellite_id, f"opportunity {opp.id} satellite_id")
+            _require_clean_id(opp.target_id, f"opportunity {opp.id} target_id")
+        _require_unique_ids(self.constraints.mandatory, "mandatory opportunity")
+        for pair in self.constraints.mutually_exclusive:
+            for endpoint in pair:
+                _require_clean_id(endpoint, "mutual-exclusion endpoint")
+        canonical_pairs = {tuple(sorted(pair)) for pair in self.constraints.mutually_exclusive}
+        if len(canonical_pairs) != len(self.constraints.mutually_exclusive):
+            raise ValueError("mutual-exclusion pairs must be unique")
+
+    def _check_finite_values(self) -> None:
+        for opp in self.opportunities:
+            for field_name in (
+                "mission_value",
+                "duration_seconds",
+                "energy_cost",
+                "storage_cost",
+                "pointing_cost",
+            ):
+                _require_finite(getattr(opp, field_name), f"opportunity {opp.id} {field_name}")
+        for sat in self.satellites:
+            _require_finite(sat.energy_capacity, f"satellite {sat.id} energy_capacity")
+            _require_finite(sat.storage_capacity, f"satellite {sat.id} storage_capacity")
+        _require_finite(self.objective.mission_value_weight, "mission_value_weight")
+        if self.objective.penalty_coefficient is not None:
+            _require_finite(self.objective.penalty_coefficient, "penalty_coefficient")
+        if self.constraints.min_mission_value is not None:
+            _require_finite(self.constraints.min_mission_value, "min_mission_value")
+
 
 class RequestToProblemTranslation(BaseModel):
     """Result of deterministic request-to-problem translation."""
@@ -132,6 +198,41 @@ def _dt(value: object) -> str:
     if not isinstance(value, datetime):
         raise TypeError("expected datetime")
     return ensure_utc(value).isoformat()
+
+
+def _require_clean_id(value: str, what: str) -> None:
+    if not isinstance(value, str) or not value or value.strip() != value:
+        raise ValueError(f"{what} must be a non-empty, unpadded ID")
+
+
+def _require_unique_ids(values: Iterable[str], what: str) -> None:
+    ids = list(values)
+    for value in ids:
+        _require_clean_id(value, f"{what} ID")
+    if len(ids) != len(set(ids)):
+        raise ValueError(f"{what} IDs must be unique")
+
+
+def _require_finite(value: float, what: str) -> None:
+    if not math.isfinite(value):
+        raise ValueError(f"{what} must be finite")
+
+
+def _canonical_value(value: Any) -> Any:
+    if isinstance(value, datetime):
+        return _dt(value)
+    if isinstance(value, BaseModel):
+        return _canonical_value(value.model_dump(mode="python"))
+    if isinstance(value, dict):
+        return {
+            str(k): _canonical_value(v)
+            for k, v in sorted(value.items(), key=lambda item: str(item[0]))
+        }
+    if isinstance(value, (tuple, list)):
+        return [_canonical_value(v) for v in value]
+    if isinstance(value, StrEnum):
+        return value.value
+    return value
 
 
 def _canonical_constraints(constraints: ConstraintSet) -> dict[str, object]:
@@ -162,17 +263,17 @@ def _canonical_request(request: ObservationPlanningRequest) -> dict[str, object]
             "end": _dt(request.horizon.end),
         },
         "opportunities": [
-            opp.model_dump(mode="json") for opp in sorted(request.opportunities, key=lambda o: o.id)
+            _canonical_value(opp) for opp in sorted(request.opportunities, key=lambda o: o.id)
         ],
         "satellites": [
-            sat.model_dump(mode="json") for sat in sorted(request.satellites, key=lambda s: s.id)
+            _canonical_value(sat) for sat in sorted(request.satellites, key=lambda s: s.id)
         ],
         "targets": [
-            target.model_dump(mode="json") for target in sorted(request.targets, key=lambda t: t.id)
+            _canonical_value(target) for target in sorted(request.targets, key=lambda t: t.id)
         ],
-        "constraints": _canonical_constraints(request.constraints),
-        "objective": request.objective.model_dump(mode="json"),
-        "limits": request.limits.model_dump(mode="json"),
+        "constraints": _canonical_value(_canonical_constraints(request.constraints)),
+        "objective": _canonical_value(request.objective),
+        "limits": _canonical_value(request.limits),
     }
 
 
