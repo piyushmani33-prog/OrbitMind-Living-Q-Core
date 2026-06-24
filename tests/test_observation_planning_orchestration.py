@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 import orbitmind.observation_planning.orchestration as orchestration
 import orbitmind.persistence.observation_planning_repository as op_repo_module
-from orbitmind.core.errors import ValidationError
+from orbitmind.core.errors import IdempotencyConflictError, ValidationError
 from orbitmind.observation_planning import (
     ObservationPlanningRequest,
     ObservationPlanningSourceMode,
@@ -195,7 +195,7 @@ def test_same_owner_same_key_different_request_conflicts_before_solver(
         )
         monkeypatch.setattr(orchestration, "plan_observation_request", forbidden_planner)
 
-        with pytest.raises(ValidationError, match="different request"):
+        with pytest.raises(IdempotencyConflictError, match="different request"):
             execute_observation_planning(
                 session=session,
                 owner_id="owner-a",
@@ -405,7 +405,7 @@ def test_repository_idempotency_race_rejects_different_request(
             return original_find(owner_id, idempotency_key)
 
         monkeypatch.setattr(repo, "_find_request_by_idempotency", racing_find)
-        with pytest.raises(ValidationError, match="different request"):
+        with pytest.raises(IdempotencyConflictError, match="different request"):
             repo.create_planning_request(
                 _request(name="different race request", idempotency_key="race-conflict"),
                 owner_id="owner-a",

@@ -18,7 +18,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from orbitmind.core.checksums import sha256_canonical_json
-from orbitmind.core.errors import NotFoundError, ValidationError
+from orbitmind.core.errors import IdempotencyConflictError, NotFoundError, ValidationError
 from orbitmind.core.ids import new_id
 from orbitmind.core.timeutils import utcnow
 from orbitmind.observation_planning.models import (
@@ -103,7 +103,9 @@ class SqlAlchemyObservationPlanningRepository:
             if existing is not None:
                 stored = self._row_to_request(existing)
                 if stored.request_checksum != checksum:
-                    raise ValidationError("idempotency key reused with a different request")
+                    raise IdempotencyConflictError(
+                        "idempotency key reused with a different request"
+                    )
                 return stored
         row = ObservationPlanningRequestRow(
             id=new_id(),
@@ -131,7 +133,7 @@ class SqlAlchemyObservationPlanningRepository:
                     raise
                 stored = self._row_to_request(existing)
                 if stored.request_checksum != checksum:
-                    raise ValidationError(
+                    raise IdempotencyConflictError(
                         "idempotency key reused with a different request"
                     ) from None
                 return stored

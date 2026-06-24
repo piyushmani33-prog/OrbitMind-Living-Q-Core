@@ -13,7 +13,7 @@ import pytest
 from sqlalchemy import text, update
 from sqlalchemy.exc import IntegrityError
 
-from orbitmind.core.errors import ValidationError
+from orbitmind.core.errors import IdempotencyConflictError, ValidationError
 from orbitmind.observation_planning import (
     AuthoritativePlanningSolver,
     ObservationPlanningRequest,
@@ -315,6 +315,40 @@ def test_postgres_repository_idempotency_integrity_race_recovers(
         pg_db,
         "SELECT id FROM observation_planning_requests "
         "WHERE owner_id='owner-a' AND idempotency_key='pg-race'",
+    )
+    assert rows == [(existing.id,)]
+
+
+def test_postgres_repository_idempotency_integrity_race_conflicts(
+    pg_db: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    request = _request(idempotency_key="pg-race-conflict")
+    with pg_db.session() as session:
+        repo = SqlAlchemyObservationPlanningRepository(session)
+        existing = repo.create_planning_request(request, owner_id="owner-a")
+        original_find = repo._find_request_by_idempotency
+        calls = 0
+
+        def racing_find(owner_id: str, idempotency_key: str) -> object:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return None
+            return original_find(owner_id, idempotency_key)
+
+        monkeypatch.setattr(repo, "_find_request_by_idempotency", racing_find)
+        with pytest.raises(IdempotencyConflictError, match="different request"):
+            repo.create_planning_request(
+                request.model_copy(update={"name": "different race request"}),
+                owner_id="owner-a",
+            )
+        session.commit()
+
+    assert calls >= 2
+    rows = _exec(
+        pg_db,
+        "SELECT id FROM observation_planning_requests "
+        "WHERE owner_id='owner-a' AND idempotency_key='pg-race-conflict'",
     )
     assert rows == [(existing.id,)]
 

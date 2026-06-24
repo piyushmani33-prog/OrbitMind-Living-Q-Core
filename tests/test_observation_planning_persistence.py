@@ -11,7 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 import orbitmind.persistence.observation_planning_repository as op_repo_module
-from orbitmind.core.errors import NotFoundError, ValidationError
+from orbitmind.core.errors import IdempotencyConflictError, NotFoundError, ValidationError
 from orbitmind.observation_planning import (
     ObservationPlanningRequest,
     ObservationPlanningResult,
@@ -243,7 +243,7 @@ def test_idempotency_key_conflicts_on_different_request(tmp_path: Path) -> None:
             update={"name": "changed scientific request"}
         )
 
-        with pytest.raises(ValidationError, match="different request"):
+        with pytest.raises(IdempotencyConflictError, match="different request"):
             repo.create_planning_request(changed, owner_id="owner-a")
 
 
