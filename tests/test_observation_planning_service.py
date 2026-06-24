@@ -879,3 +879,21 @@ def test_unexpected_exact_failure_is_not_converted_to_greedy_success() -> None:
         )
 
     assert greedy_calls == []
+
+
+def test_result_model_rejects_verified_feasible_with_unknown_optimality() -> None:
+    result = plan_observation_request(_declared_request())
+    payload = result.model_dump(mode="python")
+    payload["optimality_label"] = PlanningOptimalityLabel.UNKNOWN
+
+    with pytest.raises(PydanticValidationError):
+        ObservationPlanningResult.model_validate(payload)
+
+
+def test_result_model_rejects_verified_feasible_with_infeasible_optimality() -> None:
+    result = plan_observation_request(_declared_request())
+    payload = result.model_dump(mode="python")
+    payload["optimality_label"] = PlanningOptimalityLabel.INFEASIBLE
+
+    with pytest.raises(PydanticValidationError):
+        ObservationPlanningResult.model_validate(payload)

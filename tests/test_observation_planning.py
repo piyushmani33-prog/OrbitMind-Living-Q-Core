@@ -422,3 +422,31 @@ def test_translating_same_request_twice_produces_same_problem_checksum() -> None
     second = translate_request_to_problem(request)
 
     assert first.problem.checksum == second.problem.checksum
+
+
+@pytest.mark.parametrize(
+    ("field_name", "payload"),
+    [
+        ("opportunities", tuple(_opp(f"OPP-{i:02d}") for i in range(25))),
+        ("satellites", tuple(_sat(f"SAT-{i:02d}") for i in range(25))),
+        ("targets", tuple(_target(f"T{i:02d}") for i in range(25))),
+    ],
+)
+def test_request_collection_bounds_are_field_level(
+    field_name: str, payload: tuple[object, ...]
+) -> None:
+    kwargs = {
+        "name": "field level bound",
+        "horizon": _horizon(),
+        "source_mode": ObservationPlanningSourceMode.DECLARED,
+        "fixture_name": None,
+        "opportunities": (_opp("OPP-A"),),
+        "satellites": (_sat(),),
+        "targets": (_target(),),
+    }
+    kwargs[field_name] = payload
+
+    with pytest.raises(PydanticValidationError) as exc_info:
+        ObservationPlanningRequest(**kwargs)
+
+    assert any(error["loc"] == (field_name,) for error in exc_info.value.errors())

@@ -9,12 +9,14 @@ from alembic import command
 from alembic.config import Config
 from sqlalchemy import create_engine, inspect, text
 
+import orbitmind.persistence.observation_planning_models  # noqa: F401 - register metadata
 from orbitmind.persistence.database import Base
 
 pytestmark = pytest.mark.integration
 
 PHASE1_REVISION = "b38aa92661c2"
 PHASE2_REVISION = "080f934b44d1"
+PHASE4A_HEAD = "h4c5d6e7f8a9"
 
 EXPECTED_TABLES = {
     "missions",
@@ -47,6 +49,12 @@ PHASE3A_TABLES = {
     "small_body_query_runs",
 }
 
+PHASE4B_OBSERVATION_PLANNING_TABLES = {
+    "observation_planning_requests",
+    "observation_planning_runs",
+    "observation_plans",
+}
+
 
 def test_alembic_upgrade_head_builds_schema(tmp_path: Path) -> None:
     db_url = f"sqlite:///{(tmp_path / 'migrated.db').as_posix()}"
@@ -62,8 +70,11 @@ def test_alembic_upgrade_head_builds_schema(tmp_path: Path) -> None:
     assert tables >= EXPECTED_TABLES
     assert tables >= PHASE2_TABLES
     assert tables >= PHASE3A_TABLES
+    assert tables >= PHASE4B_OBSERVATION_PLANNING_TABLES
     # Migration schema matches the ORM metadata (parity check).
-    assert set(Base.metadata.tables) >= (EXPECTED_TABLES | PHASE2_TABLES | PHASE3A_TABLES)
+    assert set(Base.metadata.tables) >= (
+        EXPECTED_TABLES | PHASE2_TABLES | PHASE3A_TABLES | PHASE4B_OBSERVATION_PLANNING_TABLES
+    )
 
 
 def test_upgrade_from_phase2_schema_is_non_destructive(tmp_path: Path) -> None:
@@ -129,3 +140,26 @@ def test_upgrade_from_phase1_schema_is_non_destructive(tmp_path: Path) -> None:
         count = conn.execute(text("SELECT COUNT(*) FROM missions")).scalar_one()
     engine.dispose()
     assert count == 1  # existing mission data preserved (non-destructive)
+
+
+def test_observation_planning_migration_downgrade_and_reupgrade(tmp_path: Path) -> None:
+    db_url = f"sqlite:///{(tmp_path / 'p4b.db').as_posix()}"
+    cfg = Config("alembic.ini")
+    cfg.set_main_option("sqlalchemy.url", db_url)
+
+    command.upgrade(cfg, "head")
+    engine = create_engine(db_url)
+    assert set(inspect(engine).get_table_names()) >= PHASE4B_OBSERVATION_PLANNING_TABLES
+    engine.dispose()
+
+    command.downgrade(cfg, PHASE4A_HEAD)
+    engine = create_engine(db_url)
+    downgraded_tables = set(inspect(engine).get_table_names())
+    assert downgraded_tables.isdisjoint(PHASE4B_OBSERVATION_PLANNING_TABLES)
+    assert downgraded_tables >= EXPECTED_TABLES
+    engine.dispose()
+
+    command.upgrade(cfg, "head")
+    engine = create_engine(db_url)
+    assert set(inspect(engine).get_table_names()) >= PHASE4B_OBSERVATION_PLANNING_TABLES
+    engine.dispose()

@@ -128,9 +128,11 @@ class ObservationPlanningRequest(BaseModel):
     horizon: PlanningHorizon
     source_mode: ObservationPlanningSourceMode = ObservationPlanningSourceMode.FIXTURE
     fixture_name: str | None = Field(default="default", max_length=80)
-    opportunities: tuple[ObservationOpportunity, ...] = ()
-    satellites: tuple[SatelliteResource, ...] = ()
-    targets: tuple[ObservationTarget, ...] = ()
+    opportunities: tuple[ObservationOpportunity, ...] = Field(
+        default=(), max_length=_MAX_OPPORTUNITIES
+    )
+    satellites: tuple[SatelliteResource, ...] = Field(default=(), max_length=_MAX_ASSETS)
+    targets: tuple[ObservationTarget, ...] = Field(default=(), max_length=_MAX_TARGETS)
     constraints: ConstraintSet = Field(default_factory=ConstraintSet)
     objective: SchedulingObjective = Field(default_factory=SchedulingObjective)
     limits: SchedulingProblemLimits = Field(default_factory=SchedulingProblemLimits)
@@ -326,6 +328,13 @@ class ObservationPlanningResult(BaseModel):
             return self
 
         if self.status == PlanningResultStatus.VERIFIED_FEASIBLE:
+            if self.optimality_label not in {
+                PlanningOptimalityLabel.OPTIMAL,
+                PlanningOptimalityLabel.HEURISTIC,
+            }:
+                raise ValueError(
+                    "verified-feasible results require optimal or heuristic optimality"
+                )
             if not self.feasible:
                 raise ValueError("verified-feasible results must set feasible=True")
             if self.independent_evaluation is None:
