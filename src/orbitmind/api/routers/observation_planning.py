@@ -24,7 +24,7 @@ from orbitmind.api.observation_planning_schemas import (
     ObservationPlanResponse,
     ObservationPlanSummaryResponse,
 )
-from orbitmind.core.errors import OrbitMindError, ValidationError
+from orbitmind.core.errors import ValidationError
 from orbitmind.observation_planning import (
     AuthoritativePlanningSolver,
     ObservationPlanningSourceMode,
@@ -44,13 +44,6 @@ SessionDep = Annotated[Session, Depends(get_observation_planning_session)]
 OwnerDep = Annotated[str, Depends(get_current_owner_id)]
 
 _PAGE_INT_RE = re.compile(r"^(0|[1-9][0-9]*)$")
-
-
-class IdempotencyConflictError(OrbitMindError):
-    """Owner-scoped idempotency key was reused with different scientific input."""
-
-    code = "idempotency_conflict"
-    http_status = 409
 
 
 class PageParams(BaseModel):
@@ -77,12 +70,6 @@ def _page_params(
     return PageParams(limit=parsed_limit, offset=parsed_offset)
 
 
-def _map_execution_validation(exc: ValidationError) -> OrbitMindError:
-    if exc.message == "idempotency key reused with a different request":
-        return IdempotencyConflictError(exc.message)
-    return exc
-
-
 @router.post(
     "/executions",
     response_model=ObservationPlanningExecutionResponse,
@@ -97,15 +84,12 @@ def execute_planning(
     """Synchronously create/reuse a bounded observation-planning execution."""
 
     request = payload.to_domain()
-    try:
-        execution = execute_observation_planning(
-            session=session,
-            owner_id=owner_id,
-            request=request,
-            idempotency_key=payload.idempotency_key,
-        )
-    except ValidationError as exc:
-        raise _map_execution_validation(exc) from exc
+    execution = execute_observation_planning(
+        session=session,
+        owner_id=owner_id,
+        request=request,
+        idempotency_key=payload.idempotency_key,
+    )
     if not execution.run_created:
         response.status_code = status.HTTP_200_OK
     return ObservationPlanningExecutionResponse.from_execution(execution)

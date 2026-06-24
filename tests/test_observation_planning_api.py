@@ -7,8 +7,10 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
+from httpx import Response
 from sqlalchemy import update
 
+import orbitmind.api.routers.observation_planning as observation_planning_router
 from orbitmind.api.app import create_app
 from orbitmind.api.container import AppContainer
 from orbitmind.api.deps import get_current_owner_id
@@ -37,6 +39,33 @@ def _owner_client(container: AppContainer, owner_id: str) -> TestClient:
     app = create_app(container)
     app.dependency_overrides[get_current_owner_id] = lambda: owner_id
     return TestClient(app)
+
+
+def _owner_client_no_raise(container: AppContainer, owner_id: str) -> TestClient:
+    app = create_app(container)
+    app.dependency_overrides[get_current_owner_id] = lambda: owner_id
+    return TestClient(app, raise_server_exceptions=False)
+
+
+def _assert_not_found_without_record_leak(response: Response, created: dict[str, object]) -> None:
+    assert response.status_code == 404
+    body = response.json()
+    assert set(body) == {"code", "message"}
+    assert body["code"] == "not_found"
+    text = response.text
+    for field in (
+        "request_id",
+        "run_id",
+        "plan_id",
+        "request_checksum",
+        "problem_checksum",
+        "scientific_identity_checksum",
+    ):
+        value = created.get(field)
+        if isinstance(value, str):
+            assert value not in text
+    assert "verified-feasible" not in text
+    assert "objective" not in text
 
 
 def _horizon() -> dict[str, str]:
@@ -252,6 +281,24 @@ def test_owner_is_local_principal_and_spoofed_owner_is_rejected(
         assert owner_b.get(f"{BASE}/requests/{created['request_id']}").status_code == 404
 
 
+def test_cross_owner_http_details_and_request_runs_do_not_leak_records(
+    container: AppContainer,
+) -> None:
+    with _owner_client(container, "owner-a") as owner_a:
+        created = owner_a.post(
+            f"{BASE}/executions", json=_declared_payload(idempotency_key="owner-a-detail")
+        ).json()
+
+    with _owner_client(container, "owner-b") as owner_b:
+        request = owner_b.get(f"{BASE}/requests/{created['request_id']}")
+        run = owner_b.get(f"{BASE}/runs/{created['run_id']}")
+        plan = owner_b.get(f"{BASE}/plans/{created['plan_id']}")
+        request_runs = owner_b.get(f"{BASE}/requests/{created['request_id']}/runs")
+
+    for response in (request, run, plan, request_runs):
+        _assert_not_found_without_record_leak(response, created)
+
+
 def test_idempotency_reuse_conflict_and_different_owners(
     container: AppContainer, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -279,7 +326,12 @@ def test_idempotency_reuse_conflict_and_different_owners(
         different = _declared_payload(name="different", idempotency_key="same-key")
         conflict = owner_a.post(f"{BASE}/executions", json=different)
         assert conflict.status_code == 409
-        assert conflict.json()["code"] == "idempotency_conflict"
+        assert conflict.json() == {
+            "code": "idempotency_conflict",
+            "message": "idempotency key reused with a different request",
+        }
+        for forbidden in ("IntegrityError", "uq_", "SELECT", "postgresql://", "Traceback"):
+            assert forbidden not in conflict.text
 
     monkeypatch.undo()
 
@@ -431,3 +483,52 @@ def test_observation_planning_api_uses_no_quantum_path(
     )
 
     assert response.status_code == 201
+
+
+def test_error_mapping_is_bounded_for_validation_not_found_and_internal_failure(
+    container: AppContainer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with _owner_client(container, "local-owner") as client:
+        invalid = client.post(f"{BASE}/executions", json=_invalid_reference_payload())
+        missing = client.get(f"{BASE}/requests/missing-request")
+
+    assert invalid.status_code == 422
+    assert invalid.json()["code"] == "validation_error"
+    assert missing.status_code == 404
+    assert missing.json() == {
+        "code": "not_found",
+        "message": "observation-planning request not found",
+    }
+
+    def failing_execution(*args: object, **kwargs: object) -> object:
+        raise RuntimeError(
+            "SELECT * FROM secrets at E:\\quantum-project\\private.py "
+            "postgresql://user:password@localhost/db"
+        )
+
+    monkeypatch.setattr(
+        observation_planning_router,
+        "execute_observation_planning",
+        failing_execution,
+    )
+    with _owner_client_no_raise(container, "local-owner") as client:
+        failed = client.post(
+            f"{BASE}/executions",
+            json=_declared_payload(name="internal failure", idempotency_key="internal-failure"),
+        )
+
+    assert failed.status_code == 500
+    assert failed.json() == {
+        "code": "internal_error",
+        "message": "an internal error occurred",
+    }
+    for forbidden in (
+        "SELECT",
+        "secrets",
+        "postgresql://",
+        "password",
+        "Traceback",
+        "E:\\",
+        ".py",
+    ):
+        assert forbidden not in failed.text

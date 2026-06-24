@@ -149,7 +149,10 @@ def test_postgres_api_idempotent_replay_conflict_and_owner_isolation(
         )
 
     with _client(pg_container, "owner-b") as owner_b:
-        hidden = owner_b.get(f"{BASE}/requests/{first['request_id']}")
+        hidden_request = owner_b.get(f"{BASE}/requests/{first['request_id']}")
+        hidden_run = owner_b.get(f"{BASE}/runs/{first['run_id']}")
+        hidden_plan = owner_b.get(f"{BASE}/plans/{first['plan_id']}")
+        hidden_request_runs = owner_b.get(f"{BASE}/requests/{first['request_id']}/runs")
         independent = owner_b.post(
             f"{BASE}/executions",
             json=_payload(name="owner b", idempotency_key="pg-api-key"),
@@ -158,7 +161,16 @@ def test_postgres_api_idempotent_replay_conflict_and_owner_isolation(
     assert second.status_code == 200
     assert second.json()["run_id"] == first["run_id"]
     assert conflict.status_code == 409
-    assert hidden.status_code == 404
+    assert conflict.json()["code"] == "idempotency_conflict"
+    for response in (hidden_request, hidden_run, hidden_plan, hidden_request_runs):
+        assert response.status_code == 404
+        assert response.json()["code"] == "not_found"
+        for field in ("request_id", "run_id", "plan_id", "request_checksum", "problem_checksum"):
+            value = first.get(field)
+            if isinstance(value, str):
+                assert value not in response.text
+        assert "verified-feasible" not in response.text
+        assert "objective" not in response.text
     assert independent.status_code == 201
     assert independent.json()["request_id"] != first["request_id"]
 
