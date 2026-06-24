@@ -425,7 +425,9 @@ def test_unexpected_request_integrity_error_propagates(
         monkeypatch.setattr(op_repo_module, "new_id", lambda: existing.id)
 
         with pytest.raises(IntegrityError):
-            repo.create_planning_request(_request(name="duplicate id", idempotency_key=None))
+            repo.create_planning_request(
+                _request(name="duplicate id", idempotency_key=None), owner_id="owner-a"
+            )
 
         session.rollback()
         assert _count(session, ObservationPlanningRequestRow) == 1

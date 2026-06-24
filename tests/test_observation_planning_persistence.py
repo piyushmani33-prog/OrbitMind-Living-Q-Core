@@ -180,7 +180,7 @@ def _persist_request_and_result(
     request: ObservationPlanningRequest,
 ) -> tuple[SqlAlchemyObservationPlanningRepository, str, str]:
     repo = SqlAlchemyObservationPlanningRepository(session)
-    stored_request = repo.create_planning_request(request)
+    stored_request = repo.create_planning_request(request, owner_id=request.requested_by)
     result = plan_observation_request(request)
     stored_run = repo.persist_planning_result(
         request_id=stored_request.id,
@@ -197,7 +197,9 @@ def _count(session: Session, table: type[object]) -> int:
 def test_persist_and_retrieve_fixture_request(tmp_path: Path) -> None:
     with _session(tmp_path) as session:
         repo = SqlAlchemyObservationPlanningRepository(session)
-        stored = repo.create_planning_request(_fixture_request(idempotency_key="same"))
+        stored = repo.create_planning_request(
+            _fixture_request(idempotency_key="same"), owner_id="owner-a"
+        )
         session.commit()
 
         fetched = repo.get_planning_request(stored.id, owner_id="owner-a")
@@ -211,7 +213,7 @@ def test_persist_and_retrieve_fixture_request(tmp_path: Path) -> None:
 def test_persist_and_retrieve_declared_request(tmp_path: Path) -> None:
     with _session(tmp_path) as session:
         repo = SqlAlchemyObservationPlanningRepository(session)
-        stored = repo.create_planning_request(_declared_request())
+        stored = repo.create_planning_request(_declared_request(), owner_id="owner-a")
 
         fetched = repo.get_planning_request(stored.id, owner_id="owner-a")
 
@@ -236,19 +238,19 @@ def test_request_idempotency_is_owner_scoped(tmp_path: Path) -> None:
 def test_idempotency_key_conflicts_on_different_request(tmp_path: Path) -> None:
     with _session(tmp_path) as session:
         repo = SqlAlchemyObservationPlanningRepository(session)
-        repo.create_planning_request(_fixture_request(idempotency_key="idem-2"))
+        repo.create_planning_request(_fixture_request(idempotency_key="idem-2"), owner_id="owner-a")
         changed = _fixture_request(idempotency_key="idem-2").model_copy(
             update={"name": "changed scientific request"}
         )
 
         with pytest.raises(ValidationError, match="different request"):
-            repo.create_planning_request(changed)
+            repo.create_planning_request(changed, owner_id="owner-a")
 
 
 def test_cross_owner_request_retrieval_is_not_found(tmp_path: Path) -> None:
     with _session(tmp_path) as session:
         repo = SqlAlchemyObservationPlanningRepository(session)
-        stored = repo.create_planning_request(_fixture_request())
+        stored = repo.create_planning_request(_fixture_request(), owner_id="owner-a")
 
         assert repo.get_planning_request(stored.id, owner_id="owner-b") is None
 
@@ -277,7 +279,7 @@ def test_persist_verified_greedy_result_creates_heuristic_plan(tmp_path: Path) -
     )
     with _session(tmp_path) as session:
         repo = SqlAlchemyObservationPlanningRepository(session)
-        stored = repo.create_planning_request(request)
+        stored = repo.create_planning_request(request, owner_id="owner-a")
         result = plan_observation_request(request)
         run = repo.persist_planning_result(
             request_id=stored.id, owner_id=stored.owner_id, result=result
@@ -309,8 +311,8 @@ def test_non_success_runs_do_not_create_plans(tmp_path: Path) -> None:
 
     with _session(tmp_path) as session:
         repo = SqlAlchemyObservationPlanningRepository(session)
-        infeasible_req = repo.create_planning_request(infeasible_request)
-        timeout_req = repo.create_planning_request(timeout_request)
+        infeasible_req = repo.create_planning_request(infeasible_request, owner_id="owner-a")
+        timeout_req = repo.create_planning_request(timeout_request, owner_id="owner-a")
         infeasible_run = repo.persist_planning_result(
             request_id=infeasible_req.id,
             owner_id=infeasible_req.owner_id,
@@ -332,7 +334,7 @@ def test_result_request_and_problem_checksum_mismatches_are_rejected(tmp_path: P
     result = plan_observation_request(request)
     with _session(tmp_path) as session:
         repo = SqlAlchemyObservationPlanningRepository(session)
-        stored = repo.create_planning_request(request)
+        stored = repo.create_planning_request(request, owner_id="owner-a")
 
         with pytest.raises(ValidationError, match="request checksum"):
             repo.persist_planning_result(
@@ -354,7 +356,7 @@ def test_duplicate_run_insertion_returns_existing_run(tmp_path: Path) -> None:
     result = plan_observation_request(request)
     with _session(tmp_path) as session:
         repo = SqlAlchemyObservationPlanningRepository(session)
-        stored = repo.create_planning_request(request)
+        stored = repo.create_planning_request(request, owner_id="owner-a")
         first = repo.persist_planning_result(
             request_id=stored.id, owner_id=stored.owner_id, result=result
         )
@@ -369,7 +371,7 @@ def test_duplicate_run_insertion_returns_existing_run(tmp_path: Path) -> None:
 def test_request_snapshot_tampering_is_detected(tmp_path: Path) -> None:
     with _session(tmp_path) as session:
         repo = SqlAlchemyObservationPlanningRepository(session)
-        stored = repo.create_planning_request(_fixture_request())
+        stored = repo.create_planning_request(_fixture_request(), owner_id="owner-a")
         snapshot = dict(stored.request.model_dump(mode="json"))
         snapshot["name"] = "tampered"
         session.execute(
@@ -386,7 +388,7 @@ def test_request_snapshot_tampering_is_detected(tmp_path: Path) -> None:
 def test_request_schema_version_tampering_is_rejected_by_database(tmp_path: Path) -> None:
     with _session(tmp_path) as session:
         repo = SqlAlchemyObservationPlanningRepository(session)
-        stored = repo.create_planning_request(_fixture_request())
+        stored = repo.create_planning_request(_fixture_request(), owner_id="owner-a")
 
         with pytest.raises(IntegrityError):
             session.execute(
@@ -438,7 +440,7 @@ def test_scientific_identity_checksum_is_deterministic(tmp_path: Path) -> None:
     result = plan_observation_request(request)
     with _session(tmp_path) as session:
         repo = SqlAlchemyObservationPlanningRepository(session)
-        stored = repo.create_planning_request(request)
+        stored = repo.create_planning_request(request, owner_id="owner-a")
         run = repo.persist_planning_result(
             request_id=stored.id,
             owner_id=stored.owner_id,
@@ -460,7 +462,7 @@ def test_transaction_rollback_leaves_no_partial_run_or_plan(
     result = plan_observation_request(request)
     with _session(tmp_path) as session:
         repo = SqlAlchemyObservationPlanningRepository(session)
-        stored = repo.create_planning_request(request)
+        stored = repo.create_planning_request(request, owner_id="owner-a")
         monkeypatch.setattr(op_repo_module, "_plan_row", broken_plan_row)
 
         with pytest.raises(ValidationError, match="forced"):
@@ -501,7 +503,7 @@ def test_request_source_mode_mismatch_is_detected_without_database_flush(
 ) -> None:
     with _session(tmp_path) as session:
         repo = SqlAlchemyObservationPlanningRepository(session)
-        stored = repo.create_planning_request(_fixture_request())
+        stored = repo.create_planning_request(_fixture_request(), owner_id="owner-a")
         row = session.get(ObservationPlanningRequestRow, stored.id)
         assert row is not None
         row.source_mode = ObservationPlanningSourceMode.DECLARED.value

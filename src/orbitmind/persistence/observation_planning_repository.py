@@ -93,10 +93,10 @@ class SqlAlchemyObservationPlanningRepository:
         self,
         request: ObservationPlanningRequest,
         *,
-        owner_id: str | None = None,
+        owner_id: str,
         use_savepoint: bool = True,
     ) -> StoredObservationPlanningRequest:
-        resolved_owner = normalize_owner_id(request.requested_by if owner_id is None else owner_id)
+        resolved_owner = normalize_owner_id(owner_id)
         checksum = planning_request_checksum(request)
         if request.idempotency_key is not None:
             existing = self._find_request_by_idempotency(resolved_owner, request.idempotency_key)
