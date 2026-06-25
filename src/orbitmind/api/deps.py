@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 
 from fastapi import Request
+from sqlalchemy.orm import Session
 
 from orbitmind.api.container import AppContainer
 from orbitmind.core.config import Settings
@@ -84,5 +85,27 @@ def get_memory_repository(request: Request) -> Iterator[SqlAlchemyMemoryReposito
     session = container.database.session()
     try:
         yield SqlAlchemyMemoryRepository(session)
+    finally:
+        session.close()
+
+
+def get_current_owner_id() -> str:
+    """Return the trusted local owner principal for this single-user boundary.
+
+    OrbitMind does not yet have authentication/tenancy. This dependency is the
+    explicit insertion point for a future authenticated principal; request bodies
+    must never provide authoritative ownership.
+    """
+
+    return "local-owner"
+
+
+def get_observation_planning_session(request: Request) -> Iterator[Session]:
+    """Yield a raw request-scoped session for observation-planning app services."""
+
+    container = get_container(request)
+    session = container.database.session()
+    try:
+        yield session
     finally:
         session.close()

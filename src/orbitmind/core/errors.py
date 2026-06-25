@@ -25,6 +25,13 @@ class ValidationError(OrbitMindError):
     http_status = 422
 
 
+class IdempotencyConflictError(OrbitMindError):
+    """An owner-scoped idempotency key was reused for different input."""
+
+    code = "idempotency_conflict"
+    http_status = 409
+
+
 class NotFoundError(OrbitMindError):
     """A requested resource does not exist."""
 
