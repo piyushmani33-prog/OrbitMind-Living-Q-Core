@@ -106,6 +106,13 @@ class InputRightsDeclaration(BaseModel):
     @model_validator(mode="after")
     def _check_limitations(self) -> InputRightsDeclaration:
         _require_clean_strings(self.limitations, "rights limitation", allow_empty_tuple=True)
+        if self.rights_status == InputRightsStatus.RESTRICTED and (
+            self.redistribution == InputRightsPermission.PERMITTED
+            or self.commercial_use == InputRightsPermission.PERMITTED
+        ):
+            raise ValueError(
+                "restricted rights cannot explicitly permit redistribution or commercial use"
+            )
         return self
 
 

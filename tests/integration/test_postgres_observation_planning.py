@@ -13,7 +13,7 @@ import pytest
 from sqlalchemy import text, update
 from sqlalchemy.exc import IntegrityError
 
-from orbitmind.core.errors import IdempotencyConflictError, ValidationError
+from orbitmind.core.errors import IdempotencyConflictError, NotFoundError, ValidationError
 from orbitmind.observation_planning import (
     AuthoritativePlanningSolver,
     ObservationPlanningRequest,
@@ -27,6 +27,21 @@ from orbitmind.observation_planning import (
     list_observation_plans,
     plan_observation_request,
 )
+from orbitmind.observation_planning.provenance import (
+    EligibilityDeclarationMode,
+    EligibilityWindow,
+    EligibilityWindowSet,
+    InputRightsDeclaration,
+    InputRightsPermission,
+    InputRightsStatus,
+    InputSourceIdentity,
+    PinnedInputArtifact,
+    PinnedInputProvenance,
+    PinnedInputSourceMode,
+    PinnedInputSourceType,
+    ScientificInputVerificationStatus,
+    eligibility_window_set_checksum,
+)
 from orbitmind.optimization.models import (
     ConstraintSet,
     ObservationOpportunity,
@@ -35,7 +50,14 @@ from orbitmind.optimization.models import (
     TimeWindow,
 )
 from orbitmind.persistence.database import Database
-from orbitmind.persistence.observation_planning_models import ObservationPlanningRequestRow
+from orbitmind.persistence.observation_planning_models import (
+    ObservationEligibilityWindowSetRow,
+    ObservationInputProvenanceRow,
+    ObservationPlanningRequestRow,
+)
+from orbitmind.persistence.observation_planning_provenance_repository import (
+    SqlAlchemyObservationPlanningProvenanceRepository,
+)
 from orbitmind.persistence.observation_planning_repository import (
     SqlAlchemyObservationPlanningRepository,
 )
@@ -49,6 +71,10 @@ pytestmark = [
 ]
 
 _TABLES = (
+    "observation_eligibility_windows",
+    "observation_eligibility_window_sets",
+    "observation_input_provenance_parents",
+    "observation_input_provenance",
     "observation_plans",
     "observation_planning_runs",
     "observation_planning_requests",
@@ -200,9 +226,109 @@ def _persist_result(db: Database) -> tuple[str, str, str]:
         return stored.id, run.id, run.plan_id
 
 
+def _sha(label: str) -> str:
+    import hashlib
+
+    return hashlib.sha256(label.encode("utf-8")).hexdigest()
+
+
+def _rights() -> InputRightsDeclaration:
+    return InputRightsDeclaration(
+        rights_status=InputRightsStatus.DECLARED,
+        redistribution=InputRightsPermission.UNKNOWN,
+        commercial_use=InputRightsPermission.UNKNOWN,
+        user_responsibility="caller retains responsibility for declared input rights",
+        limitations=("recorded declaration only",),
+    )
+
+
+def _fixture_input(label: str = "pg-fixture") -> PinnedInputProvenance:
+    return PinnedInputProvenance(
+        source=InputSourceIdentity(
+            source_id=f"{label}-source",
+            source_type=PinnedInputSourceType.FIXTURE,
+            source_mode=PinnedInputSourceMode.FIXTURE_BACKED,
+            publisher="OrbitMind",
+            dataset_name="postgres-fixture-eligibility",
+            dataset_version="v1",
+        ),
+        artifact=PinnedInputArtifact(
+            artifact_id=f"{label}-artifact",
+            content_checksum=_sha(label),
+            media_type="application/json",
+            record_count=1,
+        ),
+        retrieved_at=dt.datetime(2026, 6, 21, 9, 0, tzinfo=dt.UTC),
+        rights=_rights(),
+        verification_status=ScientificInputVerificationStatus.FIXTURE_VERIFIED,
+    )
+
+
+def _declared_input(label: str = "pg-declared") -> PinnedInputProvenance:
+    return PinnedInputProvenance(
+        source=InputSourceIdentity(
+            source_id=f"{label}-source",
+            source_type=PinnedInputSourceType.USER_DECLARED,
+            source_mode=PinnedInputSourceMode.USER_DECLARED,
+        ),
+        artifact=PinnedInputArtifact(
+            artifact_id=f"{label}-artifact",
+            content_checksum=_sha(label),
+            media_type="application/json",
+            record_count=1,
+        ),
+        declared_at=dt.datetime(2026, 6, 21, 9, 0, tzinfo=dt.UTC),
+        rights=_rights(),
+        verification_status=ScientificInputVerificationStatus.USER_DECLARED,
+    )
+
+
+def _derived_input(parent: PinnedInputProvenance) -> PinnedInputProvenance:
+    return PinnedInputProvenance(
+        source=InputSourceIdentity(
+            source_id="pg-derived-source",
+            source_type=PinnedInputSourceType.DERIVED,
+            source_mode=PinnedInputSourceMode.DERIVED_FROM_DECLARED_INPUT,
+            dataset_name="pg-derived-eligibility",
+            dataset_version="v1",
+        ),
+        artifact=PinnedInputArtifact(
+            artifact_id="pg-derived-artifact",
+            content_checksum=_sha("pg-derived"),
+            media_type="application/json",
+            record_count=1,
+        ),
+        retrieved_at=dt.datetime(2026, 6, 21, 9, 5, tzinfo=dt.UTC),
+        rights=_rights(),
+        verification_status=ScientificInputVerificationStatus.DERIVED_FROM_DECLARED,
+        parent_provenance_checksums=(parent.checksum,),
+    )
+
+
+def _eligibility_window(
+    provenance: PinnedInputProvenance,
+    *,
+    window_id: str = "PG-W1",
+    asset_id: str = "SAT-A",
+    start: dt.datetime | None = None,
+    end: dt.datetime | None = None,
+) -> EligibilityWindow:
+    return EligibilityWindow(
+        id=window_id,
+        asset_id=asset_id,
+        target_id="T1",
+        start=start or dt.datetime(2026, 6, 21, 10, 0, tzinfo=dt.UTC),
+        end=end or dt.datetime(2026, 6, 21, 10, 30, tzinfo=dt.UTC),
+        source_provenance_checksum=provenance.checksum,
+        declaration_mode=EligibilityDeclarationMode.FIXTURE_BACKED,
+        eligibility_reason="postgres-fixture-candidate",
+        verification_status=ScientificInputVerificationStatus.FIXTURE_VERIFIED,
+    )
+
+
 def test_postgres_schema_is_at_head_and_tables_exist(pg_db: Database) -> None:
     head = _exec(pg_db, "SELECT version_num FROM alembic_version")[0][0]
-    assert head == "i5d6e7f8a9b0"
+    assert head == "j6e7f8a9b0c1"
     present = {
         r[0]
         for r in _exec(
@@ -228,6 +354,213 @@ def test_postgres_observation_planning_constraints_are_named(pg_db: Database) ->
     assert "fk_observation_plans_run_owner" in constraints
     assert "ck_op_runs_authoritative_solver" in constraints
     assert "ck_op_runs_status_feasible" in constraints
+
+
+def test_postgres_provenance_replay_and_owner_isolation(pg_db: Database) -> None:
+    provenance = _fixture_input()
+    with pg_db.session() as session:
+        repo = SqlAlchemyObservationPlanningProvenanceRepository(session)
+        first = repo.create_provenance(provenance, owner_id="owner-a")
+        replay = repo.create_provenance(provenance, owner_id="owner-a")
+        other = repo.create_provenance(provenance, owner_id="owner-b")
+        session.commit()
+
+    assert first.id == replay.id
+    assert first.id != other.id
+    with pg_db.session() as session:
+        repo = SqlAlchemyObservationPlanningProvenanceRepository(session)
+        assert repo.get_provenance(first.id, owner_id="owner-b") is None
+
+
+def test_postgres_derived_parent_composite_fk_and_owner_scope(pg_db: Database) -> None:
+    parent = _declared_input()
+    derived = _derived_input(parent)
+    with pg_db.session() as session:
+        repo = SqlAlchemyObservationPlanningProvenanceRepository(session)
+        parent_stored = repo.create_provenance(parent, owner_id="owner-a")
+        child = repo.create_provenance(derived, owner_id="owner-a")
+        with pytest.raises(NotFoundError):
+            repo.create_provenance(derived, owner_id="owner-b")
+        session.commit()
+
+    rows = _exec(
+        pg_db,
+        "SELECT parent_provenance_id FROM observation_input_provenance_parents "
+        "WHERE child_provenance_id=:child_id",
+        {"child_id": child.id},
+    )
+    assert rows == [(parent_stored.id,)]
+
+
+def test_postgres_eligibility_set_persistence_and_window_uniqueness(pg_db: Database) -> None:
+    provenance = _fixture_input()
+    window_set = EligibilityWindowSet(
+        source_provenance=provenance,
+        windows=(_eligibility_window(provenance),),
+    )
+    with pg_db.session() as session:
+        repo = SqlAlchemyObservationPlanningProvenanceRepository(session)
+        repo.create_provenance(provenance, owner_id="owner-a")
+        stored = repo.create_eligibility_window_set(window_set, owner_id="owner-a")
+        replay = repo.create_eligibility_window_set(window_set, owner_id="owner-a")
+        fetched = repo.get_eligibility_window_set(stored.id, owner_id="owner-a")
+        session.commit()
+
+    assert replay.id == stored.id
+    assert fetched is not None
+    assert fetched.window_set == window_set
+    with pg_db.engine.connect() as conn:
+        trans = conn.begin()
+        with pytest.raises(IntegrityError):
+            conn.execute(
+                text(
+                    "INSERT INTO observation_eligibility_windows "
+                    "(id, set_id, owner_id, window_id, asset_id, target_id, start_at, end_at, "
+                    "source_provenance_checksum, declaration_mode, verification_status, "
+                    "window_json, created_at) "
+                    "SELECT 'duplicate-window-id', set_id, owner_id, window_id, asset_id, "
+                    "target_id, start_at, end_at, source_provenance_checksum, declaration_mode, "
+                    "verification_status, window_json, created_at "
+                    "FROM observation_eligibility_windows WHERE set_id=:set_id"
+                ),
+                {"set_id": stored.id},
+            )
+        trans.rollback()
+
+
+def test_postgres_eligibility_retrieval_uses_domain_canonical_order(pg_db: Database) -> None:
+    provenance = _fixture_input("pg-ordering")
+    sat_a_later = _eligibility_window(
+        provenance,
+        window_id="PG-SAT-A-LATE",
+        asset_id="SAT-A",
+        start=dt.datetime(2026, 6, 21, 11, 0, tzinfo=dt.UTC),
+        end=dt.datetime(2026, 6, 21, 11, 30, tzinfo=dt.UTC),
+    )
+    sat_b_earlier = _eligibility_window(
+        provenance,
+        window_id="PG-SAT-B-EARLY",
+        asset_id="SAT-B",
+        start=dt.datetime(2026, 6, 21, 10, 0, tzinfo=dt.UTC),
+        end=dt.datetime(2026, 6, 21, 10, 30, tzinfo=dt.UTC),
+    )
+    window_set = EligibilityWindowSet(
+        source_provenance=provenance,
+        windows=(sat_b_earlier, sat_a_later),
+    )
+    assert window_set.windows == (sat_a_later, sat_b_earlier)
+
+    with pg_db.session() as session:
+        repo = SqlAlchemyObservationPlanningProvenanceRepository(session)
+        repo.create_provenance(provenance, owner_id="owner-a")
+        stored = repo.create_eligibility_window_set(window_set, owner_id="owner-a")
+        fetched = repo.get_eligibility_window_set(stored.id, owner_id="owner-a")
+        replay = repo.create_eligibility_window_set(window_set, owner_id="owner-a")
+        session.commit()
+
+    assert fetched is not None
+    assert fetched.window_set == window_set
+    assert fetched.eligibility_set_checksum == eligibility_window_set_checksum(window_set)
+    assert fetched.window_set.windows == (sat_a_later, sat_b_earlier)
+    assert replay.id == stored.id
+    assert (
+        _exec(
+            pg_db,
+            "SELECT count(*) FROM observation_eligibility_windows WHERE set_id=:set_id",
+            {"set_id": stored.id},
+        )[0][0]
+        == 2
+    )
+
+
+def test_postgres_eligibility_set_rejects_cross_owner_provenance(pg_db: Database) -> None:
+    provenance = _fixture_input()
+    with pg_db.session() as session:
+        repo = SqlAlchemyObservationPlanningProvenanceRepository(session)
+        repo.create_provenance(provenance, owner_id="owner-a")
+        with pytest.raises(NotFoundError):
+            repo.create_eligibility_window_set(
+                EligibilityWindowSet(
+                    source_provenance=provenance,
+                    windows=(_eligibility_window(provenance),),
+                ),
+                owner_id="owner-b",
+            )
+
+
+def test_postgres_provenance_and_eligibility_tamper_detection(pg_db: Database) -> None:
+    provenance = _fixture_input()
+    window_set = EligibilityWindowSet(
+        source_provenance=provenance,
+        windows=(_eligibility_window(provenance),),
+    )
+    with pg_db.session() as session:
+        repo = SqlAlchemyObservationPlanningProvenanceRepository(session)
+        stored_provenance = repo.create_provenance(provenance, owner_id="owner-a")
+        stored_set = repo.create_eligibility_window_set(window_set, owner_id="owner-a")
+        session.commit()
+
+    with pg_db.session() as session:
+        repo = SqlAlchemyObservationPlanningProvenanceRepository(session)
+        session.execute(
+            update(ObservationInputProvenanceRow)
+            .where(ObservationInputProvenanceRow.id == stored_provenance.id)
+            .values(artifact_checksum=_sha("wrong"))
+        )
+        session.flush()
+        with pytest.raises(ValidationError, match="artifact checksum"):
+            repo.get_provenance(stored_provenance.id, owner_id="owner-a")
+        session.rollback()
+
+    with pg_db.session() as session:
+        repo = SqlAlchemyObservationPlanningProvenanceRepository(session)
+        session.execute(
+            update(ObservationEligibilityWindowSetRow)
+            .where(ObservationEligibilityWindowSetRow.id == stored_set.id)
+            .values(window_count=0)
+        )
+        session.flush()
+        with pytest.raises(ValidationError, match="window count"):
+            repo.get_eligibility_window_set(stored_set.id, owner_id="owner-a")
+
+
+def test_postgres_provenance_delete_restrictions(pg_db: Database) -> None:
+    provenance = _fixture_input()
+    window_set = EligibilityWindowSet(
+        source_provenance=provenance,
+        windows=(_eligibility_window(provenance),),
+    )
+    with pg_db.session() as session:
+        repo = SqlAlchemyObservationPlanningProvenanceRepository(session)
+        stored_provenance = repo.create_provenance(provenance, owner_id="owner-a")
+        stored_set = repo.create_eligibility_window_set(window_set, owner_id="owner-a")
+        session.commit()
+
+    with pg_db.engine.connect() as conn:
+        trans = conn.begin()
+        with pytest.raises(IntegrityError):
+            conn.execute(
+                text("DELETE FROM observation_input_provenance WHERE id=:id"),
+                {"id": stored_provenance.id},
+            )
+        trans.rollback()
+
+    assert (
+        _exec(
+            pg_db,
+            "SELECT count(*) FROM observation_input_provenance WHERE id=:id",
+            {"id": stored_provenance.id},
+        )[0][0]
+        == 1
+    )
+    assert (
+        _exec(
+            pg_db,
+            "SELECT count(*) FROM observation_eligibility_window_sets WHERE id=:id",
+            {"id": stored_set.id},
+        )[0][0]
+        == 1
+    )
 
 
 def test_postgres_owner_scoped_idempotency(pg_db: Database) -> None:

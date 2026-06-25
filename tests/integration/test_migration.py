@@ -49,10 +49,19 @@ PHASE3A_TABLES = {
     "small_body_query_runs",
 }
 
+PHASE4B_PLANNING_HEAD = "i5d6e7f8a9b0"
+
 PHASE4B_OBSERVATION_PLANNING_TABLES = {
     "observation_planning_requests",
     "observation_planning_runs",
     "observation_plans",
+}
+
+PHASE4B_PROVENANCE_ELIGIBILITY_TABLES = {
+    "observation_input_provenance",
+    "observation_input_provenance_parents",
+    "observation_eligibility_window_sets",
+    "observation_eligibility_windows",
 }
 
 
@@ -71,9 +80,14 @@ def test_alembic_upgrade_head_builds_schema(tmp_path: Path) -> None:
     assert tables >= PHASE2_TABLES
     assert tables >= PHASE3A_TABLES
     assert tables >= PHASE4B_OBSERVATION_PLANNING_TABLES
+    assert tables >= PHASE4B_PROVENANCE_ELIGIBILITY_TABLES
     # Migration schema matches the ORM metadata (parity check).
     assert set(Base.metadata.tables) >= (
-        EXPECTED_TABLES | PHASE2_TABLES | PHASE3A_TABLES | PHASE4B_OBSERVATION_PLANNING_TABLES
+        EXPECTED_TABLES
+        | PHASE2_TABLES
+        | PHASE3A_TABLES
+        | PHASE4B_OBSERVATION_PLANNING_TABLES
+        | PHASE4B_PROVENANCE_ELIGIBILITY_TABLES
     )
 
 
@@ -149,7 +163,9 @@ def test_observation_planning_migration_downgrade_and_reupgrade(tmp_path: Path) 
 
     command.upgrade(cfg, "head")
     engine = create_engine(db_url)
-    assert set(inspect(engine).get_table_names()) >= PHASE4B_OBSERVATION_PLANNING_TABLES
+    assert set(inspect(engine).get_table_names()) >= (
+        PHASE4B_OBSERVATION_PLANNING_TABLES | PHASE4B_PROVENANCE_ELIGIBILITY_TABLES
+    )
     engine.dispose()
 
     command.downgrade(cfg, PHASE4A_HEAD)
@@ -161,5 +177,34 @@ def test_observation_planning_migration_downgrade_and_reupgrade(tmp_path: Path) 
 
     command.upgrade(cfg, "head")
     engine = create_engine(db_url)
-    assert set(inspect(engine).get_table_names()) >= PHASE4B_OBSERVATION_PLANNING_TABLES
+    assert set(inspect(engine).get_table_names()) >= (
+        PHASE4B_OBSERVATION_PLANNING_TABLES | PHASE4B_PROVENANCE_ELIGIBILITY_TABLES
+    )
+    engine.dispose()
+
+
+def test_provenance_eligibility_migration_downgrades_to_previous_head(
+    tmp_path: Path,
+) -> None:
+    db_url = f"sqlite:///{(tmp_path / 'p4b-provenance.db').as_posix()}"
+    cfg = Config("alembic.ini")
+    cfg.set_main_option("sqlalchemy.url", db_url)
+
+    command.upgrade(cfg, "head")
+    engine = create_engine(db_url)
+    tables = set(inspect(engine).get_table_names())
+    assert tables >= PHASE4B_PROVENANCE_ELIGIBILITY_TABLES
+    assert tables >= PHASE4B_OBSERVATION_PLANNING_TABLES
+    engine.dispose()
+
+    command.downgrade(cfg, PHASE4B_PLANNING_HEAD)
+    engine = create_engine(db_url)
+    downgraded = set(inspect(engine).get_table_names())
+    assert downgraded.isdisjoint(PHASE4B_PROVENANCE_ELIGIBILITY_TABLES)
+    assert downgraded >= PHASE4B_OBSERVATION_PLANNING_TABLES
+    engine.dispose()
+
+    command.upgrade(cfg, "head")
+    engine = create_engine(db_url)
+    assert set(inspect(engine).get_table_names()) >= PHASE4B_PROVENANCE_ELIGIBILITY_TABLES
     engine.dispose()

@@ -186,10 +186,13 @@ def _window_set(
 ) -> EligibilityWindowSet:
     return EligibilityWindowSet(
         source_provenance=provenance,
-        windows=windows
-        or (
-            _window("W1", provenance),
-            _window("W2", provenance, start_minute=40, end_minute=70),
+        windows=(
+            windows
+            if windows is not None
+            else (
+                _window("W1", provenance),
+                _window("W2", provenance, start_minute=40, end_minute=70),
+            )
         ),
     )
 
@@ -223,6 +226,19 @@ def test_derived_provenance_requires_and_records_parent_checksum() -> None:
             artifact=_artifact("bad-derived"),
             rights=_rights(),
             verification_status=ScientificInputVerificationStatus.DERIVED_FROM_DECLARED,
+        )
+
+
+def test_duplicate_parent_provenance_checksums_rejected() -> None:
+    parent = _declared_provenance()
+
+    with pytest.raises(PydanticValidationError):
+        PinnedInputProvenance(
+            source=_derived_source(),
+            artifact=_artifact("duplicate-parent"),
+            rights=_rights(),
+            verification_status=ScientificInputVerificationStatus.DERIVED_FROM_DECLARED,
+            parent_provenance_checksums=(parent.checksum, parent.checksum),
         )
 
 
@@ -274,6 +290,21 @@ def test_unknown_rights_remain_explicit() -> None:
 
     assert provenance.rights.rights_status == InputRightsStatus.UNKNOWN
     assert provenance.rights.commercial_use == InputRightsPermission.UNKNOWN
+
+
+def test_restricted_rights_reject_direct_permission_contradictions() -> None:
+    with pytest.raises(PydanticValidationError):
+        _rights(
+            status=InputRightsStatus.RESTRICTED,
+            redistribution=InputRightsPermission.PERMITTED,
+        )
+
+    with pytest.raises(PydanticValidationError):
+        InputRightsDeclaration(
+            rights_status=InputRightsStatus.RESTRICTED,
+            commercial_use=InputRightsPermission.PERMITTED,
+            limitations=("restricted but contradictory",),
+        )
 
 
 def test_invalid_checksum_rejected() -> None:
@@ -366,6 +397,16 @@ def test_eligibility_set_rejects_duplicate_scientific_window() -> None:
         _window_set(provenance, (first, duplicate))
 
 
+def test_overlapping_non_identical_eligibility_windows_are_accepted() -> None:
+    provenance = _fixture_provenance()
+    first = _window("W1", provenance, target_id="T1", start_minute=0, end_minute=30)
+    overlapping = _window("W2", provenance, target_id="T2", start_minute=10, end_minute=40)
+
+    window_set = _window_set(provenance, (first, overlapping))
+
+    assert len(window_set.windows) == 2
+
+
 def test_eligibility_set_bounds_total_window_count() -> None:
     provenance = _fixture_provenance()
     windows = tuple(
@@ -440,6 +481,21 @@ def test_user_declared_eligibility_conversion_is_deterministic() -> None:
     assert first[0].source == "declared-eligibility:user_declared"
 
 
+def test_empty_eligibility_window_set_conversion_returns_empty_tuple() -> None:
+    window_set = _window_set(_fixture_provenance(), ())
+
+    assert eligibility_windows_to_opportunities(window_set) == ()
+
+
+def test_conversion_uses_deterministic_default_mission_value() -> None:
+    provenance = _fixture_provenance()
+    window_set = _window_set(provenance, (_window("W1", provenance),))
+
+    opportunity = eligibility_windows_to_opportunities(window_set)[0]
+
+    assert opportunity.mission_value == 1.0
+
+
 def test_conversion_respects_the_24_variable_request_maximum() -> None:
     provenance = _fixture_provenance()
     windows = tuple(
@@ -500,6 +556,36 @@ def test_validate_request_against_eligibility_uses_declared_scientific_identity(
     )
     with pytest.raises(ValidationError):
         validate_request_against_eligibility(mismatched, window_set)
+
+
+def test_validate_request_against_eligibility_allows_subset_requests() -> None:
+    provenance = _declared_provenance()
+    windows = (
+        _window("W1", provenance),
+        _window("W2", provenance, start_minute=40, end_minute=70),
+    )
+    window_set = _window_set(provenance, windows)
+    first_opportunity = eligibility_windows_to_opportunities(window_set)[0]
+    request = ObservationPlanningRequest(
+        name="declared subset from eligibility",
+        horizon=PlanningHorizon(
+            start=dt.datetime(2026, 6, 21, 9, 0, tzinfo=dt.UTC),
+            end=dt.datetime(2026, 6, 21, 12, 0, tzinfo=dt.UTC),
+        ),
+        source_mode=ObservationPlanningSourceMode.DECLARED,
+        fixture_name=None,
+        opportunities=(first_opportunity,),
+        satellites=(
+            SatelliteResource(
+                id=first_opportunity.satellite_id,
+                energy_capacity=10.0,
+                storage_capacity=10.0,
+            ),
+        ),
+        targets=(ObservationTarget(id=first_opportunity.target_id),),
+    )
+
+    validate_request_against_eligibility(request, window_set)
 
 
 def test_provenance_module_does_not_import_geometry_providers_or_quantum() -> None:

@@ -12,6 +12,8 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     ForeignKeyConstraint,
+    Index,
+    Integer,
     String,
     UniqueConstraint,
 )
@@ -147,3 +149,192 @@ class ObservationPlanRow(Base):
     scientific_identity_json: Mapped[dict[str, Any]] = mapped_column(JSON)
     scientific_identity_checksum: Mapped[str] = mapped_column(String(64), index=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, index=True)
+
+
+class ObservationInputProvenanceRow(Base):
+    __tablename__ = "observation_input_provenance"
+    __table_args__ = (
+        Index("ix_oip_owner", "owner_id"),
+        Index("ix_oip_checksum", "provenance_checksum"),
+        Index("ix_oip_source_type", "source_type"),
+        Index("ix_oip_verification", "verification_status"),
+        Index("ix_oip_artifact_checksum", "artifact_checksum"),
+        Index("ix_oip_created_at", "created_at"),
+        UniqueConstraint("id", "owner_id", name="uq_observation_input_provenance_owner"),
+        UniqueConstraint(
+            "owner_id",
+            "provenance_checksum",
+            name="uq_observation_input_provenance_owner_checksum",
+        ),
+        CheckConstraint("length(owner_id) > 0", name="ck_oip_owner_nonempty"),
+        CheckConstraint("length(provenance_checksum) = 64", name="ck_oip_checksum_len"),
+        CheckConstraint("length(artifact_checksum) = 64", name="ck_oip_artifact_checksum_len"),
+        CheckConstraint("schema_version = '1'", name="ck_oip_schema_version"),
+        CheckConstraint(
+            "source_type IN ('fixture', 'user_declared', 'derived')",
+            name="ck_oip_source_type",
+        ),
+        CheckConstraint(
+            "verification_status IN ('fixture_verified', 'user_declared', "
+            "'derived_from_declared', 'unverified', 'unknown')",
+            name="ck_oip_verification_status",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    owner_id: Mapped[str] = mapped_column(String(120))
+    provenance_checksum: Mapped[str] = mapped_column(String(64))
+    schema_version: Mapped[str] = mapped_column(String(16))
+    source_type: Mapped[str] = mapped_column(String(32))
+    verification_status: Mapped[str] = mapped_column(String(32))
+    provenance_json: Mapped[dict[str, Any]] = mapped_column(JSON)
+    artifact_checksum: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime)
+
+
+class ObservationInputProvenanceParentRow(Base):
+    __tablename__ = "observation_input_provenance_parents"
+    __table_args__ = (
+        Index("ix_oipp_owner", "owner_id"),
+        Index("ix_oipp_child", "child_provenance_id"),
+        Index("ix_oipp_parent", "parent_provenance_id"),
+        Index("ix_oipp_parent_checksum", "parent_provenance_checksum"),
+        Index("ix_oipp_created_at", "created_at"),
+        ForeignKeyConstraint(
+            ["child_provenance_id", "owner_id"],
+            ["observation_input_provenance.id", "observation_input_provenance.owner_id"],
+            name="fk_oip_parents_child_owner",
+        ),
+        ForeignKeyConstraint(
+            ["parent_provenance_id", "owner_id"],
+            ["observation_input_provenance.id", "observation_input_provenance.owner_id"],
+            name="fk_oip_parents_parent_owner",
+        ),
+        UniqueConstraint(
+            "child_provenance_id",
+            "parent_provenance_id",
+            name="uq_oip_parents_child_parent",
+        ),
+        CheckConstraint(
+            "child_provenance_id <> parent_provenance_id", name="ck_oip_no_self_parent"
+        ),
+        CheckConstraint(
+            "length(parent_provenance_checksum) = 64",
+            name="ck_oip_parent_checksum_len",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    owner_id: Mapped[str] = mapped_column(String(120))
+    child_provenance_id: Mapped[str] = mapped_column(String(36))
+    parent_provenance_id: Mapped[str] = mapped_column(String(36))
+    parent_provenance_checksum: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime)
+
+
+class ObservationEligibilityWindowSetRow(Base):
+    __tablename__ = "observation_eligibility_window_sets"
+    __table_args__ = (
+        Index("ix_oews_owner", "owner_id"),
+        Index("ix_oews_checksum", "eligibility_set_checksum"),
+        Index("ix_oews_source", "source_provenance_id"),
+        Index("ix_oews_source_checksum", "source_provenance_checksum"),
+        Index("ix_oews_created_at", "created_at"),
+        UniqueConstraint("id", "owner_id", name="uq_observation_eligibility_sets_owner"),
+        UniqueConstraint(
+            "owner_id",
+            "eligibility_set_checksum",
+            name="uq_observation_eligibility_sets_owner_checksum",
+        ),
+        ForeignKeyConstraint(
+            ["source_provenance_id", "owner_id"],
+            ["observation_input_provenance.id", "observation_input_provenance.owner_id"],
+            name="fk_oews_source_provenance_owner",
+        ),
+        CheckConstraint("length(owner_id) > 0", name="ck_oews_owner_nonempty"),
+        CheckConstraint(
+            "length(eligibility_set_checksum) = 64",
+            name="ck_oews_checksum_len",
+        ),
+        CheckConstraint(
+            "length(source_provenance_checksum) = 64",
+            name="ck_oews_provenance_checksum_len",
+        ),
+        CheckConstraint("schema_version = '1'", name="ck_oews_schema_version"),
+        CheckConstraint("window_count >= 0 AND window_count <= 24", name="ck_oews_window_count"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    owner_id: Mapped[str] = mapped_column(String(120))
+    eligibility_set_checksum: Mapped[str] = mapped_column(String(64))
+    schema_version: Mapped[str] = mapped_column(String(16))
+    source_provenance_id: Mapped[str] = mapped_column(String(36))
+    source_provenance_checksum: Mapped[str] = mapped_column(String(64))
+    generation_rule_version: Mapped[str] = mapped_column(String(120))
+    window_count: Mapped[int] = mapped_column(Integer)
+    limitations_json: Mapped[list[str]] = mapped_column(JSON)
+    eligibility_set_json: Mapped[dict[str, Any]] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime)
+
+
+class ObservationEligibilityWindowRow(Base):
+    __tablename__ = "observation_eligibility_windows"
+    __table_args__ = (
+        Index("ix_oew_set", "set_id"),
+        Index("ix_oew_owner", "owner_id"),
+        Index("ix_oew_window", "window_id"),
+        Index("ix_oew_asset", "asset_id"),
+        Index("ix_oew_target", "target_id"),
+        Index("ix_oew_start", "start_at"),
+        Index("ix_oew_end", "end_at"),
+        Index("ix_oew_source_checksum", "source_provenance_checksum"),
+        Index("ix_oew_declaration", "declaration_mode"),
+        Index("ix_oew_verification", "verification_status"),
+        Index("ix_oew_created_at", "created_at"),
+        ForeignKeyConstraint(
+            ["set_id", "owner_id"],
+            [
+                "observation_eligibility_window_sets.id",
+                "observation_eligibility_window_sets.owner_id",
+            ],
+            name="fk_oew_set_owner",
+        ),
+        UniqueConstraint("set_id", "window_id", name="uq_oew_set_window_id"),
+        UniqueConstraint(
+            "set_id",
+            "asset_id",
+            "target_id",
+            "start_at",
+            "end_at",
+            name="uq_oew_set_scientific_window",
+        ),
+        CheckConstraint("end_at > start_at", name="ck_oew_end_after_start"),
+        CheckConstraint(
+            "length(source_provenance_checksum) = 64",
+            name="ck_oew_provenance_checksum_len",
+        ),
+        CheckConstraint(
+            "declaration_mode IN ('fixture_backed', 'user_declared', "
+            "'derived_from_declared_input')",
+            name="ck_oew_declaration_mode",
+        ),
+        CheckConstraint(
+            "verification_status IN ('fixture_verified', 'user_declared', "
+            "'derived_from_declared', 'unverified', 'unknown')",
+            name="ck_oew_verification_status",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    set_id: Mapped[str] = mapped_column(String(36))
+    owner_id: Mapped[str] = mapped_column(String(120))
+    window_id: Mapped[str] = mapped_column(String(120))
+    asset_id: Mapped[str] = mapped_column(String(120))
+    target_id: Mapped[str] = mapped_column(String(120))
+    start_at: Mapped[datetime] = mapped_column(UTCDateTime)
+    end_at: Mapped[datetime] = mapped_column(UTCDateTime)
+    source_provenance_checksum: Mapped[str] = mapped_column(String(64))
+    declaration_mode: Mapped[str] = mapped_column(String(48))
+    verification_status: Mapped[str] = mapped_column(String(32))
+    window_json: Mapped[dict[str, Any]] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime)
