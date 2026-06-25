@@ -23,19 +23,26 @@ from orbitmind.api.observation_planning_schemas import (
     ObservationPlanningRunSummaryResponse,
     ObservationPlanResponse,
     ObservationPlanSummaryResponse,
+    ProvenanceAnchoredExecutionRequest,
+    ProvenanceAnchoredExecutionResponse,
+    ProvenancePlanningLinkResponse,
 )
-from orbitmind.core.errors import ValidationError
+from orbitmind.core.errors import NotFoundError, ValidationError
 from orbitmind.observation_planning import (
     AuthoritativePlanningSolver,
     ObservationPlanningSourceMode,
     PlanningResultStatus,
     execute_observation_planning,
+    execute_provenance_anchored_planning,
     get_observation_plan,
     get_observation_planning_execution,
     get_observation_planning_request,
     list_observation_planning_requests,
     list_observation_planning_runs,
     list_observation_plans,
+)
+from orbitmind.persistence.observation_planning_link_repository import (
+    SqlAlchemyObservationPlanningLinkRepository,
 )
 
 router = APIRouter(prefix="/api/v1/observation-planning", tags=["observation-planning"])
@@ -93,6 +100,33 @@ def execute_planning(
     if not execution.run_created:
         response.status_code = status.HTTP_200_OK
     return ObservationPlanningExecutionResponse.from_execution(execution)
+
+
+@router.post(
+    "/provenance-anchored-executions",
+    response_model=ProvenanceAnchoredExecutionResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def execute_provenance_anchored(
+    payload: ProvenanceAnchoredExecutionRequest,
+    response: Response,
+    session: SessionDep,
+    owner_id: OwnerDep,
+) -> ProvenanceAnchoredExecutionResponse:
+    """Synchronously execute a provenance-anchored bounded planning derivation."""
+
+    execution = execute_provenance_anchored_planning(
+        session=session,
+        owner_id=owner_id,
+        requested_by=payload.requested_by,
+        eligibility_set_id=payload.eligibility_set_id,
+        eligibility_set_checksum=payload.eligibility_set_checksum,
+        selected_window_ids=payload.selected_window_ids,
+        idempotency_key=payload.idempotency_key,
+    )
+    if not execution.run_created:
+        response.status_code = status.HTTP_200_OK
+    return ProvenanceAnchoredExecutionResponse.from_execution(execution)
 
 
 @router.get("/requests", response_model=ObservationPlanningRequestListResponse)
@@ -234,3 +268,29 @@ def get_plan(
     return ObservationPlanResponse.from_details(
         get_observation_plan(session, owner_id=owner_id, plan_id=plan_id)
     )
+
+
+@router.get(
+    "/provenance-links/{link_id}",
+    response_model=ProvenancePlanningLinkResponse,
+)
+def get_provenance_link(
+    link_id: str,
+    session: SessionDep,
+    owner_id: OwnerDep,
+) -> ProvenancePlanningLinkResponse:
+    """Return an owner-scoped authenticated provenance-to-planning derivation link."""
+
+    _require_clean_identifier(link_id, "link_id")
+    link = SqlAlchemyObservationPlanningLinkRepository(session).get_provenance_planning_link(
+        link_id,
+        owner_id=owner_id,
+    )
+    if link is None:
+        raise NotFoundError("provenance-planning link not found")
+    return ProvenancePlanningLinkResponse.from_link(link)
+
+
+def _require_clean_identifier(value: str, field_name: str) -> None:
+    if not value or value.strip() != value or len(value) > 128:
+        raise ValidationError(f"{field_name} must be non-empty, bounded, and unpadded")

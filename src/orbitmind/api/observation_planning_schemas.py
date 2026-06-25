@@ -28,6 +28,11 @@ from orbitmind.observation_planning import (
     PlanningOptimalityLabel,
     PlanningResultStatus,
     PlanningVerificationLabel,
+    ProvenanceAnchoredPlanningExecution,
+)
+from orbitmind.observation_planning.provenance import (
+    PinnedInputSourceType,
+    ScientificInputVerificationStatus,
 )
 from orbitmind.optimization.models import (
     ConstraintSet,
@@ -40,6 +45,7 @@ from orbitmind.optimization.models import (
     SchedulingProblemLimits,
     TimeWindow,
 )
+from orbitmind.persistence.observation_planning_link_repository import StoredProvenancePlanningLink
 
 OBSERVATION_PLANNING_DISCLAIMER = (
     "Bounded observation planning over fixture-backed or user-declared opportunities. "
@@ -48,11 +54,20 @@ OBSERVATION_PLANNING_DISCLAIMER = (
     "treat quantum execution as authoritative."
 )
 
+PROVENANCE_ANCHORED_EXECUTION_DISCLAIMER = (
+    "Provenance-anchored bounded observation planning over authenticated fixture-backed or "
+    "user-declared eligibility windows. Eligibility windows do not prove orbital visibility, "
+    "taskability, approval, command readiness, or signed receipt status. Planning remains "
+    "classically authoritative; quantum execution is not authoritative."
+)
+
 _MAX_OPPORTUNITIES = 24
 _MAX_ASSETS = 24
 _MAX_TARGETS = 24
 _MAX_MANDATORY_IDS = 24
 _MAX_MUTUAL_EXCLUSION_GROUPS = 276
+_MAX_SELECTED_WINDOWS = 24
+_SHA256_PATTERN = r"^[0-9a-f]{64}$"
 
 
 class _Strict(BaseModel):
@@ -220,6 +235,63 @@ class ObservationPlanningExecuteRequest(_Strict):
         )
 
 
+class ProvenanceAnchoredExecutionRequest(_Strict):
+    eligibility_set_id: str | None = Field(default=None, min_length=1, max_length=36)
+    eligibility_set_checksum: str | None = Field(
+        default=None,
+        min_length=64,
+        max_length=64,
+        pattern=_SHA256_PATTERN,
+    )
+    requested_by: str = Field(min_length=1, max_length=120)
+    selected_window_ids: tuple[str, ...] | None = Field(
+        default=None,
+        max_length=_MAX_SELECTED_WINDOWS,
+    )
+    idempotency_key: str | None = Field(default=None, min_length=1, max_length=128)
+
+    @field_validator("eligibility_set_id", "eligibility_set_checksum", "requested_by")
+    @classmethod
+    def _clean_required_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        if value.strip() != value:
+            raise ValueError("value must be unpadded")
+        return value
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def _clean_optional_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        if value.strip() != value:
+            raise ValueError("idempotency_key must be unpadded")
+        return value
+
+    @field_validator("selected_window_ids")
+    @classmethod
+    def _clean_selected_window_ids(
+        cls,
+        value: tuple[str, ...] | None,
+    ) -> tuple[str, ...] | None:
+        if value is None:
+            return value
+        if not value:
+            raise ValueError("selected_window_ids cannot be empty when supplied")
+        for window_id in value:
+            if not window_id or window_id.strip() != window_id or len(window_id) > 80:
+                raise ValueError("selected_window_ids must be non-empty, bounded, and unpadded")
+        if len(set(value)) != len(value):
+            raise ValueError("selected_window_ids must be unique")
+        return value
+
+    @model_validator(mode="after")
+    def _exactly_one_lookup(self) -> Self:
+        if (self.eligibility_set_id is None) == (self.eligibility_set_checksum is None):
+            raise ValueError("provide exactly one eligibility_set_id or eligibility_set_checksum")
+        return self
+
+
 class PlanningHorizonView(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -308,6 +380,62 @@ class ObservationPlanningExecutionResponse(BaseModel):
             feasible=execution.feasible,
             objective_value=result.objective_value,
             limitations=result.limitations,
+        )
+
+
+class ProvenanceAnchoredExecutionResponse(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    owner_id: str
+    provenance_checksum: str
+    eligibility_set_checksum: str
+    preparation_checksum: str
+    planning_request_checksum: str
+    planning_request_id: str
+    planning_run_id: str
+    observation_plan_id: str | None
+    link_id: str
+    link_checksum: str
+    selected_window_ids: tuple[str, ...]
+    planning_status: PlanningResultStatus
+    authoritative_solver: AuthoritativePlanningSolver | None
+    optimality: PlanningOptimalityLabel
+    feasible: bool
+    independent_objective: float | None
+    request_created: bool
+    run_created: bool
+    source_type: PinnedInputSourceType
+    verification_status: ScientificInputVerificationStatus
+    limitations: tuple[str, ...]
+    disclaimer: str = PROVENANCE_ANCHORED_EXECUTION_DISCLAIMER
+
+    @classmethod
+    def from_execution(
+        cls,
+        execution: ProvenanceAnchoredPlanningExecution,
+    ) -> ProvenanceAnchoredExecutionResponse:
+        return cls(
+            owner_id=execution.owner_id,
+            provenance_checksum=execution.provenance_checksum,
+            eligibility_set_checksum=execution.eligibility_set_checksum,
+            preparation_checksum=execution.preparation_checksum,
+            planning_request_checksum=execution.planning_request_checksum,
+            planning_request_id=execution.planning_request_id,
+            planning_run_id=execution.planning_run_id,
+            observation_plan_id=execution.observation_plan_id,
+            link_id=execution.link_record_id,
+            link_checksum=execution.link_checksum,
+            selected_window_ids=execution.selected_window_ids,
+            planning_status=execution.planning_status,
+            authoritative_solver=execution.authoritative_solver,
+            optimality=execution.optimality,
+            feasible=execution.feasible,
+            independent_objective=execution.independent_objective,
+            request_created=execution.request_created,
+            run_created=execution.run_created,
+            source_type=execution.source_type,
+            verification_status=execution.source_verification_status,
+            limitations=execution.limitations,
         )
 
 
@@ -427,6 +555,59 @@ class ObservationPlanResponse(BaseModel):
             created_at=summary.created_at,
             limitations=summary.limitations,
             evaluation=details.evaluation,
+        )
+
+
+class ProvenancePlanningLinkResponse(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    owner_id: str
+    provenance_record_id: str
+    provenance_checksum: str
+    eligibility_set_record_id: str
+    eligibility_set_checksum: str
+    preparation_checksum: str
+    planning_request_checksum: str
+    planning_scientific_identity_checksum: str
+    planning_request_id: str
+    planning_run_id: str
+    observation_plan_id: str | None
+    selected_window_ids: tuple[str, ...]
+    planning_status: PlanningResultStatus
+    authoritative_solver: AuthoritativePlanningSolver | None
+    optimality: PlanningOptimalityLabel
+    feasible: bool
+    independent_objective: float | None
+    limitations: tuple[str, ...]
+    link_checksum: str
+    disclaimer: str = PROVENANCE_ANCHORED_EXECUTION_DISCLAIMER
+
+    @classmethod
+    def from_link(cls, link: StoredProvenancePlanningLink) -> ProvenancePlanningLinkResponse:
+        return cls(
+            id=link.id,
+            owner_id=link.owner_id,
+            provenance_record_id=link.provenance_record_id,
+            provenance_checksum=link.provenance_checksum,
+            eligibility_set_record_id=link.eligibility_set_record_id,
+            eligibility_set_checksum=link.eligibility_set_checksum,
+            preparation_checksum=link.preparation_checksum,
+            planning_request_checksum=link.planning_request_checksum,
+            planning_scientific_identity_checksum=link.planning_scientific_identity_checksum,
+            planning_request_id=link.planning_request_id,
+            planning_run_id=link.planning_run_id,
+            observation_plan_id=link.observation_plan_id,
+            selected_window_ids=link.selected_window_ids,
+            planning_status=PlanningResultStatus(link.planning_status),
+            authoritative_solver=AuthoritativePlanningSolver(link.authoritative_solver)
+            if link.authoritative_solver is not None
+            else None,
+            optimality=PlanningOptimalityLabel(link.optimality_label),
+            feasible=link.feasible,
+            independent_objective=link.objective_value,
+            limitations=link.limitations,
+            link_checksum=link.link_checksum,
         )
 
 
