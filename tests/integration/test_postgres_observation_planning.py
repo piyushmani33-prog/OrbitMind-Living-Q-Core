@@ -26,6 +26,7 @@ from orbitmind.observation_planning import (
     list_observation_planning_runs,
     list_observation_plans,
     plan_observation_request,
+    prepare_eligibility_backed_planning_request,
 )
 from orbitmind.observation_planning.provenance import (
     EligibilityDeclarationMode,
@@ -51,6 +52,7 @@ from orbitmind.optimization.models import (
 )
 from orbitmind.persistence.database import Database
 from orbitmind.persistence.observation_planning_models import (
+    ObservationEligibilityWindowRow,
     ObservationEligibilityWindowSetRow,
     ObservationInputProvenanceRow,
     ObservationPlanningRequestRow,
@@ -97,6 +99,14 @@ def pg_db() -> Database:
 def _exec(db: Database, sql: str, params: dict[str, object] | None = None) -> list:
     with db.engine.connect() as conn:
         return list(conn.execute(text(sql), params or {}))
+
+
+def _planning_counts(db: Database) -> tuple[int, int, int]:
+    return (
+        _exec(db, "SELECT count(*) FROM observation_planning_requests")[0][0],
+        _exec(db, "SELECT count(*) FROM observation_planning_runs")[0][0],
+        _exec(db, "SELECT count(*) FROM observation_plans")[0][0],
+    )
 
 
 def _horizon() -> PlanningHorizon:
@@ -471,6 +481,178 @@ def test_postgres_eligibility_retrieval_uses_domain_canonical_order(pg_db: Datab
         )[0][0]
         == 2
     )
+
+
+def test_postgres_prepare_fixture_backed_request_without_planning_writes(
+    pg_db: Database,
+) -> None:
+    provenance = _fixture_input("pg-prep-fixture")
+    window_set = EligibilityWindowSet(
+        source_provenance=provenance,
+        windows=(_eligibility_window(provenance, window_id="PG-PREP-W1"),),
+    )
+    with pg_db.session() as session:
+        repo = SqlAlchemyObservationPlanningProvenanceRepository(session)
+        repo.create_provenance(provenance, owner_id="owner-a")
+        stored_set = repo.create_eligibility_window_set(window_set, owner_id="owner-a")
+        prepared = prepare_eligibility_backed_planning_request(
+            session=session,
+            owner_id="owner-a",
+            eligibility_set_id=stored_set.id,
+            requested_by="pg-analyst",
+        )
+        session.commit()
+
+    assert prepared.eligibility_set_checksum == stored_set.eligibility_set_checksum
+    assert prepared.selected_window_ids == ("PG-PREP-W1",)
+    assert prepared.prepared_request.requested_by == "pg-analyst"
+    assert _planning_counts(pg_db) == (0, 0, 0)
+
+
+def test_postgres_prepare_subset_replay_and_owner_isolation(pg_db: Database) -> None:
+    provenance = _fixture_input("pg-prep-subset")
+    sat_a_later = _eligibility_window(
+        provenance,
+        window_id="PG-SUBSET-A",
+        asset_id="SAT-A",
+        start=dt.datetime(2026, 6, 21, 11, 0, tzinfo=dt.UTC),
+        end=dt.datetime(2026, 6, 21, 11, 30, tzinfo=dt.UTC),
+    )
+    sat_b_earlier = _eligibility_window(
+        provenance,
+        window_id="PG-SUBSET-B",
+        asset_id="SAT-B",
+        start=dt.datetime(2026, 6, 21, 10, 0, tzinfo=dt.UTC),
+        end=dt.datetime(2026, 6, 21, 10, 30, tzinfo=dt.UTC),
+    )
+    window_set = EligibilityWindowSet(
+        source_provenance=provenance,
+        windows=(sat_b_earlier, sat_a_later),
+    )
+    with pg_db.session() as session:
+        repo = SqlAlchemyObservationPlanningProvenanceRepository(session)
+        repo.create_provenance(provenance, owner_id="owner-a")
+        repo.create_provenance(provenance, owner_id="owner-b")
+        stored_a = repo.create_eligibility_window_set(window_set, owner_id="owner-a")
+        stored_b = repo.create_eligibility_window_set(window_set, owner_id="owner-b")
+        first = prepare_eligibility_backed_planning_request(
+            session=session,
+            owner_id="owner-a",
+            eligibility_set_id=stored_a.id,
+            requested_by="pg-analyst",
+            selected_window_ids=("PG-SUBSET-B", "PG-SUBSET-A"),
+        )
+        second = prepare_eligibility_backed_planning_request(
+            session=session,
+            owner_id="owner-a",
+            eligibility_set_id=stored_a.id,
+            requested_by="pg-analyst",
+            selected_window_ids=("PG-SUBSET-A", "PG-SUBSET-B"),
+        )
+        with pytest.raises(NotFoundError):
+            prepare_eligibility_backed_planning_request(
+                session=session,
+                owner_id="owner-b",
+                eligibility_set_id=stored_a.id,
+                requested_by="owner-a",
+            )
+        other_owner = prepare_eligibility_backed_planning_request(
+            session=session,
+            owner_id="owner-b",
+            eligibility_set_id=stored_b.id,
+            requested_by="pg-analyst",
+            selected_window_ids=("PG-SUBSET-B", "PG-SUBSET-A"),
+        )
+        session.commit()
+
+    assert first.selected_window_ids == ("PG-SUBSET-A", "PG-SUBSET-B")
+    assert first.preparation_checksum == second.preparation_checksum
+    assert first.preparation_checksum == other_owner.preparation_checksum
+    assert first.provenance_record_id != other_owner.provenance_record_id
+    assert _planning_counts(pg_db) == (0, 0, 0)
+
+
+def test_postgres_prepare_detects_provenance_set_and_window_tamper(
+    pg_db: Database,
+) -> None:
+    provenance = _fixture_input("pg-prep-tamper")
+    window_set = EligibilityWindowSet(
+        source_provenance=provenance,
+        windows=(_eligibility_window(provenance, window_id="PG-TAMPER-W1"),),
+    )
+    with pg_db.session() as session:
+        repo = SqlAlchemyObservationPlanningProvenanceRepository(session)
+        stored_provenance = repo.create_provenance(provenance, owner_id="owner-a")
+        stored_set = repo.create_eligibility_window_set(window_set, owner_id="owner-a")
+        session.commit()
+
+    with pg_db.session() as session:
+        session.execute(
+            update(ObservationInputProvenanceRow)
+            .where(ObservationInputProvenanceRow.id == stored_provenance.id)
+            .values(artifact_checksum=_sha("wrong-prep-artifact"))
+        )
+        session.flush()
+        with pytest.raises(ValidationError, match="artifact checksum"):
+            prepare_eligibility_backed_planning_request(
+                session=session,
+                owner_id="owner-a",
+                eligibility_set_id=stored_set.id,
+                requested_by="pg-analyst",
+            )
+        session.rollback()
+
+    with pg_db.session() as session:
+        session.execute(
+            update(ObservationEligibilityWindowSetRow)
+            .where(ObservationEligibilityWindowSetRow.id == stored_set.id)
+            .values(window_count=0)
+        )
+        session.flush()
+        with pytest.raises(ValidationError, match="window count"):
+            prepare_eligibility_backed_planning_request(
+                session=session,
+                owner_id="owner-a",
+                eligibility_set_id=stored_set.id,
+                requested_by="pg-analyst",
+            )
+        session.rollback()
+
+    with pg_db.session() as session:
+        session.execute(
+            update(ObservationEligibilityWindowRow)
+            .where(ObservationEligibilityWindowRow.set_id == stored_set.id)
+            .values(asset_id="SAT-TAMPERED")
+        )
+        session.flush()
+        with pytest.raises(ValidationError, match="asset"):
+            prepare_eligibility_backed_planning_request(
+                session=session,
+                owner_id="owner-a",
+                eligibility_set_id=stored_set.id,
+                requested_by="pg-analyst",
+            )
+
+
+def test_postgres_prepare_empty_set_rejected_without_planning_writes(
+    pg_db: Database,
+) -> None:
+    provenance = _fixture_input("pg-prep-empty")
+    empty_set = EligibilityWindowSet(source_provenance=provenance, windows=())
+    with pg_db.session() as session:
+        repo = SqlAlchemyObservationPlanningProvenanceRepository(session)
+        repo.create_provenance(provenance, owner_id="owner-a")
+        stored_set = repo.create_eligibility_window_set(empty_set, owner_id="owner-a")
+        with pytest.raises(ValidationError, match="contains no windows"):
+            prepare_eligibility_backed_planning_request(
+                session=session,
+                owner_id="owner-a",
+                eligibility_set_id=stored_set.id,
+                requested_by="pg-analyst",
+            )
+        session.commit()
+
+    assert _planning_counts(pg_db) == (0, 0, 0)
 
 
 def test_postgres_eligibility_set_rejects_cross_owner_provenance(pg_db: Database) -> None:
