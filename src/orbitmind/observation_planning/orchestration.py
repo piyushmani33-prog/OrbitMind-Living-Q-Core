@@ -7,6 +7,8 @@ idempotent races, but they do not commit independently.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
@@ -66,54 +68,72 @@ def execute_observation_planning(
         raise ValidationError("observation-planning orchestration requires a fresh session")
 
     with session.begin():
-        repo = SqlAlchemyObservationPlanningRepository(session)
-        use_repository_savepoint = _use_repository_savepoint(session)
-        preexisting_request = (
-            repo.get_planning_request_by_idempotency(
-                owner_id=resolved_owner,
-                idempotency_key=resolved_request.idempotency_key,
-            )
-            if resolved_request.idempotency_key is not None
-            else None
-        )
-        stored_request = repo.create_planning_request(
-            resolved_request,
+        return _execute_observation_planning_in_transaction(
+            session=session,
             owner_id=resolved_owner,
-            use_savepoint=use_repository_savepoint,
+            request=resolved_request,
         )
-        request_created = preexisting_request is None
 
-        result = plan_observation_request(resolved_request)
-        validate_persistable_planning_result(result)
-        identity_checksum = scientific_identity_checksum(result.scientific_identity)
-        preexisting_run = repo.get_planning_run_by_scientific_identity(
-            request_id=stored_request.id,
-            identity_checksum=identity_checksum,
-        )
-        stored_run = repo.persist_planning_result(
-            request_id=stored_request.id,
-            owner_id=stored_request.owner_id,
-            result=result,
-            use_savepoint=use_repository_savepoint,
-        )
-        run_created = preexisting_run is None
-        plan_created = run_created and stored_run.plan_id is not None
 
-        return PersistedObservationPlanningExecution(
-            request_id=stored_request.id,
-            run_id=stored_run.id,
-            plan_id=stored_run.plan_id,
-            owner_id=stored_request.owner_id,
-            request_created=request_created,
-            run_created=run_created,
-            plan_created=plan_created,
-            result=stored_run.result,
-            request_checksum=result.request_checksum,
-            problem_checksum=result.problem_checksum,
-            scientific_identity_checksum=stored_run.scientific_identity_checksum,
-            final_status=result.status,
-            feasible=result.feasible,
+def _execute_observation_planning_in_transaction(
+    *,
+    session: Session,
+    owner_id: str,
+    request: ObservationPlanningRequest,
+    planner: Callable[[ObservationPlanningRequest], ObservationPlanningResult] | None = None,
+) -> PersistedObservationPlanningExecution:
+    """Persist one planning execution inside a caller-owned transaction."""
+
+    resolved_owner = normalize_owner_id(owner_id)
+    planning_service = planner or plan_observation_request
+    repo = SqlAlchemyObservationPlanningRepository(session)
+    use_repository_savepoint = _use_repository_savepoint(session)
+    preexisting_request = (
+        repo.get_planning_request_by_idempotency(
+            owner_id=resolved_owner,
+            idempotency_key=request.idempotency_key,
         )
+        if request.idempotency_key is not None
+        else None
+    )
+    stored_request = repo.create_planning_request(
+        request,
+        owner_id=resolved_owner,
+        use_savepoint=use_repository_savepoint,
+    )
+    request_created = preexisting_request is None
+
+    result = planning_service(request)
+    validate_persistable_planning_result(result)
+    identity_checksum = scientific_identity_checksum(result.scientific_identity)
+    preexisting_run = repo.get_planning_run_by_scientific_identity(
+        request_id=stored_request.id,
+        identity_checksum=identity_checksum,
+    )
+    stored_run = repo.persist_planning_result(
+        request_id=stored_request.id,
+        owner_id=stored_request.owner_id,
+        result=result,
+        use_savepoint=use_repository_savepoint,
+    )
+    run_created = preexisting_run is None
+    plan_created = run_created and stored_run.plan_id is not None
+
+    return PersistedObservationPlanningExecution(
+        request_id=stored_request.id,
+        run_id=stored_run.id,
+        plan_id=stored_run.plan_id,
+        owner_id=stored_request.owner_id,
+        request_created=request_created,
+        run_created=run_created,
+        plan_created=plan_created,
+        result=stored_run.result,
+        request_checksum=result.request_checksum,
+        problem_checksum=result.problem_checksum,
+        scientific_identity_checksum=stored_run.scientific_identity_checksum,
+        final_status=result.status,
+        feasible=result.feasible,
+    )
 
 
 def _request_with_idempotency(

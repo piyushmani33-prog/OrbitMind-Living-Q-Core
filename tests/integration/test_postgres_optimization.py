@@ -517,7 +517,7 @@ def test_receipt_replay_is_rejected_on_postgres(pg_container: AppContainer) -> N
 
 def test_schema_is_at_corrective_head_with_constraints(pg_container: AppContainer) -> None:
     head = _exec(pg_container, "SELECT version_num FROM alembic_version")[0][0]
-    assert head == "j6e7f8a9b0c1"
+    assert head == "k6e7f8a9b0c2"
     # Foreign keys created by the corrective migration are present.
     fks = {
         r[0]

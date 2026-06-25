@@ -21,6 +21,7 @@ from orbitmind.observation_planning import (
     PlanningHorizon,
     PlanningResultStatus,
     execute_observation_planning,
+    execute_provenance_anchored_planning,
     get_observation_planning_request,
     list_observation_planning_requests,
     list_observation_planning_runs,
@@ -51,10 +52,14 @@ from orbitmind.optimization.models import (
     TimeWindow,
 )
 from orbitmind.persistence.database import Database
+from orbitmind.persistence.observation_planning_link_repository import (
+    SqlAlchemyObservationPlanningLinkRepository,
+)
 from orbitmind.persistence.observation_planning_models import (
     ObservationEligibilityWindowRow,
     ObservationEligibilityWindowSetRow,
     ObservationInputProvenanceRow,
+    ObservationPlanningProvenanceLinkRow,
     ObservationPlanningRequestRow,
 )
 from orbitmind.persistence.observation_planning_provenance_repository import (
@@ -73,6 +78,7 @@ pytestmark = [
 ]
 
 _TABLES = (
+    "observation_planning_provenance_links",
     "observation_eligibility_windows",
     "observation_eligibility_window_sets",
     "observation_input_provenance_parents",
@@ -338,7 +344,7 @@ def _eligibility_window(
 
 def test_postgres_schema_is_at_head_and_tables_exist(pg_db: Database) -> None:
     head = _exec(pg_db, "SELECT version_num FROM alembic_version")[0][0]
-    assert head == "j6e7f8a9b0c1"
+    assert head == "k6e7f8a9b0c2"
     present = {
         r[0]
         for r in _exec(
@@ -653,6 +659,300 @@ def test_postgres_prepare_empty_set_rejected_without_planning_writes(
         session.commit()
 
     assert _planning_counts(pg_db) == (0, 0, 0)
+
+
+def test_postgres_provenance_anchored_execution_replay_and_changed_subset(
+    pg_db: Database,
+) -> None:
+    provenance = _fixture_input("pg-anchored")
+    first_window = _eligibility_window(
+        provenance,
+        window_id="PG-ANCHOR-A",
+        asset_id="SAT-A",
+        start=dt.datetime(2026, 6, 21, 10, 0, tzinfo=dt.UTC),
+        end=dt.datetime(2026, 6, 21, 10, 30, tzinfo=dt.UTC),
+    )
+    second_window = _eligibility_window(
+        provenance,
+        window_id="PG-ANCHOR-B",
+        asset_id="SAT-B",
+        start=dt.datetime(2026, 6, 21, 10, 40, tzinfo=dt.UTC),
+        end=dt.datetime(2026, 6, 21, 11, 10, tzinfo=dt.UTC),
+    )
+    window_set = EligibilityWindowSet(
+        source_provenance=provenance,
+        windows=(second_window, first_window),
+    )
+    with pg_db.session() as session:
+        repo = SqlAlchemyObservationPlanningProvenanceRepository(session)
+        repo.create_provenance(provenance, owner_id="owner-a")
+        stored_set = repo.create_eligibility_window_set(window_set, owner_id="owner-a")
+        session.commit()
+
+        first = execute_provenance_anchored_planning(
+            session=session,
+            owner_id="owner-a",
+            eligibility_set_id=stored_set.id,
+            requested_by="pg-analyst",
+            selected_window_ids=("PG-ANCHOR-B", "PG-ANCHOR-A"),
+        )
+        replay = execute_provenance_anchored_planning(
+            session=session,
+            owner_id="owner-a",
+            eligibility_set_id=stored_set.id,
+            requested_by="pg-analyst",
+            selected_window_ids=("PG-ANCHOR-A", "PG-ANCHOR-B"),
+        )
+        changed = execute_provenance_anchored_planning(
+            session=session,
+            owner_id="owner-a",
+            eligibility_set_id=stored_set.id,
+            requested_by="pg-analyst",
+            selected_window_ids=("PG-ANCHOR-A",),
+        )
+        session.commit()
+
+    assert first.selected_window_ids == ("PG-ANCHOR-A", "PG-ANCHOR-B")
+    assert replay.link_record_id == first.link_record_id
+    assert replay.request_created is False
+    assert replay.run_created is False
+    assert changed.link_record_id != first.link_record_id
+    assert changed.preparation_checksum != first.preparation_checksum
+    assert _exec(pg_db, "SELECT count(*) FROM observation_planning_provenance_links")[0][0] == 2
+
+
+def test_postgres_provenance_anchored_conflict_owner_and_tamper(
+    pg_db: Database,
+) -> None:
+    provenance = _fixture_input("pg-anchored-conflict")
+    window_set = EligibilityWindowSet(
+        source_provenance=provenance,
+        windows=(
+            _eligibility_window(provenance, window_id="PG-CONFLICT-A", asset_id="SAT-A"),
+            _eligibility_window(
+                provenance,
+                window_id="PG-CONFLICT-B",
+                asset_id="SAT-B",
+                start=dt.datetime(2026, 6, 21, 10, 40, tzinfo=dt.UTC),
+                end=dt.datetime(2026, 6, 21, 11, 10, tzinfo=dt.UTC),
+            ),
+        ),
+    )
+    with pg_db.session() as session:
+        repo = SqlAlchemyObservationPlanningProvenanceRepository(session)
+        repo.create_provenance(provenance, owner_id="owner-a")
+        repo.create_provenance(provenance, owner_id="owner-b")
+        stored_a = repo.create_eligibility_window_set(window_set, owner_id="owner-a")
+        stored_b = repo.create_eligibility_window_set(window_set, owner_id="owner-b")
+        session.commit()
+
+        first = execute_provenance_anchored_planning(
+            session=session,
+            owner_id="owner-a",
+            eligibility_set_id=stored_a.id,
+            requested_by="pg-analyst",
+            selected_window_ids=("PG-CONFLICT-A",),
+            idempotency_key="pg-shared-key",
+        )
+        with pytest.raises(IdempotencyConflictError):
+            execute_provenance_anchored_planning(
+                session=session,
+                owner_id="owner-a",
+                eligibility_set_id=stored_a.id,
+                requested_by="pg-analyst",
+                selected_window_ids=("PG-CONFLICT-B",),
+                idempotency_key="pg-shared-key",
+            )
+        with pytest.raises(NotFoundError):
+            execute_provenance_anchored_planning(
+                session=session,
+                owner_id="owner-b",
+                eligibility_set_id=stored_a.id,
+                requested_by="owner-a",
+            )
+        other_owner = execute_provenance_anchored_planning(
+            session=session,
+            owner_id="owner-b",
+            eligibility_set_id=stored_b.id,
+            requested_by="pg-analyst",
+            selected_window_ids=("PG-CONFLICT-A",),
+            idempotency_key="pg-shared-key",
+        )
+        session.commit()
+
+    assert first.owner_id == "owner-a"
+    assert other_owner.owner_id == "owner-b"
+    assert first.link_record_id != other_owner.link_record_id
+
+    with pg_db.session() as session:
+        session.execute(
+            update(ObservationPlanningProvenanceLinkRow)
+            .where(ObservationPlanningProvenanceLinkRow.id == first.link_record_id)
+            .values(objective_value=999.0)
+        )
+        session.flush()
+        with pytest.raises(ValidationError, match="objective"):
+            SqlAlchemyObservationPlanningLinkRepository(session).get_provenance_planning_link(
+                first.link_record_id,
+                owner_id="owner-a",
+            )
+
+
+def test_postgres_provenance_anchored_link_fk_and_deletion_restrictions(
+    pg_db: Database,
+) -> None:
+    provenance = _fixture_input("pg-anchored-fk")
+    window_set = EligibilityWindowSet(
+        source_provenance=provenance,
+        windows=(_eligibility_window(provenance, window_id="PG-FK-A"),),
+    )
+    with pg_db.session() as session:
+        repo = SqlAlchemyObservationPlanningProvenanceRepository(session)
+        stored_provenance = repo.create_provenance(provenance, owner_id="owner-a")
+        stored_set = repo.create_eligibility_window_set(window_set, owner_id="owner-a")
+        session.commit()
+        execution = execute_provenance_anchored_planning(
+            session=session,
+            owner_id="owner-a",
+            eligibility_set_id=stored_set.id,
+            requested_by="pg-analyst",
+        )
+        session.commit()
+
+    with pg_db.engine.connect() as conn:
+        trans = conn.begin()
+        with pytest.raises(IntegrityError):
+            conn.execute(
+                text(
+                    "UPDATE observation_planning_provenance_links "
+                    "SET owner_id='owner-b' WHERE id=:id"
+                ),
+                {"id": execution.link_record_id},
+            )
+        trans.rollback()
+
+    for table_name, record_id in (
+        ("observation_input_provenance", stored_provenance.id),
+        ("observation_eligibility_window_sets", stored_set.id),
+        ("observation_planning_requests", execution.planning_request_id),
+        ("observation_planning_runs", execution.planning_run_id),
+    ):
+        with pg_db.engine.connect() as conn:
+            trans = conn.begin()
+            with pytest.raises(IntegrityError):
+                conn.execute(text(f"DELETE FROM {table_name} WHERE id=:id"), {"id": record_id})
+            trans.rollback()
+
+
+def test_postgres_provenance_anchored_link_race_recovers_existing(
+    pg_db: Database,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provenance = _fixture_input("pg-anchored-race")
+    window_set = EligibilityWindowSet(
+        source_provenance=provenance,
+        windows=(_eligibility_window(provenance, window_id="PG-RACE-A"),),
+    )
+    with pg_db.session() as session:
+        provenance_repo = SqlAlchemyObservationPlanningProvenanceRepository(session)
+        provenance_repo.create_provenance(provenance, owner_id="owner-a")
+        stored_set = provenance_repo.create_eligibility_window_set(window_set, owner_id="owner-a")
+        session.commit()
+        execution = execute_provenance_anchored_planning(
+            session=session,
+            owner_id="owner-a",
+            eligibility_set_id=stored_set.id,
+            requested_by="pg-analyst",
+        )
+        session.commit()
+
+    with pg_db.session() as session:
+        existing_row = session.get(ObservationPlanningProvenanceLinkRow, execution.link_record_id)
+        assert existing_row is not None
+        repo = SqlAlchemyObservationPlanningLinkRepository(session)
+        checksum_calls = 0
+
+        def fake_find_by_checksum(
+            owner_id: str,
+            checksum: str,
+        ) -> ObservationPlanningProvenanceLinkRow | None:
+            nonlocal checksum_calls
+            checksum_calls += 1
+            if checksum_calls == 1:
+                return None
+            return existing_row
+
+        def fake_find_by_preparation_and_run(
+            owner_id: str,
+            preparation_checksum: str,
+            planning_run_id: str,
+        ) -> ObservationPlanningProvenanceLinkRow | None:
+            return None
+
+        real_flush = session.flush
+
+        def fail_link_flush() -> None:
+            if any(isinstance(obj, ObservationPlanningProvenanceLinkRow) for obj in session.new):
+                raise IntegrityError("insert", {}, RuntimeError("simulated unique race"))
+            real_flush()
+
+        monkeypatch.setattr(repo, "_find_link_by_checksum", fake_find_by_checksum)
+        monkeypatch.setattr(
+            repo,
+            "_find_link_by_preparation_and_run",
+            fake_find_by_preparation_and_run,
+        )
+        monkeypatch.setattr(session, "flush", fail_link_flush)
+        recovered = repo.create_provenance_planning_link(
+            owner_id="owner-a",
+            preparation=execution.preparation,
+            planning_request_id=execution.planning_request_id,
+            planning_run_id=execution.planning_run_id,
+            observation_plan_id=execution.observation_plan_id,
+            result=execution.planning_execution.result,
+            planning_scientific_identity_checksum=(
+                execution.planning_execution.scientific_identity_checksum
+            ),
+        )
+
+    assert recovered.id == execution.link_record_id
+    assert checksum_calls == 2
+    assert _exec(pg_db, "SELECT count(*) FROM observation_planning_provenance_links")[0][0] == 1
+
+
+def test_postgres_provenance_anchored_link_failure_rolls_back_planning_graph(
+    pg_db: Database,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provenance = _fixture_input("pg-anchored-link-failure")
+    window_set = EligibilityWindowSet(
+        source_provenance=provenance,
+        windows=(_eligibility_window(provenance, window_id="PG-LINK-FAIL-A"),),
+    )
+
+    def fail_link(self: object, **kwargs: object) -> object:
+        raise RuntimeError("link insert failed")
+
+    with pg_db.session() as session:
+        repo = SqlAlchemyObservationPlanningProvenanceRepository(session)
+        repo.create_provenance(provenance, owner_id="owner-a")
+        stored_set = repo.create_eligibility_window_set(window_set, owner_id="owner-a")
+        session.commit()
+        monkeypatch.setattr(
+            SqlAlchemyObservationPlanningLinkRepository,
+            "create_provenance_planning_link",
+            fail_link,
+        )
+        with pytest.raises(RuntimeError, match="link insert failed"):
+            execute_provenance_anchored_planning(
+                session=session,
+                owner_id="owner-a",
+                eligibility_set_id=stored_set.id,
+                requested_by="pg-analyst",
+            )
+
+    assert _planning_counts(pg_db) == (0, 0, 0)
+    assert _exec(pg_db, "SELECT count(*) FROM observation_planning_provenance_links")[0][0] == 0
 
 
 def test_postgres_eligibility_set_rejects_cross_owner_provenance(pg_db: Database) -> None:

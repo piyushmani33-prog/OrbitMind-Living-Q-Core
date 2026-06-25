@@ -122,6 +122,7 @@ class ObservationPlanRow(Base):
     __tablename__ = "observation_plans"
     __table_args__ = (
         UniqueConstraint("run_id", name="uq_observation_plans_run"),
+        UniqueConstraint("id", "owner_id", name="uq_observation_plans_owner"),
         ForeignKeyConstraint(
             ["run_id", "owner_id"],
             ["observation_planning_runs.id", "observation_planning_runs.owner_id"],
@@ -149,6 +150,115 @@ class ObservationPlanRow(Base):
     scientific_identity_json: Mapped[dict[str, Any]] = mapped_column(JSON)
     scientific_identity_checksum: Mapped[str] = mapped_column(String(64), index=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, index=True)
+
+
+class ObservationPlanningProvenanceLinkRow(Base):
+    __tablename__ = "observation_planning_provenance_links"
+    __table_args__ = (
+        Index("ix_oppl_owner", "owner_id"),
+        Index("ix_oppl_provenance", "provenance_record_id"),
+        Index("ix_oppl_eligibility_set", "eligibility_set_record_id"),
+        Index("ix_oppl_preparation", "preparation_checksum"),
+        Index("ix_oppl_request", "planning_request_id"),
+        Index("ix_oppl_run", "planning_run_id"),
+        Index("ix_oppl_plan", "observation_plan_id"),
+        Index("ix_oppl_checksum", "link_checksum"),
+        Index("ix_oppl_created_at", "created_at"),
+        UniqueConstraint("id", "owner_id", name="uq_oppl_owner"),
+        UniqueConstraint("owner_id", "link_checksum", name="uq_oppl_owner_checksum"),
+        UniqueConstraint(
+            "owner_id",
+            "preparation_checksum",
+            "planning_run_id",
+            name="uq_oppl_owner_preparation_run",
+        ),
+        ForeignKeyConstraint(
+            ["provenance_record_id", "owner_id"],
+            ["observation_input_provenance.id", "observation_input_provenance.owner_id"],
+            name="fk_oppl_provenance_owner",
+        ),
+        ForeignKeyConstraint(
+            ["eligibility_set_record_id", "owner_id"],
+            [
+                "observation_eligibility_window_sets.id",
+                "observation_eligibility_window_sets.owner_id",
+            ],
+            name="fk_oppl_eligibility_set_owner",
+        ),
+        ForeignKeyConstraint(
+            ["planning_request_id", "owner_id"],
+            ["observation_planning_requests.id", "observation_planning_requests.owner_id"],
+            name="fk_oppl_request_owner",
+        ),
+        ForeignKeyConstraint(
+            ["planning_run_id", "owner_id"],
+            ["observation_planning_runs.id", "observation_planning_runs.owner_id"],
+            name="fk_oppl_run_owner",
+        ),
+        ForeignKeyConstraint(
+            ["observation_plan_id", "owner_id"],
+            ["observation_plans.id", "observation_plans.owner_id"],
+            name="fk_oppl_plan_owner",
+        ),
+        CheckConstraint("length(owner_id) > 0", name="ck_oppl_owner_nonempty"),
+        CheckConstraint("length(provenance_checksum) = 64", name="ck_oppl_provenance_len"),
+        CheckConstraint("length(eligibility_set_checksum) = 64", name="ck_oppl_set_len"),
+        CheckConstraint("length(preparation_checksum) = 64", name="ck_oppl_preparation_len"),
+        CheckConstraint("length(planning_request_checksum) = 64", name="ck_oppl_request_len"),
+        CheckConstraint(
+            "length(planning_scientific_identity_checksum) = 64",
+            name="ck_oppl_identity_len",
+        ),
+        CheckConstraint("length(link_checksum) = 64", name="ck_oppl_checksum_len"),
+        CheckConstraint(
+            "link_schema_version = 'observation-planning-provenance-link-v1'",
+            name="ck_oppl_schema_version",
+        ),
+        CheckConstraint(
+            "planning_status IN ('verified-feasible', 'infeasible', 'timed-out', "
+            "'unsupported', 'invalid', 'failed')",
+            name="ck_oppl_status",
+        ),
+        CheckConstraint(
+            "optimality_label IN ('optimal', 'heuristic', 'infeasible', 'unknown')",
+            name="ck_oppl_optimality",
+        ),
+        CheckConstraint(
+            "authoritative_solver IS NULL OR authoritative_solver IN ('exact', 'greedy')",
+            name="ck_oppl_solver",
+        ),
+        CheckConstraint(
+            "(planning_status = 'verified-feasible' AND feasible = true "
+            "AND observation_plan_id IS NOT NULL) OR "
+            "(planning_status <> 'verified-feasible' AND feasible = false "
+            "AND observation_plan_id IS NULL)",
+            name="ck_oppl_status_plan",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    owner_id: Mapped[str] = mapped_column(String(120))
+    provenance_record_id: Mapped[str] = mapped_column(String(36))
+    provenance_checksum: Mapped[str] = mapped_column(String(64))
+    eligibility_set_record_id: Mapped[str] = mapped_column(String(36))
+    eligibility_set_checksum: Mapped[str] = mapped_column(String(64))
+    preparation_checksum: Mapped[str] = mapped_column(String(64))
+    planning_request_checksum: Mapped[str] = mapped_column(String(64))
+    planning_scientific_identity_checksum: Mapped[str] = mapped_column(String(64))
+    planning_request_id: Mapped[str] = mapped_column(String(36))
+    planning_run_id: Mapped[str] = mapped_column(String(36))
+    observation_plan_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    selected_window_ids_json: Mapped[list[str]] = mapped_column(JSON)
+    planning_status: Mapped[str] = mapped_column(String(32))
+    authoritative_solver: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    optimality_label: Mapped[str] = mapped_column(String(16))
+    feasible: Mapped[bool] = mapped_column(Boolean)
+    objective_value: Mapped[float | None] = mapped_column(Float, nullable=True)
+    limitations_json: Mapped[list[str]] = mapped_column(JSON)
+    link_schema_version: Mapped[str] = mapped_column(String(48))
+    link_json: Mapped[dict[str, Any]] = mapped_column(JSON)
+    link_checksum: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime)
 
 
 class ObservationInputProvenanceRow(Base):

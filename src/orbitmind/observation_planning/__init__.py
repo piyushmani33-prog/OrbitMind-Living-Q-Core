@@ -20,6 +20,10 @@ from orbitmind.observation_planning.orchestration import (
     PersistedObservationPlanningExecution,
     execute_observation_planning,
 )
+from orbitmind.observation_planning.provenance_execution import (
+    ProvenanceAnchoredPlanningExecution,
+    execute_provenance_anchored_planning,
+)
 from orbitmind.observation_planning.provenance_preparation import (
     PreparedEligibilityPlanningRequest,
     preparation_checksum_for,
@@ -64,9 +68,11 @@ __all__ = [
     "PlanningResultStatus",
     "PlanningVerificationLabel",
     "PreparedEligibilityPlanningRequest",
+    "ProvenanceAnchoredPlanningExecution",
     "RequestToProblemTranslation",
     "SolverFn",
     "execute_observation_planning",
+    "execute_provenance_anchored_planning",
     "get_observation_plan",
     "get_observation_planning_execution",
     "get_observation_planning_request",
