@@ -12,6 +12,7 @@ from sqlalchemy import engine_from_config, pool
 
 import orbitmind.persistence.memory_models
 import orbitmind.persistence.models
+import orbitmind.persistence.observation_geometry_models
 import orbitmind.persistence.observation_planning_models
 import orbitmind.persistence.optimization_models  # noqa: F401 - register optimization tables
 from orbitmind.core.config import get_settings

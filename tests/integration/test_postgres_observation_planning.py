@@ -344,7 +344,7 @@ def _eligibility_window(
 
 def test_postgres_schema_is_at_head_and_tables_exist(pg_db: Database) -> None:
     head = _exec(pg_db, "SELECT version_num FROM alembic_version")[0][0]
-    assert head == "k6e7f8a9b0c2"
+    assert head == "l7a8b9c0d1e2"
     present = {
         r[0]
         for r in _exec(

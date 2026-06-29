@@ -9,10 +9,12 @@ from alembic import command
 from alembic.config import Config
 from sqlalchemy import create_engine, inspect, text
 
-import orbitmind.persistence.observation_planning_models  # noqa: F401 - register metadata
+import orbitmind.persistence.observation_geometry_models as _observation_geometry_models
+import orbitmind.persistence.observation_planning_models as _observation_planning_models
 from orbitmind.persistence.database import Base
 
 pytestmark = pytest.mark.integration
+REGISTERED_MODEL_MODULES = (_observation_geometry_models, _observation_planning_models)
 
 PHASE1_REVISION = "b38aa92661c2"
 PHASE2_REVISION = "080f934b44d1"
@@ -70,6 +72,15 @@ PHASE4B_PROVENANCE_LINK_TABLES = {
     "observation_planning_provenance_links",
 }
 
+PHASE4B_PROVENANCE_LINK_HEAD = "k6e7f8a9b0c2"
+
+PHASE4C_OBSERVATION_GEOMETRY_HEAD = "l7a8b9c0d1e2"
+
+PHASE4C_OBSERVATION_GEOMETRY_TABLES = {
+    "observation_geometry_requests",
+    "observation_geometry_runs",
+}
+
 
 def test_alembic_upgrade_head_builds_schema(tmp_path: Path) -> None:
     db_url = f"sqlite:///{(tmp_path / 'migrated.db').as_posix()}"
@@ -88,6 +99,7 @@ def test_alembic_upgrade_head_builds_schema(tmp_path: Path) -> None:
     assert tables >= PHASE4B_OBSERVATION_PLANNING_TABLES
     assert tables >= PHASE4B_PROVENANCE_ELIGIBILITY_TABLES
     assert tables >= PHASE4B_PROVENANCE_LINK_TABLES
+    assert tables >= PHASE4C_OBSERVATION_GEOMETRY_TABLES
     # Migration schema matches the ORM metadata (parity check).
     assert set(Base.metadata.tables) >= (
         EXPECTED_TABLES
@@ -96,6 +108,7 @@ def test_alembic_upgrade_head_builds_schema(tmp_path: Path) -> None:
         | PHASE4B_OBSERVATION_PLANNING_TABLES
         | PHASE4B_PROVENANCE_ELIGIBILITY_TABLES
         | PHASE4B_PROVENANCE_LINK_TABLES
+        | PHASE4C_OBSERVATION_GEOMETRY_TABLES
     )
 
 
@@ -255,4 +268,63 @@ def test_provenance_anchored_link_migration_downgrades_to_previous_head(
     command.upgrade(cfg, "head")
     engine = create_engine(db_url)
     assert set(inspect(engine).get_table_names()) >= PHASE4B_PROVENANCE_LINK_TABLES
+    engine.dispose()
+
+
+def test_observation_geometry_migration_downgrade_reupgrade_and_parity(
+    tmp_path: Path,
+) -> None:
+    db_url = f"sqlite:///{(tmp_path / 'p4c-geometry.db').as_posix()}"
+    cfg = Config("alembic.ini")
+    cfg.set_main_option("sqlalchemy.url", db_url)
+
+    command.upgrade(cfg, "head")
+    engine = create_engine(db_url)
+    inspector = inspect(engine)
+    tables = set(inspector.get_table_names())
+    assert tables >= PHASE4C_OBSERVATION_GEOMETRY_TABLES
+    assert tables >= PHASE4B_PROVENANCE_LINK_TABLES
+    request_constraints = {
+        constraint["name"]
+        for constraint in inspector.get_unique_constraints("observation_geometry_requests")
+    }
+    run_constraints = {
+        constraint["name"]
+        for constraint in inspector.get_unique_constraints("observation_geometry_runs")
+    }
+    run_fks = {
+        constraint["name"] for constraint in inspector.get_foreign_keys("observation_geometry_runs")
+    }
+    request_checks = {
+        constraint["name"]
+        for constraint in inspector.get_check_constraints("observation_geometry_requests")
+    }
+    run_checks = {
+        constraint["name"]
+        for constraint in inspector.get_check_constraints("observation_geometry_runs")
+    }
+    run_indexes = {index["name"] for index in inspector.get_indexes("observation_geometry_runs")}
+    engine.dispose()
+    assert "uq_og_requests_owner_checksum" in request_constraints
+    assert "uq_og_requests_idempotency" in request_constraints
+    assert "uq_og_runs_owner_request" in run_constraints
+    assert "fk_og_runs_request_owner" in run_fks
+    assert "ck_og_requests_schema" in request_checks
+    assert "ck_og_runs_schema" in run_checks
+    assert "ck_og_runs_computation_version" in run_checks
+    assert "ix_og_runs_geometry" in run_indexes
+    assert set(Base.metadata.tables) >= PHASE4C_OBSERVATION_GEOMETRY_TABLES
+
+    command.downgrade(cfg, PHASE4B_PROVENANCE_LINK_HEAD)
+    engine = create_engine(db_url)
+    downgraded = set(inspect(engine).get_table_names())
+    assert downgraded.isdisjoint(PHASE4C_OBSERVATION_GEOMETRY_TABLES)
+    assert downgraded >= PHASE4B_PROVENANCE_LINK_TABLES
+    assert downgraded >= PHASE4B_PROVENANCE_ELIGIBILITY_TABLES
+    assert downgraded >= PHASE4B_OBSERVATION_PLANNING_TABLES
+    engine.dispose()
+
+    command.upgrade(cfg, PHASE4C_OBSERVATION_GEOMETRY_HEAD)
+    engine = create_engine(db_url)
+    assert set(inspect(engine).get_table_names()) >= PHASE4C_OBSERVATION_GEOMETRY_TABLES
     engine.dispose()

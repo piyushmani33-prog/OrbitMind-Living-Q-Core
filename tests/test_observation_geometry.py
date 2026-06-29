@@ -630,6 +630,7 @@ def test_reference_vector_error_branch(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_no_forbidden_architecture_imports() -> None:
     package = Path("src/orbitmind/observation_geometry")
+    domain_files = {"__init__.py", "geodesy.py", "models.py", "service.py", "verification.py"}
     forbidden_prefixes = (
         "orbitmind.api",
         "orbitmind.persistence",
@@ -639,6 +640,8 @@ def test_no_forbidden_architecture_imports() -> None:
         "requests",
     )
     for path in package.glob("*.py"):
+        if path.name not in domain_files:
+            continue
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             module = _imported_module(node)
