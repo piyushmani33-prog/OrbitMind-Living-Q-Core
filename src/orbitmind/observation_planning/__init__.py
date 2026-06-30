@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+from orbitmind.observation_planning.geometry_eligibility_adapter import (
+    GeometryDerivedEligibilityResult,
+    derive_eligibility_from_geometry_run,
+    geometry_eligibility_derivation_checksum_for,
+)
 from orbitmind.observation_planning.models import (
     AuthoritativePlanningSolver,
     ObservationPlanningRequest,
@@ -50,6 +55,7 @@ from orbitmind.observation_planning.service import SolverFn, plan_observation_re
 
 __all__ = [
     "AuthoritativePlanningSolver",
+    "GeometryDerivedEligibilityResult",
     "ObservationPlanDetails",
     "ObservationPlanSummary",
     "ObservationPlanningExecutionDetails",
@@ -71,8 +77,10 @@ __all__ = [
     "ProvenanceAnchoredPlanningExecution",
     "RequestToProblemTranslation",
     "SolverFn",
+    "derive_eligibility_from_geometry_run",
     "execute_observation_planning",
     "execute_provenance_anchored_planning",
+    "geometry_eligibility_derivation_checksum_for",
     "get_observation_plan",
     "get_observation_planning_execution",
     "get_observation_planning_request",

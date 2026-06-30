@@ -48,6 +48,7 @@ class PinnedInputSourceMode(StrEnum):
     FIXTURE_BACKED = "fixture_backed"
     USER_DECLARED = "user_declared"
     DERIVED_FROM_DECLARED_INPUT = "derived_from_declared_input"
+    DERIVED_FROM_GEOMETRY = "derived_from_geometry"
 
 
 class InputRightsStatus(StrEnum):
@@ -74,6 +75,7 @@ class ScientificInputVerificationStatus(StrEnum):
     FIXTURE_VERIFIED = "fixture_verified"
     USER_DECLARED = "user_declared"
     DERIVED_FROM_DECLARED = "derived_from_declared"
+    GEOMETRY_DERIVED = "geometry_derived"
     UNVERIFIED = "unverified"
     UNKNOWN = "unknown"
 
@@ -84,6 +86,7 @@ class EligibilityDeclarationMode(StrEnum):
     FIXTURE_BACKED = "fixture_backed"
     USER_DECLARED = "user_declared"
     DERIVED_FROM_DECLARED_INPUT = "derived_from_declared_input"
+    DERIVED_FROM_GEOMETRY = "derived_from_geometry"
 
 
 class InputRightsDeclaration(BaseModel):
@@ -141,10 +144,18 @@ class InputSourceIdentity(BaseModel):
             if self.source_mode != PinnedInputSourceMode.USER_DECLARED:
                 raise ValueError("user-declared sources require user-declared source mode")
         else:
-            if self.source_mode != PinnedInputSourceMode.DERIVED_FROM_DECLARED_INPUT:
-                raise ValueError("derived sources require derived-from-declared-input mode")
+            if self.source_mode not in {
+                PinnedInputSourceMode.DERIVED_FROM_DECLARED_INPUT,
+                PinnedInputSourceMode.DERIVED_FROM_GEOMETRY,
+            }:
+                raise ValueError("derived sources require an approved derived source mode")
             if self.dataset_name is None or self.dataset_version is None:
                 raise ValueError("derived sources require dataset_name and dataset_version")
+            if (
+                self.source_mode == PinnedInputSourceMode.DERIVED_FROM_GEOMETRY
+                and self.dataset_revision is None
+            ):
+                raise ValueError("geometry-derived sources require dataset_revision")
         return self
 
 
@@ -211,8 +222,13 @@ class PinnedInputProvenance(BaseModel):
             raise ValueError("parent provenance checksums must be unique")
         if self.source.source_type == PinnedInputSourceType.USER_DECLARED and declared_at is None:
             raise ValueError("user-declared provenance requires declared_at")
+        geometry_derived = (
+            self.source.source_type == PinnedInputSourceType.DERIVED
+            and self.source.source_mode == PinnedInputSourceMode.DERIVED_FROM_GEOMETRY
+        )
         if (
             self.source.source_type == PinnedInputSourceType.DERIVED
+            and not geometry_derived
             and not self.parent_provenance_checksums
         ):
             raise ValueError("derived provenance requires parent provenance checksum")
@@ -479,6 +495,9 @@ def _require_compatible_window_mode(
     elif source_type == PinnedInputSourceType.USER_DECLARED:
         if window.declaration_mode != EligibilityDeclarationMode.USER_DECLARED:
             raise ValueError("user-declared provenance requires user-declared eligibility windows")
+    elif provenance.source.source_mode == PinnedInputSourceMode.DERIVED_FROM_GEOMETRY:
+        if window.declaration_mode != EligibilityDeclarationMode.DERIVED_FROM_GEOMETRY:
+            raise ValueError("geometry-derived provenance requires geometry-derived windows")
     elif window.declaration_mode != EligibilityDeclarationMode.DERIVED_FROM_DECLARED_INPUT:
         raise ValueError("derived provenance requires derived eligibility windows")
 
