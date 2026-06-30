@@ -1,0 +1,375 @@
+"""Read-only API tests for persisted observation geometry."""
+
+from __future__ import annotations
+
+import ast
+import copy
+import datetime as dt
+from pathlib import Path
+from typing import Any
+
+import pytest
+from fastapi.testclient import TestClient
+
+from orbitmind.api.app import create_app
+from orbitmind.api.container import AppContainer
+from orbitmind.api.deps import get_current_owner_id
+from orbitmind.api.observation_geometry_schemas import OBSERVATION_GEOMETRY_DISCLAIMER
+from orbitmind.observation_geometry.models import (
+    GeodeticPosition,
+    GeometryComputationRequest,
+    GroundObservationSite,
+    PinnedOrbitElementSet,
+)
+from orbitmind.observation_geometry.persistence_service import execute_and_persist_geometry
+from orbitmind.observation_geometry.queries import get_geometry_run_for_request
+from orbitmind.persistence.observation_geometry_models import (
+    ObservationGeometryRequestRow,
+    ObservationGeometryRunRow,
+)
+from orbitmind.sources.registry import SourceRegistry
+
+BASE = "/api/v1/observation-geometry"
+UTC = dt.UTC
+START = dt.datetime(2019, 12, 9, 19, 50, tzinfo=UTC)
+
+
+def _owner_client(
+    container: AppContainer,
+    owner_id: str,
+    *,
+    raise_server_exceptions: bool = True,
+) -> TestClient:
+    app = create_app(container)
+    app.dependency_overrides[get_current_owner_id] = lambda: owner_id
+    return TestClient(app, raise_server_exceptions=raise_server_exceptions)
+
+
+def _registry_elements() -> PinnedOrbitElementSet:
+    registry = SourceRegistry()
+    source = registry.get_source_record("ISS")
+    line1, line2 = registry.get_tle("ISS")
+    return PinnedOrbitElementSet(source=source, tle_line1=line1, tle_line2=line2)
+
+
+def _request(
+    *,
+    site_id: str = "SITE-A",
+    start: dt.datetime = START,
+    end: dt.datetime = START + dt.timedelta(minutes=25),
+) -> GeometryComputationRequest:
+    return GeometryComputationRequest(
+        elements=_registry_elements(),
+        site=GroundObservationSite(
+            site_id=site_id,
+            name=f"{site_id} ground site",
+            position=GeodeticPosition(latitude_deg=0.0, longitude_deg=0.0, altitude_km=0.0),
+        ),
+        start=start,
+        end=end,
+        step_seconds=300,
+        minimum_elevation_deg=0.0,
+    )
+
+
+def _persist(
+    container: AppContainer,
+    *,
+    owner_id: str = "owner-a",
+    site_id: str = "SITE-A",
+    start: dt.datetime = START,
+) -> tuple[str, str, str, str]:
+    request = _request(site_id=site_id, start=start, end=start + dt.timedelta(minutes=25))
+    with container.database.session() as session:
+        execution = execute_and_persist_geometry(
+            session=session,
+            owner_id=owner_id,
+            request=request,
+            idempotency_key=f"{owner_id}-{site_id}-{start.isoformat()}",
+        )
+    return (
+        execution.request_id,
+        execution.run_id,
+        execution.request_checksum,
+        execution.geometry_checksum,
+    )
+
+
+def _assert_no_raw_geometry_payload(payload: dict[str, Any]) -> None:
+    assert "request_json" not in payload
+    assert "result_json" not in payload
+    assert "samples" not in payload
+    assert "intervals" not in payload
+    assert "tle_line1" not in payload
+    assert "tle_line2" not in payload
+
+
+def _assert_safe_error(response: Any) -> None:
+    body = response.json()
+    assert set(body) == {"code", "message"}
+    text = response.text.lower()
+    for forbidden in (
+        "select ",
+        "insert ",
+        "sqlite",
+        "postgres",
+        "constraint",
+        "traceback",
+        "result_json",
+        "request_json",
+        "e:\\",
+    ):
+        assert forbidden not in text
+
+
+def test_geometry_api_lists_reads_and_authenticates_requests_and_runs(
+    container: AppContainer,
+) -> None:
+    first_request_id, first_run_id, first_request_checksum, _first_geometry = _persist(
+        container,
+        owner_id="owner-a",
+        site_id="SITE-A",
+        start=START,
+    )
+    second_request_id, second_run_id, _second_request_checksum, _second_geometry = _persist(
+        container,
+        owner_id="owner-a",
+        site_id="SITE-B",
+        start=START + dt.timedelta(minutes=30),
+    )
+    _persist(container, owner_id="owner-b", site_id="SITE-C")
+
+    with _owner_client(container, "owner-a") as client:
+        requests_response = client.get(f"{BASE}/requests")
+        assert requests_response.status_code == 200
+        requests_body = requests_response.json()
+        assert requests_body["total"] == 2
+        assert requests_body["limit"] == 25
+        assert requests_body["disclaimer"] == OBSERVATION_GEOMETRY_DISCLAIMER
+        request_ids = {item["id"] for item in requests_body["items"]}
+        assert request_ids == {first_request_id, second_request_id}
+        for item in requests_body["items"]:
+            _assert_no_raw_geometry_payload(item)
+            assert item["owner_id"] == "owner-a"
+            assert item["site"]["site_id"] in {"SITE-A", "SITE-B"}
+
+        request_response = client.get(f"{BASE}/requests/{first_request_id}")
+        assert request_response.status_code == 200
+        request_body = request_response.json()
+        assert request_body["id"] == first_request_id
+        assert request_body["request_checksum"] == first_request_checksum
+        _assert_no_raw_geometry_payload(request_body)
+
+        runs_response = client.get(f"{BASE}/runs")
+        assert runs_response.status_code == 200
+        runs_body = runs_response.json()
+        assert runs_body["total"] == 2
+        run_ids = {item["id"] for item in runs_body["items"]}
+        assert run_ids == {first_run_id, second_run_id}
+        for item in runs_body["items"]:
+            _assert_no_raw_geometry_payload(item)
+            assert item["sample_count"] > 0
+            assert item["computation_version"] == "orbitmind-look-angle-geometry-1.0"
+
+        filtered_runs = client.get(f"{BASE}/runs", params={"request_id": first_request_id})
+        assert filtered_runs.status_code == 200
+        assert filtered_runs.json()["total"] == 1
+        assert filtered_runs.json()["items"][0]["id"] == first_run_id
+
+        run_response = client.get(f"{BASE}/runs/{first_run_id}")
+        assert run_response.status_code == 200
+        run_body = run_response.json()
+        assert run_body["id"] == first_run_id
+        assert run_body["request_id"] == first_request_id
+        assert run_body["sample_count"] > 0
+        assert run_body["limitations"]
+        _assert_no_raw_geometry_payload(run_body)
+
+    with container.database.session() as session:
+        details = get_geometry_run_for_request(
+            session,
+            owner_id="owner-a",
+            request_id=first_request_id,
+        )
+    assert details.summary.id == first_run_id
+
+
+def test_geometry_api_pagination_filters_and_openapi(container: AppContainer) -> None:
+    first_request_id, _first_run_id, _checksum, _geometry = _persist(
+        container,
+        owner_id="owner-a",
+        site_id="SITE-A",
+        start=START,
+    )
+    second_request_id, _second_run_id, _checksum2, _geometry2 = _persist(
+        container,
+        owner_id="owner-a",
+        site_id="SITE-B",
+        start=START + dt.timedelta(minutes=30),
+    )
+
+    with _owner_client(container, "owner-a") as client:
+        first_page = client.get(f"{BASE}/requests", params={"limit": "1", "offset": "0"})
+        second_page = client.get(f"{BASE}/requests", params={"limit": "1", "offset": "1"})
+        assert first_page.status_code == 200
+        assert second_page.status_code == 200
+        assert first_page.json()["has_next"] is True
+        assert first_page.json()["items"][0]["id"] != second_page.json()["items"][0]["id"]
+
+        site_filtered = client.get(f"{BASE}/requests", params={"site_id": "SITE-A"})
+        assert site_filtered.status_code == 200
+        assert site_filtered.json()["total"] == 1
+        assert site_filtered.json()["items"][0]["id"] == first_request_id
+
+        range_filtered = client.get(
+            f"{BASE}/requests",
+            params={
+                "created-from": "2000-01-01T00:00:00Z",
+                "created-to": "2999-01-01T00:00:00Z",
+            },
+        )
+        assert range_filtered.status_code == 200
+        assert {item["id"] for item in range_filtered.json()["items"]} == {
+            first_request_id,
+            second_request_id,
+        }
+
+        for params in (
+            {"limit": "true"},
+            {"limit": "1.5"},
+            {"limit": "-1"},
+            {"limit": "01"},
+            {"limit": "101"},
+            {"offset": "-1"},
+            {"site_id": " SITE-A"},
+            {"created-from": "2026-01-01T00:00:00"},
+            {
+                "created-from": "2999-01-01T00:00:00Z",
+                "created-to": "2000-01-01T00:00:00Z",
+            },
+        ):
+            assert client.get(f"{BASE}/requests", params=params).status_code == 422
+
+        openapi = client.get("/openapi.json")
+        assert openapi.status_code == 200
+        paths = openapi.json()["paths"]
+        assert f"{BASE}/requests" in paths
+        assert f"{BASE}/requests/{{request_id}}" in paths
+        assert f"{BASE}/runs" in paths
+        assert f"{BASE}/runs/{{run_id}}" in paths
+        for path, methods in paths.items():
+            if path.startswith(BASE):
+                assert not ({"post", "put", "patch", "delete"} & set(methods))
+
+
+def test_geometry_api_owner_isolation_and_no_owner_override(container: AppContainer) -> None:
+    request_id, run_id, request_checksum, geometry_checksum = _persist(
+        container,
+        owner_id="owner-a",
+        site_id="SITE-A",
+    )
+
+    with _owner_client(container, "owner-b") as client:
+        request_response = client.get(f"{BASE}/requests/{request_id}")
+        run_response = client.get(f"{BASE}/runs/{run_id}")
+        runs_for_request = client.get(f"{BASE}/runs", params={"request_id": request_id})
+        assert request_response.status_code == 404
+        assert run_response.status_code == 404
+        assert runs_for_request.status_code == 404
+        for response in (request_response, run_response, runs_for_request):
+            _assert_safe_error(response)
+            assert request_id not in response.text
+            assert run_id not in response.text
+            assert request_checksum not in response.text
+            assert geometry_checksum not in response.text
+
+        spoofed_requests = client.get(f"{BASE}/requests", params={"owner_id": "owner-a"})
+        spoofed_runs = client.get(f"{BASE}/runs", params={"owner_id": "owner-a"})
+        assert spoofed_requests.status_code == 200
+        assert spoofed_runs.status_code == 200
+        assert spoofed_requests.json()["total"] == 0
+        assert spoofed_runs.json()["total"] == 0
+
+
+def test_geometry_api_tamper_errors_are_sanitized(container: AppContainer) -> None:
+    request_id, _run_id, _request_checksum, _geometry_checksum = _persist(container)
+    with container.database.session() as session:
+        row = session.get(ObservationGeometryRequestRow, request_id)
+        assert row is not None
+        payload = copy.deepcopy(row.request_json)
+        payload["site"]["site_id"] = "TAMPERED"
+        row.request_json = payload
+        session.commit()
+
+    with _owner_client(container, "owner-a", raise_server_exceptions=False) as client:
+        response = client.get(f"{BASE}/requests/{request_id}")
+        assert response.status_code == 422
+        assert response.json()["code"] == "validation_error"
+        _assert_safe_error(response)
+
+    _request_id, run_id, _request_checksum, _geometry_checksum = _persist(
+        container,
+        site_id="SITE-B",
+    )
+    with container.database.session() as session:
+        row = session.get(ObservationGeometryRunRow, run_id)
+        assert row is not None
+        row.geometry_checksum = "0" * 64
+        session.commit()
+
+    with _owner_client(container, "owner-a", raise_server_exceptions=False) as client:
+        response = client.get(f"{BASE}/runs/{run_id}")
+        assert response.status_code == 422
+        assert response.json()["code"] == "validation_error"
+        _assert_safe_error(response)
+
+
+@pytest.mark.parametrize("path", ["/requests/%20bad", "/runs/%20bad"])
+def test_geometry_api_rejects_malformed_path_ids(container: AppContainer, path: str) -> None:
+    with _owner_client(container, "owner-a") as client:
+        response = client.get(f"{BASE}{path}")
+    assert response.status_code == 422
+
+
+def test_geometry_api_no_forbidden_architecture_imports() -> None:
+    guarded_files = (
+        Path("src/orbitmind/observation_geometry/queries.py"),
+        Path("src/orbitmind/api/observation_geometry_schemas.py"),
+        Path("src/orbitmind/api/routers/observation_geometry.py"),
+    )
+    forbidden_prefixes_by_file = {
+        "queries.py": (
+            "orbitmind.api",
+            "orbitmind.observation_planning",
+            "orbitmind.quantum",
+            "httpx",
+            "requests",
+        ),
+        "observation_geometry_schemas.py": (
+            "orbitmind.observation_planning",
+            "orbitmind.quantum",
+            "httpx",
+            "requests",
+        ),
+        "observation_geometry.py": (
+            "orbitmind.observation_planning",
+            "orbitmind.quantum",
+            "httpx",
+            "requests",
+        ),
+    }
+    for path in guarded_files:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        forbidden_prefixes = forbidden_prefixes_by_file[path.name]
+        for node in ast.walk(tree):
+            module = _imported_module(node)
+            if module is not None:
+                assert not module.startswith(forbidden_prefixes), (path, module)
+
+
+def _imported_module(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Import):
+        return node.names[0].name
+    if isinstance(node, ast.ImportFrom):
+        return node.module
+    return None
