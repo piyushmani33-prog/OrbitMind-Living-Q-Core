@@ -81,6 +81,7 @@ class GeometryDerivedEligibilityResult(BaseModel):
     minimum_peak_elevation_deg: float | None = None
     window_count: int
     derived_source_type: PinnedInputSourceType
+    derived_source_mode: PinnedInputSourceMode
     derived_verification_status: ScientificInputVerificationStatus
     limitations: tuple[str, ...]
 
@@ -88,6 +89,8 @@ class GeometryDerivedEligibilityResult(BaseModel):
     def _check_result(self) -> GeometryDerivedEligibilityResult:
         if self.derived_source_type != PinnedInputSourceType.DERIVED:
             raise ValueError("geometry-derived eligibility must use derived source type")
+        if self.derived_source_mode != PinnedInputSourceMode.DERIVED_FROM_GEOMETRY:
+            raise ValueError("geometry-derived eligibility must use geometry-derived source mode")
         if self.derived_verification_status != ScientificInputVerificationStatus.GEOMETRY_DERIVED:
             raise ValueError("geometry-derived eligibility must use geometry-derived status")
         return self
@@ -223,6 +226,7 @@ def derive_eligibility_from_geometry_run(
             minimum_peak_elevation_deg=peak_filter,
             window_count=len(stored_set.window_set.windows),
             derived_source_type=stored_provenance.provenance.source.source_type,
+            derived_source_mode=stored_provenance.provenance.source.source_mode,
             derived_verification_status=stored_provenance.provenance.verification_status,
             limitations=derivation_limitations,
         )

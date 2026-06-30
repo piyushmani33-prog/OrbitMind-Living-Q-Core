@@ -107,6 +107,24 @@ def _client(
     return TestClient(app, raise_server_exceptions=raise_server_exceptions)
 
 
+def _assert_no_internal_api_detail(text: str) -> None:
+    lowered = text.lower()
+    for forbidden in (
+        '"request_json"',
+        '"result_json"',
+        '"samples"',
+        '"intervals"',
+        '"tle_line1"',
+        '"tle_line2"',
+        "select ",
+        "insert ",
+        "constraint",
+        "postgres",
+        "traceback",
+    ):
+        assert forbidden not in lowered
+
+
 def _registry_elements() -> PinnedOrbitElementSet:
     registry = SourceRegistry()
     source = registry.get_source_record("ISS")
@@ -513,6 +531,90 @@ def test_postgres_geometry_api_lists_details_and_preserves_owner_isolation(
         assert request_checksum not in run_response.text
         assert request_checksum not in samples_response.text
         assert request_checksum not in intervals_response.text
+
+
+def test_postgres_geometry_api_derives_eligibility_replay_and_changed_identity(
+    pg_container: AppContainer,
+) -> None:
+    _request_id, run_id, request_checksum, geometry_checksum = _persist_api_fixture(
+        pg_container,
+        owner_id="owner-a",
+        site_id="SITE-PG-DERIVE",
+    )
+
+    with _client(pg_container, "owner-a") as client:
+        first = client.post(
+            f"{BASE}/runs/{run_id}/derive-eligibility",
+            json={"requested_by": "analyst-a"},
+        )
+        assert first.status_code == 201
+        first_body = first.json()
+        assert first_body["owner_id"] == "owner-a"
+        assert first_body["geometry_run_id"] == run_id
+        assert first_body["geometry_checksum"] == geometry_checksum
+        assert first_body["geometry_request_checksum"] == request_checksum
+        assert first_body["provenance_created"] is True
+        assert first_body["eligibility_set_created"] is True
+        assert first_body["derived_source_mode"] == "derived_from_geometry"
+        assert first_body["derived_verification_status"] == "geometry_derived"
+        assert first_body["window_count"] == 1
+        _assert_no_internal_api_detail(first.text)
+
+        replay = client.post(
+            f"{BASE}/runs/{run_id}/derive-eligibility",
+            json={"requested_by": "other-attribution"},
+        )
+        assert replay.status_code == 200
+        replay_body = replay.json()
+        assert replay_body["provenance_record_id"] == first_body["provenance_record_id"]
+        assert replay_body["eligibility_set_id"] == first_body["eligibility_set_id"]
+        assert replay_body["provenance_reused"] is True
+        assert replay_body["eligibility_set_reused"] is True
+
+        changed_label = client.post(
+            f"{BASE}/runs/{run_id}/derive-eligibility",
+            json={"derivation_label": "postgres-label"},
+        )
+        assert changed_label.status_code == 201
+        assert changed_label.json()["eligibility_set_id"] != first_body["eligibility_set_id"]
+
+        changed_filter = client.post(
+            f"{BASE}/runs/{run_id}/derive-eligibility",
+            json={"minimum_peak_elevation_deg": 0.0},
+        )
+        assert changed_filter.status_code == 201
+        assert changed_filter.json()["eligibility_set_id"] != first_body["eligibility_set_id"]
+
+    with _client(pg_container, "owner-b") as client:
+        cross_owner = client.post(
+            f"{BASE}/runs/{run_id}/derive-eligibility",
+            json={"requested_by": "owner-a"},
+        )
+    assert cross_owner.status_code == 404
+    assert request_checksum not in cross_owner.text
+    assert geometry_checksum not in cross_owner.text
+    _assert_no_internal_api_detail(cross_owner.text)
+
+
+def test_postgres_geometry_api_derive_eligibility_tamper_maps_to_safe_error(
+    pg_container: AppContainer,
+) -> None:
+    _request_id, run_id, _request_checksum, _geometry_checksum = _persist_api_fixture(
+        pg_container,
+        site_id="SITE-PG-DERIVE-TAMPER",
+    )
+    with pg_container.database.session() as session:
+        row = session.get(ObservationGeometryRunRow, run_id)
+        assert row is not None
+        row.geometry_checksum = "0" * 64
+        session.commit()
+
+    with _client(pg_container, "owner-a", raise_server_exceptions=False) as client:
+        response = client.post(f"{BASE}/runs/{run_id}/derive-eligibility", json={})
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "validation_error"
+    _assert_no_internal_api_detail(response.text)
 
 
 def test_postgres_geometry_api_tamper_maps_to_safe_error(

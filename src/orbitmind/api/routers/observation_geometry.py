@@ -1,4 +1,4 @@
-"""Read-only API routes for persisted observation geometry."""
+"""API routes for persisted observation geometry and bounded eligibility derivation."""
 
 from __future__ import annotations
 
@@ -6,12 +6,14 @@ import datetime as dt
 import re
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Response, status
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
 from orbitmind.api.deps import get_current_owner_id, get_observation_geometry_session
 from orbitmind.api.observation_geometry_schemas import (
+    GeometryDerivedEligibilityRequest,
+    GeometryDerivedEligibilityResponse,
     ObservationGeometryIntervalListResponse,
     ObservationGeometryRequestListResponse,
     ObservationGeometryRequestResponse,
@@ -29,6 +31,9 @@ from orbitmind.observation_geometry.queries import (
     list_geometry_requests,
     list_geometry_runs,
     list_geometry_samples,
+)
+from orbitmind.observation_planning.geometry_eligibility_adapter import (
+    derive_eligibility_from_geometry_run,
 )
 
 router = APIRouter(prefix="/api/v1/observation-geometry", tags=["observation-geometry"])
@@ -155,6 +160,34 @@ def get_run(
     return ObservationGeometryRunResponse.from_details(
         get_geometry_run(session, owner_id=owner_id, run_id=run_id)
     )
+
+
+@router.post(
+    "/runs/{run_id}/derive-eligibility",
+    response_model=GeometryDerivedEligibilityResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def derive_run_eligibility(
+    run_id: str,
+    payload: GeometryDerivedEligibilityRequest,
+    response: Response,
+    session: SessionDep,
+    owner_id: OwnerDep,
+) -> GeometryDerivedEligibilityResponse:
+    """Derive a Phase 4B eligibility set from an authenticated geometry run."""
+
+    _require_clean_identifier(run_id, "run_id")
+    result = derive_eligibility_from_geometry_run(
+        session=session,
+        owner_id=owner_id,
+        geometry_run_id=run_id,
+        requested_by=payload.requested_by_for(owner_id),
+        derivation_label=payload.derivation_label,
+        minimum_peak_elevation_deg=payload.minimum_peak_elevation_deg,
+    )
+    if not result.provenance_created and not result.eligibility_set_created:
+        response.status_code = status.HTTP_200_OK
+    return GeometryDerivedEligibilityResponse.from_result(result)
 
 
 @router.get("/runs/{run_id}/samples", response_model=ObservationGeometrySampleListResponse)

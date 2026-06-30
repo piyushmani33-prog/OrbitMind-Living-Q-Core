@@ -1,15 +1,17 @@
-"""API wire schemas for read-only persisted observation geometry.
+"""API wire schemas for persisted observation geometry.
 
-This surface exposes authenticated persisted summaries only. It does not compute geometry,
-retrieve live orbit data, expose raw samples/intervals, claim taskability, approve commands,
-or provide quantum authority.
+This surface exposes authenticated persisted geometry summaries and one bounded derivation
+operation. It does not compute geometry in the API layer, retrieve live orbit data, claim
+taskability, approve commands, or provide quantum authority.
 """
 
 from __future__ import annotations
 
 import datetime as dt
+import math
+from typing import Protocol
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, StrictFloat, StrictInt, field_validator
 
 from orbitmind.governance.epistemic import EpistemicStatus
 from orbitmind.observation_geometry.models import GeometrySampleStatus, VisibilityRefinementStatus
@@ -29,6 +31,65 @@ OBSERVATION_GEOMETRY_DISCLAIMER = (
     "deterministic model output, not live tracking, not taskability, not approval or command "
     "readiness, not a signed receipt, and not quantum-authoritative."
 )
+GEOMETRY_DERIVED_ELIGIBILITY_DISCLAIMER = (
+    "Geometry-derived eligibility is deterministic model-derived visibility eligibility from "
+    "pinned/offline observation-geometry computation. It is not live tracking, not operational "
+    "access, not taskability, not command readiness, not approval, not a signed receipt, and not "
+    "quantum-authoritative."
+)
+
+_MAX_ATTRIBUTION_LENGTH = 120
+
+
+class _GeometryDerivedEligibilityResultView(Protocol):
+    owner_id: str
+    geometry_run_id: str
+    geometry_request_id: str
+    geometry_checksum: str
+    geometry_request_checksum: str
+    element_checksum: str
+    source_identity_checksum: str
+    provenance_record_id: str
+    provenance_checksum: str
+    provenance_created: bool
+    eligibility_set_record_id: str
+    eligibility_set_checksum: str
+    eligibility_set_created: bool
+    derivation_checksum: str
+    derivation_rule_version: str
+    derivation_label: str
+    minimum_peak_elevation_deg: float | None
+    window_count: int
+    limitations: tuple[str, ...]
+
+    @property
+    def derived_source_type(self) -> object: ...
+
+    @property
+    def derived_source_mode(self) -> object: ...
+
+    @property
+    def derived_verification_status(self) -> object: ...
+
+
+def _enum_value(value: object) -> str:
+    candidate = getattr(value, "value", value)
+    if not isinstance(candidate, str):
+        raise TypeError("response enum-like value must be a string")
+    return candidate
+
+
+def _check_optional_clean_text(value: str | None, field_name: str) -> str | None:
+    if value is None:
+        return None
+    if (
+        not value
+        or value.strip() != value
+        or len(value) > _MAX_ATTRIBUTION_LENGTH
+        or any(char in value for char in "\r\n\t")
+    ):
+        raise ValueError(f"{field_name} must be non-empty, unpadded, and bounded")
+    return value
 
 
 class GeometryPositionResponse(BaseModel):
@@ -45,6 +106,102 @@ class GeometrySiteResponse(BaseModel):
     site_id: str
     name: str | None
     position: GeometryPositionResponse
+
+
+class GeometryDerivedEligibilityRequest(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    requested_by: str | None = Field(default=None, max_length=_MAX_ATTRIBUTION_LENGTH)
+    derivation_label: str | None = Field(default=None, max_length=_MAX_ATTRIBUTION_LENGTH)
+    minimum_peak_elevation_deg: StrictFloat | StrictInt | None = None
+
+    @field_validator("requested_by")
+    @classmethod
+    def _validate_requested_by(cls, value: str | None) -> str | None:
+        return _check_optional_clean_text(value, "requested_by")
+
+    @field_validator("derivation_label")
+    @classmethod
+    def _validate_derivation_label(cls, value: str | None) -> str | None:
+        return _check_optional_clean_text(value, "derivation_label")
+
+    @field_validator("minimum_peak_elevation_deg")
+    @classmethod
+    def _validate_minimum_peak(
+        cls,
+        value: StrictFloat | StrictInt | None,
+    ) -> float | None:
+        if value is None:
+            return None
+        number = float(value)
+        if not math.isfinite(number) or number < 0.0 or number >= 90.0:
+            raise ValueError("minimum_peak_elevation_deg must be finite, >= 0, and < 90")
+        return number
+
+    def requested_by_for(self, owner_id: str) -> str:
+        return self.requested_by if self.requested_by is not None else owner_id
+
+
+class GeometryDerivedEligibilityResponse(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    owner_id: str
+    geometry_run_id: str
+    geometry_request_id: str
+    geometry_checksum: str
+    geometry_request_checksum: str
+    element_checksum: str
+    source_identity_checksum: str
+    provenance_record_id: str
+    provenance_checksum: str
+    eligibility_set_id: str
+    eligibility_set_checksum: str
+    derivation_checksum: str
+    derivation_rule_version: str
+    derivation_label: str
+    minimum_peak_elevation_deg: float | None
+    window_count: int
+    provenance_created: bool
+    provenance_reused: bool
+    eligibility_set_created: bool
+    eligibility_set_reused: bool
+    derived_source_type: str
+    derived_source_mode: str
+    derived_verification_status: str
+    limitations: tuple[str, ...]
+    disclaimer: str = GEOMETRY_DERIVED_ELIGIBILITY_DISCLAIMER
+
+    @classmethod
+    def from_result(
+        cls,
+        result: _GeometryDerivedEligibilityResultView,
+    ) -> GeometryDerivedEligibilityResponse:
+        return cls(
+            owner_id=result.owner_id,
+            geometry_run_id=result.geometry_run_id,
+            geometry_request_id=result.geometry_request_id,
+            geometry_checksum=result.geometry_checksum,
+            geometry_request_checksum=result.geometry_request_checksum,
+            element_checksum=result.element_checksum,
+            source_identity_checksum=result.source_identity_checksum,
+            provenance_record_id=result.provenance_record_id,
+            provenance_checksum=result.provenance_checksum,
+            eligibility_set_id=result.eligibility_set_record_id,
+            eligibility_set_checksum=result.eligibility_set_checksum,
+            derivation_checksum=result.derivation_checksum,
+            derivation_rule_version=result.derivation_rule_version,
+            derivation_label=result.derivation_label,
+            minimum_peak_elevation_deg=result.minimum_peak_elevation_deg,
+            window_count=result.window_count,
+            provenance_created=result.provenance_created,
+            provenance_reused=not result.provenance_created,
+            eligibility_set_created=result.eligibility_set_created,
+            eligibility_set_reused=not result.eligibility_set_created,
+            derived_source_type=_enum_value(result.derived_source_type),
+            derived_source_mode=_enum_value(result.derived_source_mode),
+            derived_verification_status=_enum_value(result.derived_verification_status),
+            limitations=result.limitations,
+        )
 
 
 class ObservationGeometryRequestSummaryResponse(BaseModel):
