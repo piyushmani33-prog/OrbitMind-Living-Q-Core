@@ -393,13 +393,42 @@ def test_postgres_geometry_api_lists_details_and_preserves_owner_isolation(
         assert "samples" not in run_body
         assert "intervals" not in run_body
 
+        samples_page = client.get(
+            f"{BASE}/runs/{run_id}/samples",
+            params={"limit": "2", "offset": "1"},
+        )
+        assert samples_page.status_code == 200
+        assert samples_page.json()["total"] == run_body["sample_count"]
+        assert samples_page.json()["has_next"] is True
+        assert [item["sequence_index"] for item in samples_page.json()["items"]] == [1, 2]
+        assert "result_json" not in samples_page.text
+        assert "tle_line1" not in samples_page.text
+
+        intervals_page = client.get(f"{BASE}/runs/{run_id}/intervals")
+        assert intervals_page.status_code == 200
+        assert intervals_page.json()["total"] == run_body["interval_count"]
+        assert intervals_page.json()["items"][0]["sequence_index"] == 0
+        assert intervals_page.json()["items"][0]["refinement_status"] in {
+            "refined",
+            "sampled",
+            "clipped",
+            "refinement_failed",
+        }
+        assert "result_json" not in intervals_page.text
+
     with _client(pg_container, "owner-b") as client:
         request_response = client.get(f"{BASE}/requests/{request_id}")
         run_response = client.get(f"{BASE}/runs/{run_id}")
+        samples_response = client.get(f"{BASE}/runs/{run_id}/samples")
+        intervals_response = client.get(f"{BASE}/runs/{run_id}/intervals")
         assert request_response.status_code == 404
         assert run_response.status_code == 404
+        assert samples_response.status_code == 404
+        assert intervals_response.status_code == 404
         assert request_checksum not in request_response.text
         assert request_checksum not in run_response.text
+        assert request_checksum not in samples_response.text
+        assert request_checksum not in intervals_response.text
 
 
 def test_postgres_geometry_api_tamper_maps_to_safe_error(
@@ -414,8 +443,16 @@ def test_postgres_geometry_api_tamper_maps_to_safe_error(
 
     with _client(pg_container, "owner-a", raise_server_exceptions=False) as client:
         response = client.get(f"{BASE}/runs/{run_id}")
+        samples_response = client.get(f"{BASE}/runs/{run_id}/samples")
+        intervals_response = client.get(f"{BASE}/runs/{run_id}/intervals")
     assert response.status_code == 422
     assert response.json()["code"] == "validation_error"
+    assert samples_response.status_code == 422
+    assert samples_response.json()["code"] == "validation_error"
+    assert intervals_response.status_code == 422
+    assert intervals_response.json()["code"] == "validation_error"
     text = response.text.lower()
     for forbidden in ("select ", "constraint", "postgres", "traceback", "result_json"):
         assert forbidden not in text
+        assert forbidden not in samples_response.text.lower()
+        assert forbidden not in intervals_response.text.lower()

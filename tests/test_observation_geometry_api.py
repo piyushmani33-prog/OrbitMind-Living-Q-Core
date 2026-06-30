@@ -185,6 +185,59 @@ def test_geometry_api_lists_reads_and_authenticates_requests_and_runs(
         assert run_body["limitations"]
         _assert_no_raw_geometry_payload(run_body)
 
+        samples_response = client.get(f"{BASE}/runs/{first_run_id}/samples")
+        assert samples_response.status_code == 200
+        samples_body = samples_response.json()
+        assert samples_body["run_id"] == first_run_id
+        assert samples_body["request_id"] == first_request_id
+        assert samples_body["geometry_checksum"] == run_body["geometry_checksum"]
+        assert samples_body["total"] == run_body["sample_count"]
+        assert samples_body["limit"] == 25
+        assert samples_body["disclaimer"] == OBSERVATION_GEOMETRY_DISCLAIMER
+        first_sample = samples_body["items"][0]
+        assert first_sample["sequence_index"] == 0
+        assert first_sample["status"] == "ok"
+        assert first_sample["azimuth_deg"] is not None
+        assert first_sample["elevation_deg"] is not None
+        assert first_sample["slant_range_km"] is not None
+        assert first_sample["safe_error_code"] is None
+        _assert_no_raw_geometry_payload(samples_body)
+        _assert_no_raw_geometry_payload(first_sample)
+
+        paged_samples = client.get(
+            f"{BASE}/runs/{first_run_id}/samples",
+            params={"limit": "2", "offset": "1"},
+        )
+        assert paged_samples.status_code == 200
+        assert paged_samples.json()["has_next"] is True
+        assert [item["sequence_index"] for item in paged_samples.json()["items"]] == [1, 2]
+
+        intervals_response = client.get(f"{BASE}/runs/{first_run_id}/intervals")
+        assert intervals_response.status_code == 200
+        intervals_body = intervals_response.json()
+        assert intervals_body["run_id"] == first_run_id
+        assert intervals_body["request_id"] == first_request_id
+        assert intervals_body["geometry_checksum"] == run_body["geometry_checksum"]
+        assert intervals_body["total"] == run_body["interval_count"]
+        assert intervals_body["disclaimer"] == OBSERVATION_GEOMETRY_DISCLAIMER
+        first_interval = intervals_body["items"][0]
+        assert first_interval["sequence_index"] == 0
+        assert first_interval["rise_time"] <= first_interval["peak_time"]
+        assert first_interval["peak_time"] <= first_interval["set_time"]
+        assert first_interval["peak_elevation_deg"] is not None
+        assert first_interval["rise_azimuth_deg"] is not None
+        assert first_interval["set_azimuth_deg"] is not None
+        assert isinstance(first_interval["rise_boundary_clipped"], bool)
+        assert isinstance(first_interval["set_boundary_clipped"], bool)
+        assert first_interval["refinement_status"] in {
+            "refined",
+            "sampled",
+            "clipped",
+            "refinement_failed",
+        }
+        _assert_no_raw_geometry_payload(intervals_body)
+        _assert_no_raw_geometry_payload(first_interval)
+
     with container.database.session() as session:
         details = get_geometry_run_for_request(
             session,
@@ -257,9 +310,69 @@ def test_geometry_api_pagination_filters_and_openapi(container: AppContainer) ->
         assert f"{BASE}/requests/{{request_id}}" in paths
         assert f"{BASE}/runs" in paths
         assert f"{BASE}/runs/{{run_id}}" in paths
+        assert f"{BASE}/runs/{{run_id}}/samples" in paths
+        assert f"{BASE}/runs/{{run_id}}/intervals" in paths
         for path, methods in paths.items():
             if path.startswith(BASE):
                 assert not ({"post", "put", "patch", "delete"} & set(methods))
+
+
+def test_geometry_api_sample_interval_pagination_rejections(
+    container: AppContainer,
+) -> None:
+    _request_id, run_id, _request_checksum, _geometry_checksum = _persist(container)
+
+    with _owner_client(container, "owner-a") as client:
+        empty_page = client.get(
+            f"{BASE}/runs/{run_id}/samples",
+            params={"limit": "25", "offset": "999"},
+        )
+        assert empty_page.status_code == 200
+        assert empty_page.json()["items"] == []
+        assert empty_page.json()["has_next"] is False
+
+        for endpoint in ("samples", "intervals"):
+            for params in (
+                {"limit": "true"},
+                {"limit": "1.5"},
+                {"limit": "-1"},
+                {"limit": "01"},
+                {"limit": "101"},
+                {"offset": "-1"},
+                {"offset": ""},
+            ):
+                response = client.get(f"{BASE}/runs/{run_id}/{endpoint}", params=params)
+                assert response.status_code == 422
+
+
+def test_geometry_api_failed_sample_shape(
+    container: AppContainer,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_all(*_args: object, **_kwargs: object) -> tuple[int, None]:
+        return (6, None)
+
+    monkeypatch.setattr("orbitmind.observation_geometry.service._sgp4_position_km", fail_all)
+    request = _request(end=START + dt.timedelta(minutes=5))
+    with container.database.session() as session:
+        execution = execute_and_persist_geometry(
+            session=session,
+            owner_id="owner-a",
+            request=request,
+        )
+
+    with _owner_client(container, "owner-a") as client:
+        response = client.get(f"{BASE}/runs/{execution.run_id}/samples")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 2
+    first_sample = body["items"][0]
+    assert first_sample["sequence_index"] == 0
+    assert first_sample["status"] == "error"
+    assert first_sample["azimuth_deg"] is None
+    assert first_sample["elevation_deg"] is None
+    assert first_sample["slant_range_km"] is None
+    assert first_sample["safe_error_code"] == "sgp4_status_6"
 
 
 def test_geometry_api_owner_isolation_and_no_owner_override(container: AppContainer) -> None:
@@ -272,11 +385,21 @@ def test_geometry_api_owner_isolation_and_no_owner_override(container: AppContai
     with _owner_client(container, "owner-b") as client:
         request_response = client.get(f"{BASE}/requests/{request_id}")
         run_response = client.get(f"{BASE}/runs/{run_id}")
+        samples_response = client.get(f"{BASE}/runs/{run_id}/samples")
+        intervals_response = client.get(f"{BASE}/runs/{run_id}/intervals")
         runs_for_request = client.get(f"{BASE}/runs", params={"request_id": request_id})
         assert request_response.status_code == 404
         assert run_response.status_code == 404
+        assert samples_response.status_code == 404
+        assert intervals_response.status_code == 404
         assert runs_for_request.status_code == 404
-        for response in (request_response, run_response, runs_for_request):
+        for response in (
+            request_response,
+            run_response,
+            samples_response,
+            intervals_response,
+            runs_for_request,
+        ):
             _assert_safe_error(response)
             assert request_id not in response.text
             assert run_id not in response.text
@@ -322,9 +445,20 @@ def test_geometry_api_tamper_errors_are_sanitized(container: AppContainer) -> No
         assert response.status_code == 422
         assert response.json()["code"] == "validation_error"
         _assert_safe_error(response)
+        samples_response = client.get(f"{BASE}/runs/{run_id}/samples")
+        assert samples_response.status_code == 422
+        assert samples_response.json()["code"] == "validation_error"
+        _assert_safe_error(samples_response)
+        intervals_response = client.get(f"{BASE}/runs/{run_id}/intervals")
+        assert intervals_response.status_code == 422
+        assert intervals_response.json()["code"] == "validation_error"
+        _assert_safe_error(intervals_response)
 
 
-@pytest.mark.parametrize("path", ["/requests/%20bad", "/runs/%20bad"])
+@pytest.mark.parametrize(
+    "path",
+    ["/requests/%20bad", "/runs/%20bad", "/runs/%20bad/samples", "/runs/%20bad/intervals"],
+)
 def test_geometry_api_rejects_malformed_path_ids(container: AppContainer, path: str) -> None:
     with _owner_client(container, "owner-a") as client:
         response = client.get(f"{BASE}{path}")
