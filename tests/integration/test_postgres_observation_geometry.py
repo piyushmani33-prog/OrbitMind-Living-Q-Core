@@ -15,7 +15,7 @@ from orbitmind.api.app import create_app
 from orbitmind.api.container import AppContainer
 from orbitmind.api.deps import get_current_owner_id
 from orbitmind.core.config import Settings
-from orbitmind.core.errors import IdempotencyConflictError, ValidationError
+from orbitmind.core.errors import IdempotencyConflictError, NotFoundError, ValidationError
 from orbitmind.observation_geometry import persistence_service
 from orbitmind.observation_geometry.models import (
     GeodeticPosition,
@@ -26,6 +26,9 @@ from orbitmind.observation_geometry.models import (
 )
 from orbitmind.observation_geometry.persistence_service import execute_and_persist_geometry
 from orbitmind.observation_geometry.service import compute_observation_geometry
+from orbitmind.observation_planning.geometry_eligibility_adapter import (
+    derive_eligibility_from_geometry_run,
+)
 from orbitmind.persistence.database import Database
 from orbitmind.persistence.observation_geometry_models import (
     ObservationGeometryRequestRow,
@@ -33,6 +36,12 @@ from orbitmind.persistence.observation_geometry_models import (
 )
 from orbitmind.persistence.observation_geometry_repository import (
     SqlAlchemyObservationGeometryRepository,
+)
+from orbitmind.persistence.observation_planning_models import (
+    ObservationEligibilityWindowRow,
+    ObservationEligibilityWindowSetRow,
+    ObservationInputProvenanceParentRow,
+    ObservationInputProvenanceRow,
 )
 from orbitmind.sources.registry import SourceRegistry
 
@@ -46,7 +55,14 @@ pytestmark = [
 
 UTC = dt.UTC
 START = dt.datetime(2019, 12, 9, 19, 50, tzinfo=UTC)
-_TABLES = ("observation_geometry_runs", "observation_geometry_requests")
+_TABLES = (
+    "observation_eligibility_windows",
+    "observation_eligibility_window_sets",
+    "observation_input_provenance_parents",
+    "observation_input_provenance",
+    "observation_geometry_runs",
+    "observation_geometry_requests",
+)
 BASE = "/api/v1/observation-geometry"
 
 
@@ -355,6 +371,74 @@ def test_postgres_geometry_rollback_on_compute_failure(
         execute_and_persist_geometry(session=session, owner_id="owner-a", request=_request())
 
     assert _counts(pg_db) == (0, 0)
+
+
+def test_postgres_geometry_derived_eligibility_replay_owner_and_tamper(
+    pg_db: Database,
+) -> None:
+    with pg_db.session() as session:
+        geometry = execute_and_persist_geometry(
+            session=session,
+            owner_id="owner-a",
+            request=_request("SITE-PG-DERIVED"),
+            idempotency_key="pg-derived-geometry",
+        )
+
+    with pg_db.session() as session:
+        first = derive_eligibility_from_geometry_run(
+            session=session,
+            owner_id="owner-a",
+            geometry_run_id=geometry.run_id,
+            requested_by="analyst-a",
+        )
+    with pg_db.session() as session:
+        replay = derive_eligibility_from_geometry_run(
+            session=session,
+            owner_id="owner-a",
+            geometry_run_id=geometry.run_id,
+            requested_by="other-attribution",
+        )
+    with pg_db.session() as session, pytest.raises(NotFoundError):
+        derive_eligibility_from_geometry_run(
+            session=session,
+            owner_id="owner-b",
+            geometry_run_id=geometry.run_id,
+            requested_by="analyst-a",
+        )
+
+    assert replay.provenance_record_id == first.provenance_record_id
+    assert replay.eligibility_set_record_id == first.eligibility_set_record_id
+    assert replay.provenance_created is False
+    assert replay.eligibility_set_created is False
+    assert first.window_count == 1
+
+    with pg_db.session() as session:
+        assert session.scalar(select(func.count()).select_from(ObservationInputProvenanceRow)) == 1
+        assert (
+            session.scalar(select(func.count()).select_from(ObservationEligibilityWindowSetRow))
+            == 1
+        )
+        assert (
+            session.scalar(select(func.count()).select_from(ObservationEligibilityWindowRow)) == 1
+        )
+        assert (
+            session.scalar(select(func.count()).select_from(ObservationInputProvenanceParentRow))
+            == 0
+        )
+        session.execute(
+            update(ObservationGeometryRunRow)
+            .where(ObservationGeometryRunRow.id == geometry.run_id)
+            .values(geometry_checksum="0" * 64)
+        )
+        session.commit()
+
+    with pg_db.session() as session, pytest.raises(ValidationError, match="checksum"):
+        derive_eligibility_from_geometry_run(
+            session=session,
+            owner_id="owner-a",
+            geometry_run_id=geometry.run_id,
+            requested_by="analyst-a",
+        )
 
 
 def test_postgres_geometry_api_lists_details_and_preserves_owner_isolation(

@@ -75,6 +75,7 @@ PHASE4B_PROVENANCE_LINK_TABLES = {
 PHASE4B_PROVENANCE_LINK_HEAD = "k6e7f8a9b0c2"
 
 PHASE4C_OBSERVATION_GEOMETRY_HEAD = "l7a8b9c0d1e2"
+PHASE4C_GEOMETRY_DERIVED_ELIGIBILITY_HEAD = "m8b9c0d1e2f3"
 
 PHASE4C_OBSERVATION_GEOMETRY_TABLES = {
     "observation_geometry_requests",
@@ -324,7 +325,55 @@ def test_observation_geometry_migration_downgrade_reupgrade_and_parity(
     assert downgraded >= PHASE4B_OBSERVATION_PLANNING_TABLES
     engine.dispose()
 
-    command.upgrade(cfg, PHASE4C_OBSERVATION_GEOMETRY_HEAD)
+    command.upgrade(cfg, PHASE4C_GEOMETRY_DERIVED_ELIGIBILITY_HEAD)
     engine = create_engine(db_url)
     assert set(inspect(engine).get_table_names()) >= PHASE4C_OBSERVATION_GEOMETRY_TABLES
     engine.dispose()
+
+
+def test_geometry_derived_eligibility_check_migration_downgrades_to_previous_head(
+    tmp_path: Path,
+) -> None:
+    db_url = f"sqlite:///{(tmp_path / 'p4c-geometry-derived-eligibility.db').as_posix()}"
+    cfg = Config("alembic.ini")
+    cfg.set_main_option("sqlalchemy.url", db_url)
+
+    command.upgrade(cfg, "head")
+    engine = create_engine(db_url)
+    inspector = inspect(engine)
+    provenance_checks = _check_sql_by_name(inspector, "observation_input_provenance")
+    window_checks = _check_sql_by_name(inspector, "observation_eligibility_windows")
+    tables = set(inspector.get_table_names())
+    engine.dispose()
+
+    assert tables >= PHASE4C_OBSERVATION_GEOMETRY_TABLES
+    assert "geometry_derived" in provenance_checks["ck_oip_verification_status"]
+    assert "derived_from_geometry" in window_checks["ck_oew_declaration_mode"]
+    assert "geometry_derived" in window_checks["ck_oew_verification_status"]
+
+    command.downgrade(cfg, PHASE4C_OBSERVATION_GEOMETRY_HEAD)
+    engine = create_engine(db_url)
+    inspector = inspect(engine)
+    downgraded_tables = set(inspector.get_table_names())
+    provenance_checks = _check_sql_by_name(inspector, "observation_input_provenance")
+    window_checks = _check_sql_by_name(inspector, "observation_eligibility_windows")
+    engine.dispose()
+
+    assert downgraded_tables >= PHASE4C_OBSERVATION_GEOMETRY_TABLES
+    assert "geometry_derived" not in provenance_checks["ck_oip_verification_status"]
+    assert "derived_from_geometry" not in window_checks["ck_oew_declaration_mode"]
+    assert "geometry_derived" not in window_checks["ck_oew_verification_status"]
+
+    command.upgrade(cfg, PHASE4C_GEOMETRY_DERIVED_ELIGIBILITY_HEAD)
+    engine = create_engine(db_url)
+    inspector = inspect(engine)
+    window_checks = _check_sql_by_name(inspector, "observation_eligibility_windows")
+    engine.dispose()
+    assert "derived_from_geometry" in window_checks["ck_oew_declaration_mode"]
+
+
+def _check_sql_by_name(inspector: object, table_name: str) -> dict[str, str]:
+    return {
+        constraint["name"]: str(constraint.get("sqltext", ""))
+        for constraint in inspector.get_check_constraints(table_name)  # type: ignore[attr-defined]
+    }

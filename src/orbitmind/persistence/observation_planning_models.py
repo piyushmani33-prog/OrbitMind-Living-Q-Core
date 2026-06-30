@@ -286,7 +286,7 @@ class ObservationInputProvenanceRow(Base):
         ),
         CheckConstraint(
             "verification_status IN ('fixture_verified', 'user_declared', "
-            "'derived_from_declared', 'unverified', 'unknown')",
+            "'derived_from_declared', 'geometry_derived', 'unverified', 'unknown')",
             name="ck_oip_verification_status",
         ),
     )
@@ -425,12 +425,12 @@ class ObservationEligibilityWindowRow(Base):
         ),
         CheckConstraint(
             "declaration_mode IN ('fixture_backed', 'user_declared', "
-            "'derived_from_declared_input')",
+            "'derived_from_declared_input', 'derived_from_geometry')",
             name="ck_oew_declaration_mode",
         ),
         CheckConstraint(
             "verification_status IN ('fixture_verified', 'user_declared', "
-            "'derived_from_declared', 'unverified', 'unknown')",
+            "'derived_from_declared', 'geometry_derived', 'unverified', 'unknown')",
             name="ck_oew_verification_status",
         ),
     )

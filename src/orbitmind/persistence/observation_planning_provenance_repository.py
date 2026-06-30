@@ -15,6 +15,7 @@ from orbitmind.observation_planning.provenance import (
     EligibilityWindow,
     EligibilityWindowSet,
     PinnedInputProvenance,
+    PinnedInputSourceMode,
     PinnedInputSourceType,
     eligibility_window_set_checksum,
     provenance_checksum,
@@ -384,7 +385,15 @@ class SqlAlchemyObservationPlanningProvenanceRepository:
             ):
                 raise ValidationError("input provenance parent reference mismatch")
             parent_ids.append(parent.parent_provenance_id)
-        if provenance.source.source_type == PinnedInputSourceType.DERIVED and not parent_rows:
+        geometry_derived = (
+            provenance.source.source_type == PinnedInputSourceType.DERIVED
+            and provenance.source.source_mode == PinnedInputSourceMode.DERIVED_FROM_GEOMETRY
+        )
+        if (
+            provenance.source.source_type == PinnedInputSourceType.DERIVED
+            and not geometry_derived
+            and not parent_rows
+        ):
             raise ValidationError("derived input provenance requires parent links")
         if provenance.source.source_type != PinnedInputSourceType.DERIVED and parent_rows:
             raise ValidationError("non-derived input provenance cannot have parent links")
