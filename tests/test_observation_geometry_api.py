@@ -14,7 +14,10 @@ from fastapi.testclient import TestClient
 from orbitmind.api.app import create_app
 from orbitmind.api.container import AppContainer
 from orbitmind.api.deps import get_current_owner_id
-from orbitmind.api.observation_geometry_schemas import OBSERVATION_GEOMETRY_DISCLAIMER
+from orbitmind.api.observation_geometry_schemas import (
+    GEOMETRY_DERIVED_ELIGIBILITY_DISCLAIMER,
+    OBSERVATION_GEOMETRY_DISCLAIMER,
+)
 from orbitmind.observation_geometry.models import (
     GeodeticPosition,
     GeometryComputationRequest,
@@ -104,22 +107,85 @@ def _assert_no_raw_geometry_payload(payload: dict[str, Any]) -> None:
     assert "tle_line2" not in payload
 
 
-def _assert_safe_error(response: Any) -> None:
-    body = response.json()
-    assert set(body) == {"code", "message"}
-    text = response.text.lower()
+def _assert_no_raw_geometry_text(text: str) -> None:
+    lowered = text.lower()
     for forbidden in (
+        '"request_json"',
+        '"result_json"',
+        '"samples"',
+        '"intervals"',
+        '"tle_line1"',
+        '"tle_line2"',
+        "'request_json'",
+        "'result_json'",
+        "'samples'",
+        "'intervals'",
+        "'tle_line1'",
+        "'tle_line2'",
         "select ",
         "insert ",
         "sqlite",
         "postgres",
         "constraint",
         "traceback",
-        "result_json",
-        "request_json",
         "e:\\",
     ):
-        assert forbidden not in text
+        assert forbidden not in lowered
+
+
+def _assert_safe_error(response: Any) -> None:
+    body = response.json()
+    assert set(body) == {"code", "message"}
+    _assert_no_raw_geometry_text(response.text)
+
+
+def _assert_derived_response_is_safe(
+    payload: dict[str, Any],
+    *,
+    run_id: str,
+    expected_status: tuple[bool, bool],
+) -> None:
+    expected_keys = {
+        "owner_id",
+        "geometry_run_id",
+        "geometry_request_id",
+        "geometry_checksum",
+        "geometry_request_checksum",
+        "element_checksum",
+        "source_identity_checksum",
+        "provenance_record_id",
+        "provenance_checksum",
+        "eligibility_set_id",
+        "eligibility_set_checksum",
+        "derivation_checksum",
+        "derivation_rule_version",
+        "derivation_label",
+        "minimum_peak_elevation_deg",
+        "window_count",
+        "provenance_created",
+        "provenance_reused",
+        "eligibility_set_created",
+        "eligibility_set_reused",
+        "derived_source_type",
+        "derived_source_mode",
+        "derived_verification_status",
+        "limitations",
+        "disclaimer",
+    }
+    assert set(payload) == expected_keys
+    assert payload["owner_id"] == "owner-a"
+    assert payload["geometry_run_id"] == run_id
+    assert payload["provenance_created"] is expected_status[0]
+    assert payload["eligibility_set_created"] is expected_status[1]
+    assert payload["provenance_reused"] is (not expected_status[0])
+    assert payload["eligibility_set_reused"] is (not expected_status[1])
+    assert payload["derived_source_type"] == "derived"
+    assert payload["derived_source_mode"] == "derived_from_geometry"
+    assert payload["derived_verification_status"] == "geometry_derived"
+    assert payload["window_count"] >= 0
+    assert payload["limitations"]
+    assert payload["disclaimer"] == GEOMETRY_DERIVED_ELIGIBILITY_DISCLAIMER
+    _assert_no_raw_geometry_text(str(payload))
 
 
 def test_geometry_api_lists_reads_and_authenticates_requests_and_runs(
@@ -247,6 +313,118 @@ def test_geometry_api_lists_reads_and_authenticates_requests_and_runs(
     assert details.summary.id == first_run_id
 
 
+def test_geometry_api_derives_eligibility_replay_and_changed_identity(
+    container: AppContainer,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _request_id, run_id, _request_checksum, _geometry_checksum = _persist(container)
+
+    def fail_if_computed(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("derive endpoint must not compute geometry")
+
+    monkeypatch.setattr(
+        "orbitmind.observation_geometry.persistence_service.compute_observation_geometry",
+        fail_if_computed,
+    )
+
+    with _owner_client(container, "owner-a") as client:
+        first = client.post(
+            f"{BASE}/runs/{run_id}/derive-eligibility",
+            json={"requested_by": "analyst-a"},
+        )
+        assert first.status_code == 201
+        first_body = first.json()
+        _assert_derived_response_is_safe(first_body, run_id=run_id, expected_status=(True, True))
+        assert first_body["derivation_label"] == "geometry-derived-visibility"
+        assert first_body["minimum_peak_elevation_deg"] is None
+
+        replay = client.post(
+            f"{BASE}/runs/{run_id}/derive-eligibility",
+            json={"requested_by": "different-attribution"},
+        )
+        assert replay.status_code == 200
+        replay_body = replay.json()
+        _assert_derived_response_is_safe(
+            replay_body,
+            run_id=run_id,
+            expected_status=(False, False),
+        )
+        assert replay_body["provenance_record_id"] == first_body["provenance_record_id"]
+        assert replay_body["eligibility_set_id"] == first_body["eligibility_set_id"]
+        assert replay_body["derivation_checksum"] == first_body["derivation_checksum"]
+
+        changed_label = client.post(
+            f"{BASE}/runs/{run_id}/derive-eligibility",
+            json={"derivation_label": "geometry-derived-review"},
+        )
+        assert changed_label.status_code == 201
+        changed_label_body = changed_label.json()
+        assert changed_label_body["eligibility_set_id"] != first_body["eligibility_set_id"]
+        assert (
+            changed_label_body["eligibility_set_checksum"] != first_body["eligibility_set_checksum"]
+        )
+
+        changed_filter = client.post(
+            f"{BASE}/runs/{run_id}/derive-eligibility",
+            json={"minimum_peak_elevation_deg": 0.0},
+        )
+        assert changed_filter.status_code == 201
+        changed_filter_body = changed_filter.json()
+        assert changed_filter_body["minimum_peak_elevation_deg"] == 0.0
+        assert changed_filter_body["eligibility_set_id"] != first_body["eligibility_set_id"]
+
+
+def test_geometry_api_derive_eligibility_uses_owner_as_default_attribution(
+    container: AppContainer,
+) -> None:
+    _request_id, run_id, _request_checksum, _geometry_checksum = _persist(
+        container,
+        site_id="SITE-ATTR",
+    )
+
+    with _owner_client(container, "owner-a") as client:
+        response = client.post(f"{BASE}/runs/{run_id}/derive-eligibility", json={})
+        assert response.status_code == 201
+        body = response.json()
+        assert body["owner_id"] == "owner-a"
+        assert body["derived_source_mode"] == "derived_from_geometry"
+
+        spoofed_attribution = client.post(
+            f"{BASE}/runs/{run_id}/derive-eligibility",
+            json={"requested_by": "owner-b", "derivation_label": "spoofed-attribution"},
+        )
+        assert spoofed_attribution.status_code == 201
+        assert spoofed_attribution.json()["owner_id"] == "owner-a"
+
+
+def test_geometry_api_derive_eligibility_rejects_invalid_body(
+    container: AppContainer,
+) -> None:
+    _request_id, run_id, _request_checksum, _geometry_checksum = _persist(container)
+
+    invalid_payloads: tuple[dict[str, object], ...] = (
+        {"owner_id": "owner-a"},
+        {"idempotency_key": "not-supported"},
+        {"result_json": {}},
+        {"request_json": {}},
+        {"intervals": []},
+        {"samples": []},
+        {"tle_line1": "not accepted"},
+        {"tle_line2": "not accepted"},
+        {"derivation_label": ""},
+        {"derivation_label": " padded"},
+        {"derivation_label": "a" * 121},
+        {"minimum_peak_elevation_deg": -1.0},
+        {"minimum_peak_elevation_deg": 90.0},
+        {"minimum_peak_elevation_deg": True},
+    )
+
+    with _owner_client(container, "owner-a") as client:
+        for payload in invalid_payloads:
+            response = client.post(f"{BASE}/runs/{run_id}/derive-eligibility", json=payload)
+            assert response.status_code == 422, payload
+
+
 def test_geometry_api_pagination_filters_and_openapi(container: AppContainer) -> None:
     first_request_id, _first_run_id, _checksum, _geometry = _persist(
         container,
@@ -310,11 +488,23 @@ def test_geometry_api_pagination_filters_and_openapi(container: AppContainer) ->
         assert f"{BASE}/requests/{{request_id}}" in paths
         assert f"{BASE}/runs" in paths
         assert f"{BASE}/runs/{{run_id}}" in paths
+        assert f"{BASE}/runs/{{run_id}}/derive-eligibility" in paths
         assert f"{BASE}/runs/{{run_id}}/samples" in paths
         assert f"{BASE}/runs/{{run_id}}/intervals" in paths
+        mutation_routes = sorted(
+            (path, method)
+            for path, methods in paths.items()
+            if path.startswith(BASE)
+            for method in methods
+            if method in {"post", "put", "patch", "delete"}
+        )
+        assert mutation_routes == [(f"{BASE}/runs/{{run_id}}/derive-eligibility", "post")]
         for path, methods in paths.items():
             if path.startswith(BASE):
-                assert not ({"post", "put", "patch", "delete"} & set(methods))
+                if path == f"{BASE}/runs/{{run_id}}/derive-eligibility":
+                    assert {"put", "patch", "delete"}.isdisjoint(methods)
+                else:
+                    assert not ({"post", "put", "patch", "delete"} & set(methods))
 
 
 def test_geometry_api_sample_interval_pagination_rejections(
@@ -387,17 +577,20 @@ def test_geometry_api_owner_isolation_and_no_owner_override(container: AppContai
         run_response = client.get(f"{BASE}/runs/{run_id}")
         samples_response = client.get(f"{BASE}/runs/{run_id}/samples")
         intervals_response = client.get(f"{BASE}/runs/{run_id}/intervals")
+        derive_response = client.post(f"{BASE}/runs/{run_id}/derive-eligibility", json={})
         runs_for_request = client.get(f"{BASE}/runs", params={"request_id": request_id})
         assert request_response.status_code == 404
         assert run_response.status_code == 404
         assert samples_response.status_code == 404
         assert intervals_response.status_code == 404
+        assert derive_response.status_code == 404
         assert runs_for_request.status_code == 404
         for response in (
             request_response,
             run_response,
             samples_response,
             intervals_response,
+            derive_response,
             runs_for_request,
         ):
             _assert_safe_error(response)
@@ -453,15 +646,29 @@ def test_geometry_api_tamper_errors_are_sanitized(container: AppContainer) -> No
         assert intervals_response.status_code == 422
         assert intervals_response.json()["code"] == "validation_error"
         _assert_safe_error(intervals_response)
+        derive_response = client.post(f"{BASE}/runs/{run_id}/derive-eligibility", json={})
+        assert derive_response.status_code == 422
+        assert derive_response.json()["code"] == "validation_error"
+        _assert_safe_error(derive_response)
 
 
 @pytest.mark.parametrize(
     "path",
-    ["/requests/%20bad", "/runs/%20bad", "/runs/%20bad/samples", "/runs/%20bad/intervals"],
+    [
+        "/requests/%20bad",
+        "/runs/%20bad",
+        "/runs/%20bad/derive-eligibility",
+        "/runs/%20bad/samples",
+        "/runs/%20bad/intervals",
+    ],
 )
 def test_geometry_api_rejects_malformed_path_ids(container: AppContainer, path: str) -> None:
     with _owner_client(container, "owner-a") as client:
-        response = client.get(f"{BASE}{path}")
+        response = (
+            client.post(f"{BASE}{path}", json={})
+            if path.endswith("derive-eligibility")
+            else client.get(f"{BASE}{path}")
+        )
     assert response.status_code == 422
 
 
@@ -486,19 +693,40 @@ def test_geometry_api_no_forbidden_architecture_imports() -> None:
             "requests",
         ),
         "observation_geometry.py": (
-            "orbitmind.observation_planning",
+            "orbitmind.observation_geometry.persistence_service",
+            "orbitmind.observation_geometry.service",
+            "orbitmind.observation_planning.orchestration",
+            "orbitmind.observation_planning.provenance_execution",
+            "orbitmind.optimization",
             "orbitmind.quantum",
             "httpx",
             "requests",
         ),
     }
+    allowed_modules_by_file = {
+        "observation_geometry.py": {"orbitmind.observation_planning.geometry_eligibility_adapter"}
+    }
     for path in guarded_files:
         tree = ast.parse(path.read_text(encoding="utf-8"))
         forbidden_prefixes = forbidden_prefixes_by_file[path.name]
+        allowed_modules = allowed_modules_by_file.get(path.name, set())
         for node in ast.walk(tree):
             module = _imported_module(node)
             if module is not None:
+                if module in allowed_modules:
+                    continue
                 assert not module.startswith(forbidden_prefixes), (path, module)
+                if module.startswith("orbitmind.observation_planning"):
+                    raise AssertionError((path, module))
+
+
+def test_geometry_api_router_does_not_own_transactions() -> None:
+    path = Path("src/orbitmind/api/routers/observation_geometry.py")
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    forbidden_attrs = {"begin", "commit", "rollback"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and node.attr in forbidden_attrs:
+            raise AssertionError((path, node.attr))
 
 
 def _imported_module(node: ast.AST) -> str | None:
