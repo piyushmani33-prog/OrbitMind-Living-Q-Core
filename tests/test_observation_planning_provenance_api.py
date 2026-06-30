@@ -13,15 +13,29 @@ from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 import orbitmind.api.routers.observation_planning as observation_planning_router
+import orbitmind.observation_geometry.persistence_service as geometry_persistence_service
+import orbitmind.observation_geometry.service as geometry_service
 import orbitmind.observation_planning.orchestration as orchestration_module
 from orbitmind.api.app import create_app
 from orbitmind.api.container import AppContainer
 from orbitmind.api.deps import get_current_owner_id
 from orbitmind.core.checksums import sha256_text
+from orbitmind.observation_geometry.models import (
+    GeodeticPosition,
+    GeometryComputationRequest,
+    GroundObservationSite,
+    PinnedOrbitElementSet,
+)
+from orbitmind.observation_geometry.persistence_service import execute_and_persist_geometry
 from orbitmind.observation_planning import (
     ObservationPlanningRequest,
+    ObservationPlanningSourceMode,
     PlanningResultStatus,
     translate_request_to_problem,
+)
+from orbitmind.observation_planning.geometry_eligibility_adapter import (
+    GEOMETRY_DERIVED_ACCESS_LIMITATION,
+    GEOMETRY_DERIVED_LIMITATION,
 )
 from orbitmind.observation_planning.provenance import (
     EligibilityDeclarationMode,
@@ -60,8 +74,11 @@ from orbitmind.persistence.observation_planning_provenance_repository import (
     SqlAlchemyObservationPlanningProvenanceRepository,
     StoredEligibilityWindowSet,
 )
+from orbitmind.sources.registry import SourceRegistry
 
 BASE = "/api/v1/observation-planning"
+GEOMETRY_BASE = "/api/v1/observation-geometry"
+GEOMETRY_START = dt.datetime(2019, 12, 9, 19, 50, tzinfo=dt.UTC)
 
 
 def _owner_client(container: AppContainer, owner_id: str) -> TestClient:
@@ -78,6 +95,52 @@ def _owner_client_no_raise(container: AppContainer, owner_id: str) -> TestClient
 
 def _checksum(label: str) -> str:
     return sha256_text(label)
+
+
+def _registry_elements() -> PinnedOrbitElementSet:
+    registry = SourceRegistry()
+    source = registry.get_source_record("ISS")
+    line1, line2 = registry.get_tle("ISS")
+    return PinnedOrbitElementSet(source=source, tle_line1=line1, tle_line2=line2)
+
+
+def _geometry_request(
+    *,
+    site_id: str = "SITE-ANCHOR-API",
+    minimum_elevation_deg: float = 0.0,
+) -> GeometryComputationRequest:
+    return GeometryComputationRequest(
+        elements=_registry_elements(),
+        site=GroundObservationSite(
+            site_id=site_id,
+            name=f"{site_id} geometry-derived anchored API site",
+            position=GeodeticPosition(latitude_deg=0.0, longitude_deg=0.0, altitude_km=0.0),
+        ),
+        start=GEOMETRY_START,
+        end=GEOMETRY_START + dt.timedelta(minutes=25),
+        step_seconds=300,
+        minimum_elevation_deg=minimum_elevation_deg,
+    )
+
+
+def _persist_geometry_run(
+    container: AppContainer,
+    *,
+    owner_id: str = "owner-a",
+    site_id: str = "SITE-ANCHOR-API",
+    minimum_elevation_deg: float = 0.0,
+) -> str:
+    with container.database.session() as session:
+        execution = execute_and_persist_geometry(
+            session=session,
+            owner_id=owner_id,
+            request=_geometry_request(
+                site_id=site_id,
+                minimum_elevation_deg=minimum_elevation_deg,
+            ),
+            idempotency_key=f"{owner_id}-{site_id}-anchored-api",
+        )
+        return execution.run_id
 
 
 def _rights(status: InputRightsStatus = InputRightsStatus.DECLARED) -> InputRightsDeclaration:
@@ -290,6 +353,27 @@ def _assert_no_internal_leak(text: str) -> None:
         assert forbidden not in text
 
 
+def _assert_no_raw_geometry_or_planning_snapshot_leak(text: str) -> None:
+    lowered = text.lower()
+    for forbidden in (
+        '"result_json"',
+        '"request_json"',
+        '"samples"',
+        '"intervals"',
+        '"tle_line1"',
+        '"tle_line2"',
+        '"link_json"',
+        '"link_identity"',
+        '"request_snapshot"',
+        '"run_snapshot"',
+        "traceback",
+        "postgresql://",
+        "select ",
+        "e:\\",
+    ):
+        assert forbidden not in lowered
+
+
 def test_successful_fixture_declared_and_derived_anchored_execution(
     container: AppContainer,
 ) -> None:
@@ -378,6 +462,238 @@ def test_execution_by_checksum_subset_canonical_order_and_replay(
     assert changed.status_code == 201
     assert changed.json()["link_id"] != first.json()["link_id"]
     assert changed.json()["preparation_checksum"] != first.json()["preparation_checksum"]
+
+
+def test_geometry_derived_eligibility_flows_through_existing_anchored_api(
+    container: AppContainer,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_id = _persist_geometry_run(container, site_id="SITE-GEOM-ANCHOR-API")
+
+    with _owner_client(container, "owner-a") as client:
+        derived = client.post(
+            f"{GEOMETRY_BASE}/runs/{run_id}/derive-eligibility",
+            json={"requested_by": "geometry-api-analyst"},
+        )
+        assert derived.status_code == 201
+        derived_body = derived.json()
+
+        payload = {
+            "requested_by": "planning-api-analyst",
+            "eligibility_set_id": derived_body["eligibility_set_id"],
+        }
+        first = client.post(f"{BASE}/provenance-anchored-executions", json=payload)
+        assert first.status_code == 201
+        first_body = first.json()
+        request_detail = client.get(f"{BASE}/requests/{first_body['planning_request_id']}")
+        link_detail = client.get(f"{BASE}/provenance-links/{first_body['link_id']}")
+
+        def fail_planner(_: ObservationPlanningRequest) -> object:
+            raise AssertionError("anchored API replay must not invoke the planner")
+
+        def fail_geometry_compute(*_args: object, **_kwargs: object) -> object:
+            raise AssertionError("anchored API must not recompute geometry")
+
+        monkeypatch.setattr(orchestration_module, "plan_observation_request", fail_planner)
+        monkeypatch.setattr(
+            geometry_persistence_service,
+            "compute_observation_geometry",
+            fail_geometry_compute,
+        )
+        monkeypatch.setattr(geometry_service, "compute_observation_geometry", fail_geometry_compute)
+        replay = client.post(f"{BASE}/provenance-anchored-executions", json=payload)
+
+    assert request_detail.status_code == 200
+    assert link_detail.status_code == 200
+    assert replay.status_code == 200
+
+    replay_body = replay.json()
+    assert first_body["source_type"] == "derived"
+    assert first_body["verification_status"] == "geometry_derived"
+    assert first_body["selected_window_ids"]
+    assert first_body["selected_window_ids"] == replay_body["selected_window_ids"]
+    assert first_body["selected_window_ids"] == link_detail.json()["selected_window_ids"]
+    assert request_detail.json()["source_mode"] == ObservationPlanningSourceMode.DECLARED.value
+    assert GEOMETRY_DERIVED_LIMITATION in first_body["limitations"]
+    assert GEOMETRY_DERIVED_ACCESS_LIMITATION in first_body["limitations"]
+    assert GEOMETRY_DERIVED_LIMITATION in link_detail.json()["limitations"]
+    assert GEOMETRY_DERIVED_ACCESS_LIMITATION in link_detail.json()["limitations"]
+
+    for field in (
+        "planning_request_id",
+        "planning_run_id",
+        "observation_plan_id",
+        "link_id",
+        "link_checksum",
+        "preparation_checksum",
+        "planning_request_checksum",
+    ):
+        assert replay_body[field] == first_body[field]
+    assert replay_body["request_created"] is False
+    assert replay_body["run_created"] is False
+
+    disclaimer = first_body["disclaimer"].lower()
+    assert "geometry-derived eligibility" in disclaimer
+    assert "fixture-backed" in disclaimer
+    assert "user-declared" in disclaimer
+    assert "pinned/offline deterministic model output" in disclaimer
+    for phrase in (
+        "do not prove live tracking",
+        "operational access",
+        "taskability",
+        "approval",
+        "command readiness",
+        "signed receipt status",
+        "quantum execution is not authoritative",
+    ):
+        assert phrase in disclaimer
+    _assert_no_raw_geometry_or_planning_snapshot_leak(first.text)
+    _assert_no_raw_geometry_or_planning_snapshot_leak(replay.text)
+    _assert_no_raw_geometry_or_planning_snapshot_leak(link_detail.text)
+
+
+def test_geometry_derived_anchored_api_rejects_cross_owner_empty_tamper_and_raw_fields(
+    container: AppContainer,
+) -> None:
+    run_id = _persist_geometry_run(container, site_id="SITE-GEOM-NEG-API")
+    empty_run_id = _persist_geometry_run(
+        container,
+        site_id="SITE-GEOM-EMPTY-API",
+        minimum_elevation_deg=80.0,
+    )
+
+    with _owner_client(container, "owner-a") as owner_a:
+        derived = owner_a.post(
+            f"{GEOMETRY_BASE}/runs/{run_id}/derive-eligibility",
+            json={"requested_by": "geometry-api-analyst"},
+        ).json()
+        empty_derived = owner_a.post(
+            f"{GEOMETRY_BASE}/runs/{empty_run_id}/derive-eligibility",
+            json={"requested_by": "geometry-api-analyst"},
+        )
+        empty_execute = owner_a.post(
+            f"{BASE}/provenance-anchored-executions",
+            json={
+                "requested_by": "planning-api-analyst",
+                "eligibility_set_id": empty_derived.json()["eligibility_set_id"],
+            },
+        )
+
+        forbidden_payloads: tuple[dict[str, object], ...] = (
+            {"owner_id": "owner-a"},
+            {"result_json": {}},
+            {"request_json": {}},
+            {"samples": []},
+            {"intervals": []},
+            {"tle_line1": "1 "},
+            {"tle_line2": "2 "},
+            {"eligibility_windows": []},
+            {"unknown": "field"},
+        )
+        forbidden = [
+            owner_a.post(
+                f"{BASE}/provenance-anchored-executions",
+                json={
+                    "requested_by": "planning-api-analyst",
+                    "eligibility_set_id": derived["eligibility_set_id"],
+                    **payload,
+                },
+            )
+            for payload in forbidden_payloads
+        ]
+
+    with _owner_client(container, "owner-b") as owner_b:
+        hidden = owner_b.post(
+            f"{BASE}/provenance-anchored-executions",
+            json={
+                "requested_by": "owner-a-is-not-authority",
+                "eligibility_set_id": derived["eligibility_set_id"],
+            },
+        )
+
+    assert empty_derived.status_code == 201
+    assert empty_derived.json()["window_count"] == 0
+    assert empty_execute.status_code == 422
+    assert "contains no windows" in empty_execute.json()["message"]
+    assert hidden.status_code == 404
+    assert derived["eligibility_set_id"] not in hidden.text
+    assert derived["eligibility_set_checksum"] not in hidden.text
+    for response in forbidden:
+        assert response.status_code == 422
+
+    with container.database.session() as session:
+        provenance_row = session.get(
+            ObservationInputProvenanceRow,
+            derived["provenance_record_id"],
+        )
+        assert provenance_row is not None
+        provenance_row.artifact_checksum = _checksum("wrong-geometry-derived-artifact")
+        session.commit()
+
+    with _owner_client(container, "owner-a") as owner_a:
+        provenance_tamper = owner_a.post(
+            f"{BASE}/provenance-anchored-executions",
+            json={
+                "requested_by": "planning-api-analyst",
+                "eligibility_set_id": derived["eligibility_set_id"],
+            },
+        )
+    assert provenance_tamper.status_code == 422
+    assert provenance_tamper.json()["code"] == "validation_error"
+    _assert_no_internal_leak(provenance_tamper.text)
+    _assert_no_raw_geometry_or_planning_snapshot_leak(provenance_tamper.text)
+
+    window_run_id = _persist_geometry_run(container, site_id="SITE-GEOM-WINDOW-TAMPER-API")
+    with _owner_client(container, "owner-a") as owner_a:
+        window_derived = owner_a.post(
+            f"{GEOMETRY_BASE}/runs/{window_run_id}/derive-eligibility",
+            json={"requested_by": "geometry-api-analyst"},
+        ).json()
+    with container.database.session() as session:
+        window_row = session.scalar(
+            select(ObservationEligibilityWindowRow).where(
+                ObservationEligibilityWindowRow.set_id == window_derived["eligibility_set_id"]
+            )
+        )
+        assert window_row is not None
+        window_row.asset_id = "SAT-TAMPERED"
+        session.commit()
+    with _owner_client(container, "owner-a") as owner_a:
+        window_tamper = owner_a.post(
+            f"{BASE}/provenance-anchored-executions",
+            json={
+                "requested_by": "planning-api-analyst",
+                "eligibility_set_id": window_derived["eligibility_set_id"],
+            },
+        )
+    assert window_tamper.status_code == 422
+    assert window_tamper.json()["code"] == "validation_error"
+    _assert_no_internal_leak(window_tamper.text)
+
+    link_run_id = _persist_geometry_run(container, site_id="SITE-GEOM-LINK-TAMPER-API")
+    with _owner_client(container, "owner-a") as owner_a:
+        link_derived = owner_a.post(
+            f"{GEOMETRY_BASE}/runs/{link_run_id}/derive-eligibility",
+            json={"requested_by": "geometry-api-analyst"},
+        ).json()
+        payload = {
+            "requested_by": "planning-api-analyst",
+            "eligibility_set_id": link_derived["eligibility_set_id"],
+        }
+        created = owner_a.post(f"{BASE}/provenance-anchored-executions", json=payload).json()
+    with container.database.session() as session:
+        session.execute(
+            update(ObservationPlanningProvenanceLinkRow)
+            .where(ObservationPlanningProvenanceLinkRow.id == created["link_id"])
+            .values(objective_value=999.0)
+        )
+        session.commit()
+    with _owner_client(container, "owner-a") as owner_a:
+        link_tamper = owner_a.post(f"{BASE}/provenance-anchored-executions", json=payload)
+    assert link_tamper.status_code == 422
+    assert link_tamper.json()["code"] == "validation_error"
+    _assert_no_internal_leak(link_tamper.text)
+    _assert_no_raw_geometry_or_planning_snapshot_leak(link_tamper.text)
 
 
 def test_body_validation_rejects_lookup_selection_and_unknown_fields(
@@ -650,11 +966,21 @@ def test_openapi_and_router_boundary_for_provenance_anchored_routes(
 
     assert f"{BASE}/provenance-anchored-executions" in paths
     assert f"{BASE}/provenance-links/{{link_id}}" in paths
+    assert f"{BASE}/eligibility-sets/{{eligibility_set_id}}/execute-anchored" not in paths
+    assert f"{GEOMETRY_BASE}/runs/{{run_id}}/execute-anchored-planning" not in paths
 
     router_source = Path(observation_planning_router.__file__).read_text(encoding="utf-8")
     assert "execute_provenance_anchored_planning(" in router_source
     assert "prepare_eligibility_backed_planning_request(" not in router_source
     assert "_execute_observation_planning_in_transaction(" not in router_source
+    assert "derive_eligibility_from_geometry_run(" not in router_source
+    assert "compute_observation_geometry(" not in router_source
+    assert "orbitmind.observation_geometry" not in router_source
+    assert "geometry_eligibility_adapter" not in router_source
+    assert "orbitmind.api.routers.observation_geometry" not in router_source
+    assert "orbitmind.optimization.solvers" not in router_source
+    assert "orbitmind.quantum" not in router_source
+    assert "qiskit" not in router_source
     assert ".begin(" not in router_source
     assert ".commit(" not in router_source
     assert ".rollback(" not in router_source

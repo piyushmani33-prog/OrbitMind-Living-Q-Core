@@ -55,10 +55,12 @@ OBSERVATION_PLANNING_DISCLAIMER = (
 )
 
 PROVENANCE_ANCHORED_EXECUTION_DISCLAIMER = (
-    "Provenance-anchored bounded observation planning over authenticated fixture-backed or "
-    "user-declared eligibility windows. Eligibility windows do not prove orbital visibility, "
-    "taskability, approval, command readiness, or signed receipt status. Planning remains "
-    "classically authoritative; quantum execution is not authoritative."
+    "Provenance-anchored bounded observation planning over authenticated fixture-backed, "
+    "user-declared, or geometry-derived eligibility windows. Geometry-derived eligibility "
+    "comes from pinned/offline deterministic model output; eligibility windows do not prove "
+    "live tracking, orbital visibility, operational access, taskability, approval, command "
+    "readiness, or signed receipt status. Planning remains classically authoritative; "
+    "quantum execution is not authoritative."
 )
 
 _MAX_OPPORTUNITIES = 24

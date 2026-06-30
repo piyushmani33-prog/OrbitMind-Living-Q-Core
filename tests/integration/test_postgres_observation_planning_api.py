@@ -10,15 +10,26 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select, text, update
 
+import orbitmind.observation_planning.orchestration as orchestration_module
 from orbitmind.api.app import create_app
 from orbitmind.api.container import AppContainer
 from orbitmind.api.deps import get_current_owner_id
 from orbitmind.core.checksums import sha256_text
 from orbitmind.core.config import Settings
+from orbitmind.observation_geometry.models import (
+    GeodeticPosition,
+    GeometryComputationRequest,
+    GroundObservationSite,
+    PinnedOrbitElementSet,
+)
+from orbitmind.observation_geometry.persistence_service import execute_and_persist_geometry
 from orbitmind.observation_planning import (
     ObservationPlanningRequest,
     PlanningResultStatus,
     translate_request_to_problem,
+)
+from orbitmind.observation_planning.geometry_eligibility_adapter import (
+    GEOMETRY_DERIVED_LIMITATION,
 )
 from orbitmind.observation_planning.provenance import (
     EligibilityDeclarationMode,
@@ -55,6 +66,7 @@ from orbitmind.persistence.observation_planning_provenance_repository import (
     SqlAlchemyObservationPlanningProvenanceRepository,
     StoredEligibilityWindowSet,
 )
+from orbitmind.sources.registry import SourceRegistry
 
 _PG_URL = os.environ.get("ORBITMIND_TEST_POSTGRES_URL")
 
@@ -65,16 +77,20 @@ pytestmark = [
 ]
 
 BASE = "/api/v1/observation-planning"
+GEOMETRY_BASE = "/api/v1/observation-geometry"
 _TABLES = (
     "observation_planning_provenance_links",
     "observation_eligibility_windows",
     "observation_eligibility_window_sets",
     "observation_input_provenance_parents",
     "observation_input_provenance",
+    "observation_geometry_runs",
+    "observation_geometry_requests",
     "observation_plans",
     "observation_planning_runs",
     "observation_planning_requests",
 )
+GEOMETRY_START = dt.datetime(2019, 12, 9, 19, 50, tzinfo=dt.UTC)
 
 
 @pytest.fixture
@@ -172,6 +188,44 @@ def _invalid_payload() -> dict[str, object]:
 
 def _sha(label: str) -> str:
     return sha256_text(label)
+
+
+def _geometry_elements() -> PinnedOrbitElementSet:
+    registry = SourceRegistry()
+    source = registry.get_source_record("ISS")
+    line1, line2 = registry.get_tle("ISS")
+    return PinnedOrbitElementSet(source=source, tle_line1=line1, tle_line2=line2)
+
+
+def _geometry_request(site_id: str = "SITE-PG-ANCHOR-API") -> GeometryComputationRequest:
+    return GeometryComputationRequest(
+        elements=_geometry_elements(),
+        site=GroundObservationSite(
+            site_id=site_id,
+            name=f"{site_id} PostgreSQL geometry-derived anchored API site",
+            position=GeodeticPosition(latitude_deg=0.0, longitude_deg=0.0, altitude_km=0.0),
+        ),
+        start=GEOMETRY_START,
+        end=GEOMETRY_START + dt.timedelta(minutes=25),
+        step_seconds=300,
+        minimum_elevation_deg=0.0,
+    )
+
+
+def _persist_geometry_run(
+    container: AppContainer,
+    *,
+    owner_id: str = "owner-a",
+    site_id: str = "SITE-PG-ANCHOR-API",
+) -> str:
+    with container.database.session() as session:
+        execution = execute_and_persist_geometry(
+            session=session,
+            owner_id=owner_id,
+            request=_geometry_request(site_id),
+            idempotency_key=f"{owner_id}-{site_id}-anchored-api",
+        )
+        return execution.run_id
 
 
 def _rights() -> InputRightsDeclaration:
@@ -519,6 +573,87 @@ def test_postgres_api_provenance_anchored_execution_replay_conflict_and_link_det
     assert first.json()["link_checksum"] not in hidden_link.text
     assert hidden_set.status_code == 404
     assert stored.eligibility_set_checksum not in hidden_set.text
+
+
+def test_postgres_api_geometry_derived_anchored_execution_replay_owner_and_tamper(
+    pg_container: AppContainer,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_id = _persist_geometry_run(pg_container, site_id="SITE-PG-GEOM-ANCHOR-API")
+
+    with _client(pg_container, "owner-a") as owner_a:
+        derived = owner_a.post(
+            f"{GEOMETRY_BASE}/runs/{run_id}/derive-eligibility",
+            json={"requested_by": "geometry-api-analyst"},
+        )
+        assert derived.status_code == 201
+        derived_body = derived.json()
+        payload = {
+            "requested_by": "planning-api-analyst",
+            "eligibility_set_id": derived_body["eligibility_set_id"],
+        }
+        first = owner_a.post(f"{BASE}/provenance-anchored-executions", json=payload)
+        assert first.status_code == 201
+        first_body = first.json()
+
+        def fail_planner(_: ObservationPlanningRequest) -> object:
+            raise AssertionError("PostgreSQL anchored replay must not invoke the planner")
+
+        monkeypatch.setattr(orchestration_module, "plan_observation_request", fail_planner)
+        replay = owner_a.post(f"{BASE}/provenance-anchored-executions", json=payload)
+
+    with _client(pg_container, "owner-b") as owner_b:
+        hidden = owner_b.post(
+            f"{BASE}/provenance-anchored-executions",
+            json={
+                "requested_by": "owner-a-is-not-authority",
+                "eligibility_set_id": derived_body["eligibility_set_id"],
+            },
+        )
+
+    assert replay.status_code == 200
+    replay_body = replay.json()
+    assert first_body["source_type"] == "derived"
+    assert first_body["verification_status"] == "geometry_derived"
+    assert GEOMETRY_DERIVED_LIMITATION in first_body["limitations"]
+    assert first_body["selected_window_ids"]
+    for field in (
+        "planning_request_id",
+        "planning_run_id",
+        "observation_plan_id",
+        "link_id",
+        "link_checksum",
+    ):
+        assert replay_body[field] == first_body[field]
+    assert replay_body["request_created"] is False
+    assert replay_body["run_created"] is False
+    assert hidden.status_code == 404
+    assert derived_body["eligibility_set_id"] not in hidden.text
+    assert derived_body["eligibility_set_checksum"] not in hidden.text
+
+    with pg_container.database.session() as session:
+        session.execute(
+            update(ObservationPlanningProvenanceLinkRow)
+            .where(ObservationPlanningProvenanceLinkRow.id == first_body["link_id"])
+            .values(objective_value=999.0)
+        )
+        session.commit()
+
+    with _client(pg_container, "owner-a") as owner_a:
+        tampered = owner_a.post(f"{BASE}/provenance-anchored-executions", json=payload)
+
+    assert tampered.status_code == 422
+    assert tampered.json()["code"] == "validation_error"
+    for forbidden in (
+        "SELECT",
+        "uq_",
+        "postgresql://",
+        "Traceback",
+        "result_json",
+        "request_json",
+        "link_json",
+    ):
+        assert forbidden not in tampered.text
 
 
 def test_postgres_api_provenance_anchored_non_success_without_plan(
