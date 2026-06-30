@@ -4,11 +4,17 @@ from __future__ import annotations
 
 import datetime as dt
 import os
+from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy import func, select, text, update
 from sqlalchemy.exc import IntegrityError
 
+from orbitmind.api.app import create_app
+from orbitmind.api.container import AppContainer
+from orbitmind.api.deps import get_current_owner_id
+from orbitmind.core.config import Settings
 from orbitmind.core.errors import IdempotencyConflictError, ValidationError
 from orbitmind.observation_geometry import persistence_service
 from orbitmind.observation_geometry.models import (
@@ -41,6 +47,7 @@ pytestmark = [
 UTC = dt.UTC
 START = dt.datetime(2019, 12, 9, 19, 50, tzinfo=UTC)
 _TABLES = ("observation_geometry_runs", "observation_geometry_requests")
+BASE = "/api/v1/observation-geometry"
 
 
 @pytest.fixture()
@@ -52,6 +59,36 @@ def pg_db() -> Database:
         conn.execute(text("TRUNCATE " + ", ".join(_TABLES) + " RESTART IDENTITY CASCADE"))
     yield db
     db.engine.dispose()
+
+
+@pytest.fixture()
+def pg_container(tmp_path: Path) -> AppContainer:
+    assert _PG_URL is not None
+    settings = Settings(
+        database_url=_PG_URL,
+        artifacts_dir=tmp_path / "artifacts",
+        cache_dir=tmp_path / "cache",
+        env="test",
+        evidence_signing_key="test-evidence-signing-key-0123456789abcdef",
+    )
+    container = AppContainer(settings=settings)
+    container.init_storage = lambda: None  # type: ignore[method-assign]
+    assert container.database.is_postgres
+    with container.database.engine.begin() as conn:
+        conn.execute(text("TRUNCATE " + ", ".join(_TABLES) + " RESTART IDENTITY CASCADE"))
+    yield container
+    container.database.engine.dispose()
+
+
+def _client(
+    container: AppContainer,
+    owner_id: str = "owner-a",
+    *,
+    raise_server_exceptions: bool = True,
+) -> TestClient:
+    app = create_app(container)
+    app.dependency_overrides[get_current_owner_id] = lambda: owner_id
+    return TestClient(app, raise_server_exceptions=raise_server_exceptions)
 
 
 def _registry_elements() -> PinnedOrbitElementSet:
@@ -82,6 +119,28 @@ def _counts(db: Database) -> tuple[int, int]:
         )
         run_count = session.scalar(select(func.count()).select_from(ObservationGeometryRunRow))
     return int(request_count or 0), int(run_count or 0)
+
+
+def _persist_api_fixture(
+    container: AppContainer,
+    *,
+    owner_id: str = "owner-a",
+    site_id: str = "SITE-PG",
+) -> tuple[str, str, str, str]:
+    request = _request(site_id)
+    with container.database.session() as session:
+        execution = execute_and_persist_geometry(
+            session=session,
+            owner_id=owner_id,
+            request=request,
+            idempotency_key=f"{owner_id}-{site_id}",
+        )
+    return (
+        execution.request_id,
+        execution.run_id,
+        execution.request_checksum,
+        execution.geometry_checksum,
+    )
 
 
 def test_postgres_geometry_execution_replay_owner_isolation_and_tamper(
@@ -296,3 +355,67 @@ def test_postgres_geometry_rollback_on_compute_failure(
         execute_and_persist_geometry(session=session, owner_id="owner-a", request=_request())
 
     assert _counts(pg_db) == (0, 0)
+
+
+def test_postgres_geometry_api_lists_details_and_preserves_owner_isolation(
+    pg_container: AppContainer,
+) -> None:
+    request_id, run_id, request_checksum, _geometry_checksum = _persist_api_fixture(
+        pg_container,
+        owner_id="owner-a",
+        site_id="SITE-PG-A",
+    )
+    _persist_api_fixture(pg_container, owner_id="owner-a", site_id="SITE-PG-B")
+    _persist_api_fixture(pg_container, owner_id="owner-b", site_id="SITE-PG-C")
+
+    with _client(pg_container, "owner-a") as client:
+        requests_page = client.get(f"{BASE}/requests", params={"limit": "1"})
+        assert requests_page.status_code == 200
+        assert requests_page.json()["total"] == 2
+        assert requests_page.json()["has_next"] is True
+
+        request_detail = client.get(f"{BASE}/requests/{request_id}")
+        assert request_detail.status_code == 200
+        assert request_detail.json()["request_checksum"] == request_checksum
+        assert "request_json" not in request_detail.json()
+
+        run_page = client.get(f"{BASE}/runs", params={"request_id": request_id})
+        assert run_page.status_code == 200
+        assert run_page.json()["total"] == 1
+        assert run_page.json()["items"][0]["id"] == run_id
+
+        run_detail = client.get(f"{BASE}/runs/{run_id}")
+        assert run_detail.status_code == 200
+        run_body = run_detail.json()
+        assert run_body["id"] == run_id
+        assert run_body["sample_count"] > 0
+        assert "result_json" not in run_body
+        assert "samples" not in run_body
+        assert "intervals" not in run_body
+
+    with _client(pg_container, "owner-b") as client:
+        request_response = client.get(f"{BASE}/requests/{request_id}")
+        run_response = client.get(f"{BASE}/runs/{run_id}")
+        assert request_response.status_code == 404
+        assert run_response.status_code == 404
+        assert request_checksum not in request_response.text
+        assert request_checksum not in run_response.text
+
+
+def test_postgres_geometry_api_tamper_maps_to_safe_error(
+    pg_container: AppContainer,
+) -> None:
+    _request_id, run_id, _request_checksum, _geometry_checksum = _persist_api_fixture(pg_container)
+    with pg_container.database.session() as session:
+        row = session.get(ObservationGeometryRunRow, run_id)
+        assert row is not None
+        row.geometry_checksum = "0" * 64
+        session.commit()
+
+    with _client(pg_container, "owner-a", raise_server_exceptions=False) as client:
+        response = client.get(f"{BASE}/runs/{run_id}")
+    assert response.status_code == 422
+    assert response.json()["code"] == "validation_error"
+    text = response.text.lower()
+    for forbidden in ("select ", "constraint", "postgres", "traceback", "result_json"):
+        assert forbidden not in text

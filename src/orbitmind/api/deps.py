@@ -109,3 +109,14 @@ def get_observation_planning_session(request: Request) -> Iterator[Session]:
         yield session
     finally:
         session.close()
+
+
+def get_observation_geometry_session(request: Request) -> Iterator[Session]:
+    """Yield a raw request-scoped session for read-only observation-geometry services."""
+
+    container = get_container(request)
+    session = container.database.session()
+    try:
+        yield session
+    finally:
+        session.close()
