@@ -11,12 +11,28 @@ from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+import orbitmind.observation_geometry.persistence_service as geometry_persistence_service
+import orbitmind.observation_geometry.service as geometry_service
 import orbitmind.observation_planning.orchestration as orchestration_module
 import orbitmind.observation_planning.provenance_execution as execution_module
+import orbitmind.persistence.observation_geometry_models  # noqa: F401 - register metadata
 import orbitmind.persistence.observation_planning_link_repository as link_repository_module
 from orbitmind.core.checksums import sha256_text
 from orbitmind.core.errors import IdempotencyConflictError, NotFoundError, ValidationError
+from orbitmind.observation_geometry.models import (
+    GeodeticPosition,
+    GeometryComputationRequest,
+    GroundObservationSite,
+    PinnedOrbitElementSet,
+)
+from orbitmind.observation_geometry.persistence_service import execute_and_persist_geometry
 from orbitmind.observation_planning import ProvenanceAnchoredPlanningExecution
+from orbitmind.observation_planning.geometry_eligibility_adapter import (
+    GEOMETRY_DERIVED_ACCESS_LIMITATION,
+    GEOMETRY_DERIVED_LIMITATION,
+    GeometryDerivedEligibilityResult,
+    derive_eligibility_from_geometry_run,
+)
 from orbitmind.observation_planning.provenance import (
     EligibilityDeclarationMode,
     EligibilityWindow,
@@ -62,6 +78,7 @@ from orbitmind.persistence.observation_planning_models import (
 from orbitmind.persistence.observation_planning_provenance_repository import (
     SqlAlchemyObservationPlanningProvenanceRepository,
 )
+from orbitmind.sources.registry import SourceRegistry
 
 
 def _checksum(label: str) -> str:
@@ -76,6 +93,49 @@ def _db(tmp_path: Path) -> Database:
 
 def _session(tmp_path: Path) -> Session:
     return _db(tmp_path).session()
+
+
+def _registry_elements() -> PinnedOrbitElementSet:
+    registry = SourceRegistry()
+    source = registry.get_source_record("ISS")
+    line1, line2 = registry.get_tle("ISS")
+    return PinnedOrbitElementSet(source=source, tle_line1=line1, tle_line2=line2)
+
+
+def _geometry_request(site_id: str = "SITE-ANCHOR") -> GeometryComputationRequest:
+    start = dt.datetime(2019, 12, 9, 19, 50, tzinfo=dt.UTC)
+    return GeometryComputationRequest(
+        elements=_registry_elements(),
+        site=GroundObservationSite(
+            site_id=site_id,
+            name=f"{site_id} geometry-derived anchored execution site",
+            position=GeodeticPosition(latitude_deg=0.0, longitude_deg=0.0, altitude_km=0.0),
+        ),
+        start=start,
+        end=start + dt.timedelta(minutes=25),
+        step_seconds=300,
+        minimum_elevation_deg=0.0,
+    )
+
+
+def _persist_geometry_derived_eligibility(
+    session: Session,
+    *,
+    owner_id: str = "owner-a",
+    site_id: str = "SITE-ANCHOR",
+) -> GeometryDerivedEligibilityResult:
+    geometry_execution = execute_and_persist_geometry(
+        session=session,
+        owner_id=owner_id,
+        request=_geometry_request(site_id),
+        idempotency_key=f"geometry-derived-anchored:{site_id}",
+    )
+    return derive_eligibility_from_geometry_run(
+        session=session,
+        owner_id=owner_id,
+        geometry_run_id=geometry_execution.run_id,
+        requested_by="geometry-analyst",
+    )
 
 
 def _rights(status: InputRightsStatus = InputRightsStatus.DECLARED) -> InputRightsDeclaration:
@@ -387,6 +447,137 @@ def test_exact_replay_reuses_request_run_plan_and_link(tmp_path: Path) -> None:
     assert second.observation_plan_id == first.observation_plan_id
     assert second.link_record_id == first.link_record_id
     assert second.link_checksum == first.link_checksum
+
+
+def test_geometry_derived_eligibility_enters_provenance_anchored_execution_and_replay(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with _session(tmp_path) as session:
+        derived = _persist_geometry_derived_eligibility(session)
+        stored_set = SqlAlchemyObservationPlanningProvenanceRepository(
+            session
+        ).get_eligibility_window_set(
+            derived.eligibility_set_record_id,
+            owner_id="owner-a",
+        )
+        assert stored_set is not None
+        selected_window_ids = tuple(window.id for window in stored_set.window_set.windows)
+        assert selected_window_ids
+        session.commit()
+
+        first = _execute(
+            session,
+            derived.eligibility_set_record_id,
+            requested_by="geometry-requester",
+            selected_window_ids=tuple(reversed(selected_window_ids)),
+        )
+        fetched = SqlAlchemyObservationPlanningLinkRepository(session).get_provenance_planning_link(
+            first.link_record_id,
+            owner_id="owner-a",
+        )
+        session.commit()
+
+        def fail_geometry_compute(*_args: object, **_kwargs: object) -> object:
+            raise AssertionError("anchored execution must not recompute geometry")
+
+        def fail_planner(request: object) -> object:
+            raise AssertionError("planner should not run on anchored replay")
+
+        monkeypatch.setattr(
+            geometry_persistence_service,
+            "compute_observation_geometry",
+            fail_geometry_compute,
+        )
+        monkeypatch.setattr(geometry_service, "compute_observation_geometry", fail_geometry_compute)
+        monkeypatch.setattr(orchestration_module, "plan_observation_request", fail_planner)
+        replay = _execute(
+            session,
+            derived.eligibility_set_record_id,
+            requested_by="geometry-requester",
+            selected_window_ids=selected_window_ids,
+        )
+
+    assert first.preparation.prepared_request.source_mode.value == "declared"
+    assert first.source_type == PinnedInputSourceType.DERIVED
+    assert first.source_verification_status == ScientificInputVerificationStatus.GEOMETRY_DERIVED
+    assert first.selected_window_ids == selected_window_ids
+    assert GEOMETRY_DERIVED_LIMITATION in first.preparation.limitations
+    assert GEOMETRY_DERIVED_ACCESS_LIMITATION in first.preparation.limitations
+    assert GEOMETRY_DERIVED_LIMITATION in first.link.limitations
+    assert GEOMETRY_DERIVED_ACCESS_LIMITATION in first.link.limitations
+    assert fetched is not None
+    assert fetched.selected_window_ids == selected_window_ids
+    assert fetched.link_checksum == first.link_checksum
+    assert replay.request_created is False
+    assert replay.run_created is False
+    assert replay.plan_created is False
+    assert replay.planning_request_id == first.planning_request_id
+    assert replay.planning_run_id == first.planning_run_id
+    assert replay.observation_plan_id == first.observation_plan_id
+    assert replay.link_record_id == first.link_record_id
+    assert replay.link_checksum == first.link_checksum
+
+
+def test_geometry_derived_anchored_execution_blocks_cross_owner(tmp_path: Path) -> None:
+    with _session(tmp_path) as session:
+        derived = _persist_geometry_derived_eligibility(session)
+        with pytest.raises(NotFoundError):
+            _execute(
+                session,
+                derived.eligibility_set_record_id,
+                owner_id="owner-b",
+                requested_by="owner-a",
+            )
+
+
+def test_geometry_derived_anchored_execution_rejects_authenticated_tamper(
+    tmp_path: Path,
+) -> None:
+    with _session(tmp_path) as session:
+        provenance_tamper = _persist_geometry_derived_eligibility(
+            session,
+            site_id="SITE-GEOM-PROV-TAMPER",
+        )
+        provenance_row = session.get(
+            ObservationInputProvenanceRow,
+            provenance_tamper.provenance_record_id,
+        )
+        assert provenance_row is not None
+        provenance_row.artifact_checksum = _checksum("geometry-derived-wrong-artifact")
+        session.commit()
+        with pytest.raises(ValidationError, match="artifact checksum"):
+            _execute(session, provenance_tamper.eligibility_set_record_id)
+
+        eligibility_tamper = _persist_geometry_derived_eligibility(
+            session,
+            site_id="SITE-GEOM-WINDOW-TAMPER",
+        )
+        window_row = session.scalar(
+            select(ObservationEligibilityWindowRow).where(
+                ObservationEligibilityWindowRow.set_id
+                == eligibility_tamper.eligibility_set_record_id
+            )
+        )
+        assert window_row is not None
+        window_row.asset_id = "SAT-TAMPERED"
+        session.commit()
+        with pytest.raises(ValidationError, match="asset"):
+            _execute(session, eligibility_tamper.eligibility_set_record_id)
+
+        link_tamper = _persist_geometry_derived_eligibility(
+            session,
+            site_id="SITE-GEOM-LINK-TAMPER",
+        )
+        execution = _execute(session, link_tamper.eligibility_set_record_id)
+        link_row = session.get(ObservationPlanningProvenanceLinkRow, execution.link_record_id)
+        assert link_row is not None
+        link_row.selected_window_ids_json = ["missing-geometry-window"]
+        with session.no_autoflush, pytest.raises(ValidationError, match="selected_window"):
+            SqlAlchemyObservationPlanningLinkRepository(session).get_provenance_planning_link(
+                execution.link_record_id,
+                owner_id="owner-a",
+            )
 
 
 def test_owner_isolation_and_requested_by_is_not_authority(tmp_path: Path) -> None:
@@ -1014,10 +1205,16 @@ def test_returns_typed_models_and_rejects_mutation(tmp_path: Path) -> None:
         execution.link_checksum = "changed"
 
 
-def test_no_provider_geometry_or_quantum_authority_imported() -> None:
+def test_geometry_derived_execution_source_guard_keeps_production_decoupled() -> None:
     source = Path(execution_module.__file__).read_text(encoding="utf-8")
+    assert "orbitmind.observation_geometry" not in source
+    assert "geometry_eligibility_adapter" not in source
+    assert "derive_eligibility_from_geometry_run" not in source
+    assert "compute_observation_geometry" not in source
+    assert "orbitmind.api" not in source
     assert "orbitmind.space" not in source
     assert "orbitmind.sources" not in source
+    assert "orbitmind.optimization.solvers" not in source
     assert "orbitmind.quantum" not in source
     assert "qiskit" not in source.lower()
     assert "Aer" not in source
