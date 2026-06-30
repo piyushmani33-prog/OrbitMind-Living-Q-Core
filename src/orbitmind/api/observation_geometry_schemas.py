@@ -12,11 +12,16 @@ import datetime as dt
 from pydantic import BaseModel, ConfigDict
 
 from orbitmind.governance.epistemic import EpistemicStatus
+from orbitmind.observation_geometry.models import GeometrySampleStatus, VisibilityRefinementStatus
 from orbitmind.observation_geometry.queries import (
+    ObservationGeometryIntervalPage,
+    ObservationGeometryIntervalSummary,
     ObservationGeometryRequestDetails,
     ObservationGeometryRequestSummary,
     ObservationGeometryRunDetails,
     ObservationGeometryRunSummary,
+    ObservationGeometrySamplePage,
+    ObservationGeometrySampleSummary,
 )
 
 OBSERVATION_GEOMETRY_DISCLAIMER = (
@@ -183,3 +188,112 @@ class ObservationGeometryRunListResponse(BaseModel):
     has_next: bool
     items: tuple[ObservationGeometryRunSummaryResponse, ...]
     disclaimer: str = OBSERVATION_GEOMETRY_DISCLAIMER
+
+
+class ObservationGeometrySampleResponse(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    sequence_index: int
+    timestamp: dt.datetime
+    status: GeometrySampleStatus
+    azimuth_deg: float | None
+    elevation_deg: float | None
+    slant_range_km: float | None
+    safe_error_code: str | None
+
+    @classmethod
+    def from_summary(
+        cls,
+        summary: ObservationGeometrySampleSummary,
+    ) -> ObservationGeometrySampleResponse:
+        return cls(**summary.model_dump())
+
+
+class ObservationGeometryIntervalResponse(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    sequence_index: int
+    rise_time: dt.datetime
+    set_time: dt.datetime
+    peak_time: dt.datetime
+    peak_elevation_deg: float
+    rise_azimuth_deg: float
+    set_azimuth_deg: float
+    rise_boundary_clipped: bool
+    set_boundary_clipped: bool
+    refinement_status: VisibilityRefinementStatus
+
+    @classmethod
+    def from_summary(
+        cls,
+        summary: ObservationGeometryIntervalSummary,
+    ) -> ObservationGeometryIntervalResponse:
+        return cls(**summary.model_dump())
+
+
+class ObservationGeometrySampleListResponse(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    run_id: str
+    request_id: str
+    geometry_checksum: str
+    total: int
+    limit: int
+    offset: int
+    has_next: bool
+    items: tuple[ObservationGeometrySampleResponse, ...]
+    limitations: tuple[str, ...]
+    disclaimer: str = OBSERVATION_GEOMETRY_DISCLAIMER
+
+    @classmethod
+    def from_page(
+        cls,
+        page: ObservationGeometrySamplePage,
+    ) -> ObservationGeometrySampleListResponse:
+        return cls(
+            run_id=page.run_id,
+            request_id=page.request_id,
+            geometry_checksum=page.geometry_checksum,
+            total=page.total,
+            limit=page.limit,
+            offset=page.offset,
+            has_next=page.has_next,
+            items=tuple(
+                ObservationGeometrySampleResponse.from_summary(item) for item in page.items
+            ),
+            limitations=page.limitations,
+        )
+
+
+class ObservationGeometryIntervalListResponse(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    run_id: str
+    request_id: str
+    geometry_checksum: str
+    total: int
+    limit: int
+    offset: int
+    has_next: bool
+    items: tuple[ObservationGeometryIntervalResponse, ...]
+    limitations: tuple[str, ...]
+    disclaimer: str = OBSERVATION_GEOMETRY_DISCLAIMER
+
+    @classmethod
+    def from_page(
+        cls,
+        page: ObservationGeometryIntervalPage,
+    ) -> ObservationGeometryIntervalListResponse:
+        return cls(
+            run_id=page.run_id,
+            request_id=page.request_id,
+            geometry_checksum=page.geometry_checksum,
+            total=page.total,
+            limit=page.limit,
+            offset=page.offset,
+            has_next=page.has_next,
+            items=tuple(
+                ObservationGeometryIntervalResponse.from_summary(item) for item in page.items
+            ),
+            limitations=page.limitations,
+        )

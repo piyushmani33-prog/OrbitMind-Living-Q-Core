@@ -13,9 +13,13 @@ from orbitmind.core.errors import NotFoundError, ValidationError
 from orbitmind.core.timeutils import ensure_utc
 from orbitmind.governance.epistemic import EpistemicStatus
 from orbitmind.observation_geometry.models import (
+    ComputedVisibilityInterval,
     GeometryComputationRequest,
     GeometryComputationResult,
+    GeometrySample,
+    GeometrySampleStatus,
     GroundObservationSite,
+    VisibilityRefinementStatus,
 )
 from orbitmind.persistence.observation_geometry_models import (
     ObservationGeometryRequestRow,
@@ -103,6 +107,69 @@ class ObservationGeometryRunDetails(BaseModel):
     result: GeometryComputationResult
 
 
+class ObservationGeometrySampleSummary(BaseModel):
+    """One authenticated geometry sample prepared for bounded read APIs."""
+
+    model_config = ConfigDict(frozen=True)
+
+    sequence_index: int
+    timestamp: dt.datetime
+    status: GeometrySampleStatus
+    azimuth_deg: float | None
+    elevation_deg: float | None
+    slant_range_km: float | None
+    safe_error_code: str | None
+
+
+class ObservationGeometryIntervalSummary(BaseModel):
+    """One authenticated visibility interval prepared for bounded read APIs."""
+
+    model_config = ConfigDict(frozen=True)
+
+    sequence_index: int
+    rise_time: dt.datetime
+    set_time: dt.datetime
+    peak_time: dt.datetime
+    peak_elevation_deg: float
+    rise_azimuth_deg: float
+    set_azimuth_deg: float
+    rise_boundary_clipped: bool
+    set_boundary_clipped: bool
+    refinement_status: VisibilityRefinementStatus
+
+
+class ObservationGeometrySamplePage(BaseModel):
+    """Bounded sample page with authenticated run identity."""
+
+    model_config = ConfigDict(frozen=True)
+
+    run_id: str
+    request_id: str
+    geometry_checksum: str
+    total: int
+    limit: int
+    offset: int
+    has_next: bool
+    items: tuple[ObservationGeometrySampleSummary, ...]
+    limitations: tuple[str, ...]
+
+
+class ObservationGeometryIntervalPage(BaseModel):
+    """Bounded visibility-interval page with authenticated run identity."""
+
+    model_config = ConfigDict(frozen=True)
+
+    run_id: str
+    request_id: str
+    geometry_checksum: str
+    total: int
+    limit: int
+    offset: int
+    has_next: bool
+    items: tuple[ObservationGeometryIntervalSummary, ...]
+    limitations: tuple[str, ...]
+
+
 def get_geometry_request(
     session: Session,
     *,
@@ -178,6 +245,68 @@ def get_geometry_run_for_request(
     return ObservationGeometryRunDetails(
         summary=_run_summary(row, stored.result),
         result=stored.result,
+    )
+
+
+def list_geometry_samples(
+    session: Session,
+    *,
+    owner_id: str,
+    run_id: str,
+    limit: int = _DEFAULT_LIMIT,
+    offset: int = 0,
+) -> ObservationGeometrySamplePage:
+    """Return an authenticated bounded page of samples for one run."""
+
+    limit, offset = _validate_page(limit, offset)
+    details = get_geometry_run(session, owner_id=owner_id, run_id=run_id)
+    samples = details.result.samples
+    items = tuple(
+        _sample_summary(index, sample)
+        for index, sample in enumerate(samples[offset : offset + limit], start=offset)
+    )
+    total = len(samples)
+    return ObservationGeometrySamplePage(
+        run_id=details.summary.id,
+        request_id=details.summary.request_id,
+        geometry_checksum=details.summary.geometry_checksum,
+        total=total,
+        limit=limit,
+        offset=offset,
+        has_next=offset + len(items) < total,
+        items=items,
+        limitations=details.summary.limitations,
+    )
+
+
+def list_geometry_intervals(
+    session: Session,
+    *,
+    owner_id: str,
+    run_id: str,
+    limit: int = _DEFAULT_LIMIT,
+    offset: int = 0,
+) -> ObservationGeometryIntervalPage:
+    """Return an authenticated bounded page of visibility intervals for one run."""
+
+    limit, offset = _validate_page(limit, offset)
+    details = get_geometry_run(session, owner_id=owner_id, run_id=run_id)
+    intervals = details.result.intervals
+    items = tuple(
+        _interval_summary(index, interval)
+        for index, interval in enumerate(intervals[offset : offset + limit], start=offset)
+    )
+    total = len(intervals)
+    return ObservationGeometryIntervalPage(
+        run_id=details.summary.id,
+        request_id=details.summary.request_id,
+        geometry_checksum=details.summary.geometry_checksum,
+        total=total,
+        limit=limit,
+        offset=offset,
+        has_next=offset + len(items) < total,
+        items=items,
+        limitations=details.summary.limitations,
     )
 
 
@@ -429,6 +558,36 @@ def _run_summary(
         limitations=result.limitations,
         created_at=row.created_at,
         completed_at=row.completed_at,
+    )
+
+
+def _sample_summary(index: int, sample: GeometrySample) -> ObservationGeometrySampleSummary:
+    return ObservationGeometrySampleSummary(
+        sequence_index=index,
+        timestamp=sample.timestamp,
+        status=sample.status,
+        azimuth_deg=sample.azimuth_deg,
+        elevation_deg=sample.elevation_deg,
+        slant_range_km=sample.slant_range_km,
+        safe_error_code=sample.safe_error_code,
+    )
+
+
+def _interval_summary(
+    index: int,
+    interval: ComputedVisibilityInterval,
+) -> ObservationGeometryIntervalSummary:
+    return ObservationGeometryIntervalSummary(
+        sequence_index=index,
+        rise_time=interval.rise_time,
+        set_time=interval.set_time,
+        peak_time=interval.peak_time,
+        peak_elevation_deg=interval.peak_elevation_deg,
+        rise_azimuth_deg=interval.rise_azimuth_deg,
+        set_azimuth_deg=interval.set_azimuth_deg,
+        rise_boundary_clipped=interval.rise_boundary_clipped,
+        set_boundary_clipped=interval.set_boundary_clipped,
+        refinement_status=interval.refinement_status,
     )
 
 
