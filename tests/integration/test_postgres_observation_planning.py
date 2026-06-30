@@ -13,7 +13,15 @@ import pytest
 from sqlalchemy import text, update
 from sqlalchemy.exc import IntegrityError
 
+import orbitmind.observation_planning.orchestration as orchestration_module
 from orbitmind.core.errors import IdempotencyConflictError, NotFoundError, ValidationError
+from orbitmind.observation_geometry.models import (
+    GeodeticPosition,
+    GeometryComputationRequest,
+    GroundObservationSite,
+    PinnedOrbitElementSet,
+)
+from orbitmind.observation_geometry.persistence_service import execute_and_persist_geometry
 from orbitmind.observation_planning import (
     AuthoritativePlanningSolver,
     ObservationPlanningRequest,
@@ -28,6 +36,9 @@ from orbitmind.observation_planning import (
     list_observation_plans,
     plan_observation_request,
     prepare_eligibility_backed_planning_request,
+)
+from orbitmind.observation_planning.geometry_eligibility_adapter import (
+    derive_eligibility_from_geometry_run,
 )
 from orbitmind.observation_planning.provenance import (
     EligibilityDeclarationMode,
@@ -68,6 +79,7 @@ from orbitmind.persistence.observation_planning_provenance_repository import (
 from orbitmind.persistence.observation_planning_repository import (
     SqlAlchemyObservationPlanningRepository,
 )
+from orbitmind.sources.registry import SourceRegistry
 
 _PG_URL = os.environ.get("ORBITMIND_TEST_POSTGRES_URL")
 
@@ -78,6 +90,8 @@ pytestmark = [
 ]
 
 _TABLES = (
+    "observation_geometry_runs",
+    "observation_geometry_requests",
     "observation_planning_provenance_links",
     "observation_eligibility_windows",
     "observation_eligibility_window_sets",
@@ -119,6 +133,29 @@ def _horizon() -> PlanningHorizon:
     return PlanningHorizon(
         start=dt.datetime(2026, 6, 21, 9, 0, tzinfo=dt.UTC),
         end=dt.datetime(2026, 6, 21, 12, 0, tzinfo=dt.UTC),
+    )
+
+
+def _geometry_elements() -> PinnedOrbitElementSet:
+    registry = SourceRegistry()
+    source = registry.get_source_record("ISS")
+    line1, line2 = registry.get_tle("ISS")
+    return PinnedOrbitElementSet(source=source, tle_line1=line1, tle_line2=line2)
+
+
+def _geometry_request(site_id: str) -> GeometryComputationRequest:
+    start = dt.datetime(2019, 12, 9, 19, 50, tzinfo=dt.UTC)
+    return GeometryComputationRequest(
+        elements=_geometry_elements(),
+        site=GroundObservationSite(
+            site_id=site_id,
+            name=f"{site_id} postgres geometry-derived anchored execution site",
+            position=GeodeticPosition(latitude_deg=0.0, longitude_deg=0.0, altitude_km=0.0),
+        ),
+        start=start,
+        end=start + dt.timedelta(minutes=25),
+        step_seconds=300,
+        minimum_elevation_deg=0.0,
     )
 
 
@@ -719,6 +756,53 @@ def test_postgres_provenance_anchored_execution_replay_and_changed_subset(
     assert changed.link_record_id != first.link_record_id
     assert changed.preparation_checksum != first.preparation_checksum
     assert _exec(pg_db, "SELECT count(*) FROM observation_planning_provenance_links")[0][0] == 2
+
+
+def test_postgres_geometry_derived_anchored_replay_skips_planner(
+    pg_db: Database,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with pg_db.session() as session:
+        geometry = execute_and_persist_geometry(
+            session=session,
+            owner_id="owner-a",
+            request=_geometry_request("SITE-PG-ANCHOR"),
+            idempotency_key="pg-geometry-derived-anchor",
+        )
+        derived = derive_eligibility_from_geometry_run(
+            session=session,
+            owner_id="owner-a",
+            geometry_run_id=geometry.run_id,
+            requested_by="pg-geometry-analyst",
+        )
+        first = execute_provenance_anchored_planning(
+            session=session,
+            owner_id="owner-a",
+            eligibility_set_id=derived.eligibility_set_record_id,
+            requested_by="pg-geometry-requester",
+        )
+
+        def fail_planner(request: object) -> object:
+            raise AssertionError("planner should not run on postgres anchored replay")
+
+        monkeypatch.setattr(orchestration_module, "plan_observation_request", fail_planner)
+        replay = execute_provenance_anchored_planning(
+            session=session,
+            owner_id="owner-a",
+            eligibility_set_id=derived.eligibility_set_record_id,
+            requested_by="pg-geometry-requester",
+        )
+        session.commit()
+
+    assert first.source_type == PinnedInputSourceType.DERIVED
+    assert first.source_verification_status == ScientificInputVerificationStatus.GEOMETRY_DERIVED
+    assert replay.request_created is False
+    assert replay.run_created is False
+    assert replay.plan_created is False
+    assert replay.planning_request_id == first.planning_request_id
+    assert replay.planning_run_id == first.planning_run_id
+    assert replay.link_record_id == first.link_record_id
+    assert replay.link_checksum == first.link_checksum
 
 
 def test_postgres_provenance_anchored_conflict_owner_and_tamper(

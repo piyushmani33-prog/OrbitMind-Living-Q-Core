@@ -244,6 +244,28 @@ class SqlAlchemyObservationPlanningRepository:
         row = self._run_row(run_id, _owner(owner_id))
         return self._row_to_run(row) if row is not None else None
 
+    def get_latest_planning_run_for_request(
+        self, request_id: str, *, owner_id: str
+    ) -> StoredObservationPlanningRun | None:
+        """Return the most recent authenticated run for an owner-scoped request."""
+
+        row = (
+            self._s.execute(
+                select(ObservationPlanningRunRow)
+                .where(
+                    ObservationPlanningRunRow.request_id == request_id,
+                    ObservationPlanningRunRow.owner_id == _owner(owner_id),
+                )
+                .order_by(
+                    ObservationPlanningRunRow.created_at.desc(),
+                    ObservationPlanningRunRow.id.desc(),
+                )
+            )
+            .scalars()
+            .first()
+        )
+        return self._row_to_run(row) if row is not None else None
+
     def get_planning_run_by_scientific_identity(
         self, *, request_id: str, identity_checksum: str
     ) -> StoredObservationPlanningRun | None:

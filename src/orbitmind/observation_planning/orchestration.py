@@ -102,6 +102,27 @@ def _execute_observation_planning_in_transaction(
         use_savepoint=use_repository_savepoint,
     )
     request_created = preexisting_request is None
+    if preexisting_request is not None:
+        existing_run = repo.get_latest_planning_run_for_request(
+            stored_request.id,
+            owner_id=stored_request.owner_id,
+        )
+        if existing_run is not None:
+            return PersistedObservationPlanningExecution(
+                request_id=stored_request.id,
+                run_id=existing_run.id,
+                plan_id=existing_run.plan_id,
+                owner_id=stored_request.owner_id,
+                request_created=False,
+                run_created=False,
+                plan_created=False,
+                result=existing_run.result,
+                request_checksum=existing_run.result.request_checksum,
+                problem_checksum=existing_run.result.problem_checksum,
+                scientific_identity_checksum=existing_run.scientific_identity_checksum,
+                final_status=existing_run.result.status,
+                feasible=existing_run.result.feasible,
+            )
 
     result = planning_service(request)
     validate_persistable_planning_result(result)
