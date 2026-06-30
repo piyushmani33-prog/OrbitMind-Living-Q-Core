@@ -40,9 +40,10 @@ PREPARATION_SCHEMA_VERSION: Literal["1"] = "1"
 PREPARATION_DERIVATION_RULE = "eligibility-windows-to-declared-opportunities"
 PREPARATION_DERIVATION_RULE_VERSION = "eligibility-planning-preparation-v1"
 PREPARATION_LIMITATION = (
-    "Prepared from authenticated fixture-backed or user-declared eligibility windows; "
-    "no orbital access geometry, visibility, taskability, approval, command readiness, "
-    "planning execution, or quantum authority is claimed."
+    "Prepared from authenticated fixture-backed, user-declared, or geometry-derived "
+    "eligibility windows; no live tracking, operational access, taskability, approval, "
+    "command readiness, signed receipt status, planning execution, or quantum authority "
+    "is claimed."
 )
 _MAX_SELECTED_WINDOWS = 24
 

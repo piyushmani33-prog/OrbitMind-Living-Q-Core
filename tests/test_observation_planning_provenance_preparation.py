@@ -11,8 +11,22 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 
 import orbitmind.observation_planning.provenance_preparation as preparation_module
+import orbitmind.persistence.observation_geometry_models  # noqa: F401 - register metadata
 from orbitmind.core.checksums import sha256_text
 from orbitmind.core.errors import NotFoundError, ValidationError
+from orbitmind.observation_geometry.models import (
+    GeodeticPosition,
+    GeometryComputationRequest,
+    GroundObservationSite,
+    PinnedOrbitElementSet,
+)
+from orbitmind.observation_geometry.service import compute_observation_geometry
+from orbitmind.observation_planning.geometry_eligibility_adapter import (
+    GEOMETRY_DERIVED_ACCESS_LIMITATION,
+    GEOMETRY_DERIVED_LIMITATION,
+    GeometryDerivedEligibilityResult,
+    derive_eligibility_from_geometry_run,
+)
 from orbitmind.observation_planning.models import planning_request_checksum
 from orbitmind.observation_planning.provenance import (
     EligibilityDeclarationMode,
@@ -34,6 +48,9 @@ from orbitmind.observation_planning.provenance_preparation import (
     prepare_eligibility_backed_planning_request,
 )
 from orbitmind.persistence.database import Database
+from orbitmind.persistence.observation_geometry_repository import (
+    SqlAlchemyObservationGeometryRepository,
+)
 from orbitmind.persistence.observation_planning_models import (
     ObservationEligibilityWindowRow,
     ObservationEligibilityWindowSetRow,
@@ -46,6 +63,7 @@ from orbitmind.persistence.observation_planning_provenance_repository import (
     SqlAlchemyObservationPlanningProvenanceRepository,
     StoredEligibilityWindowSet,
 )
+from orbitmind.sources.registry import SourceRegistry
 
 
 def _checksum(label: str) -> str:
@@ -60,6 +78,61 @@ def _db(tmp_path: Path) -> Database:
 
 def _session(tmp_path: Path) -> Session:
     return _db(tmp_path).session()
+
+
+def _registry_elements() -> PinnedOrbitElementSet:
+    registry = SourceRegistry()
+    source = registry.get_source_record("ISS")
+    line1, line2 = registry.get_tle("ISS")
+    return PinnedOrbitElementSet(source=source, tle_line1=line1, tle_line2=line2)
+
+
+def _geometry_request(
+    *,
+    site_id: str = "SITE-PREP",
+    minimum_elevation_deg: float = 0.0,
+) -> GeometryComputationRequest:
+    start = dt.datetime(2019, 12, 9, 19, 50, tzinfo=dt.UTC)
+    return GeometryComputationRequest(
+        elements=_registry_elements(),
+        site=GroundObservationSite(
+            site_id=site_id,
+            name=f"{site_id} geometry-derived preparation site",
+            position=GeodeticPosition(latitude_deg=0.0, longitude_deg=0.0, altitude_km=0.0),
+        ),
+        start=start,
+        end=start + dt.timedelta(minutes=25),
+        step_seconds=300,
+        minimum_elevation_deg=minimum_elevation_deg,
+    )
+
+
+def _derive_geometry_eligibility(
+    db: Database,
+    *,
+    owner_id: str = "owner-a",
+    site_id: str = "SITE-PREP",
+    minimum_elevation_deg: float = 0.0,
+) -> GeometryDerivedEligibilityResult:
+    request = _geometry_request(site_id=site_id, minimum_elevation_deg=minimum_elevation_deg)
+    result = compute_observation_geometry(request)
+    with db.session() as session:
+        geometry_repo = SqlAlchemyObservationGeometryRepository(session)
+        stored_request = geometry_repo.create_geometry_request(request, owner_id=owner_id)
+        stored_run = geometry_repo.persist_geometry_result(
+            request_id=stored_request.request.id,
+            owner_id=owner_id,
+            result=result,
+        )
+        session.commit()
+        run_id = stored_run.run.id
+    with db.session() as session:
+        return derive_eligibility_from_geometry_run(
+            session=session,
+            owner_id=owner_id,
+            geometry_run_id=run_id,
+            requested_by="geometry-analyst",
+        )
 
 
 def _rights(status: InputRightsStatus = InputRightsStatus.DECLARED) -> InputRightsDeclaration:
@@ -250,7 +323,8 @@ def test_prepare_fixture_backed_eligibility(tmp_path: Path) -> None:
     )
     assert prepared.selected_window_ids == ("W1", "W2")
     assert len(prepared.prepared_request.opportunities) == 2
-    assert "no orbital access geometry" in prepared.limitations[-1]
+    assert "geometry-derived eligibility windows" in prepared.limitations[-1]
+    assert "no live tracking" in prepared.limitations[-1]
 
 
 def test_prepare_user_declared_and_derived_eligibility(tmp_path: Path) -> None:
@@ -272,6 +346,141 @@ def test_prepare_user_declared_and_derived_eligibility(tmp_path: Path) -> None:
     assert derived_prepared.eligibility_verification_status == (
         ScientificInputVerificationStatus.DERIVED_FROM_DECLARED
     )
+
+
+def test_prepare_geometry_derived_eligibility_preserves_status_and_honesty(
+    tmp_path: Path,
+) -> None:
+    db = _db(tmp_path)
+    derived = _derive_geometry_eligibility(db)
+
+    with db.session() as session:
+        stored_set = _repo(session).get_eligibility_window_set(
+            derived.eligibility_set_record_id,
+            owner_id="owner-a",
+        )
+        assert stored_set is not None
+        prepared = prepare_eligibility_backed_planning_request(
+            session=session,
+            owner_id="owner-a",
+            requested_by="planning-analyst",
+            eligibility_set_id=stored_set.id,
+        )
+
+    assert prepared.eligibility_source_type == PinnedInputSourceType.DERIVED
+    assert prepared.eligibility_verification_status == (
+        ScientificInputVerificationStatus.GEOMETRY_DERIVED
+    )
+    assert prepared.selected_window_ids == tuple(
+        window.id for window in stored_set.window_set.windows
+    )
+    assert GEOMETRY_DERIVED_LIMITATION in prepared.limitations
+    assert GEOMETRY_DERIVED_ACCESS_LIMITATION in prepared.limitations
+    assert any("geometry-derived eligibility windows" in item for item in prepared.limitations)
+    assert prepared.prepared_request.source_mode.value == "declared"
+    assert len(prepared.prepared_request.opportunities) == derived.window_count
+
+    joined = " ".join(prepared.limitations).lower()
+    for required_denial in (
+        "no live tracking",
+        "operational access",
+        "taskability",
+        "command readiness",
+        "approval",
+        "signed receipt",
+        "quantum authority",
+    ):
+        assert required_denial in joined
+    for forbidden_claim in (
+        "operationally verified",
+        "access confirmed",
+        "verified visibility",
+        "taskable",
+        "command approved",
+        "live validated",
+        "quantum-authoritative",
+    ):
+        assert forbidden_claim not in joined
+
+
+def test_zero_window_geometry_derived_eligibility_is_not_prepared(tmp_path: Path) -> None:
+    db = _db(tmp_path)
+    derived = _derive_geometry_eligibility(
+        db,
+        site_id="SITE-NO-WINDOWS",
+        minimum_elevation_deg=80.0,
+    )
+    assert derived.window_count == 0
+
+    with db.session() as session:
+        with pytest.raises(ValidationError, match="contains no windows"):
+            prepare_eligibility_backed_planning_request(
+                session=session,
+                owner_id="owner-a",
+                requested_by="planning-analyst",
+                eligibility_set_id=derived.eligibility_set_record_id,
+            )
+        assert _planning_counts(session) == (0, 0, 0)
+
+
+def test_geometry_derived_preparation_preserves_owner_isolation(tmp_path: Path) -> None:
+    db = _db(tmp_path)
+    derived = _derive_geometry_eligibility(db)
+
+    with db.session() as session, pytest.raises(NotFoundError):
+        prepare_eligibility_backed_planning_request(
+            session=session,
+            owner_id="owner-b",
+            requested_by="owner-a",
+            eligibility_set_id=derived.eligibility_set_record_id,
+        )
+
+
+def test_geometry_derived_tamper_is_detected_during_preparation(tmp_path: Path) -> None:
+    db = _db(tmp_path)
+    provenance_tamper = _derive_geometry_eligibility(db, site_id="SITE-PROV-TAMPER")
+    with db.session() as session:
+        source_row = session.get(
+            ObservationInputProvenanceRow,
+            provenance_tamper.provenance_record_id,
+        )
+        assert source_row is not None
+        source_row.artifact_checksum = _checksum("tampered-geometry-provenance")
+        session.commit()
+
+    with db.session() as session, pytest.raises(ValidationError, match="artifact checksum"):
+        prepare_eligibility_backed_planning_request(
+            session=session,
+            owner_id="owner-a",
+            requested_by="planning-analyst",
+            eligibility_set_id=provenance_tamper.eligibility_set_record_id,
+        )
+
+    set_tamper = _derive_geometry_eligibility(db, site_id="SITE-SET-TAMPER")
+    with db.session() as session:
+        set_row = session.get(
+            ObservationEligibilityWindowSetRow,
+            set_tamper.eligibility_set_record_id,
+        )
+        assert set_row is not None
+        snapshot = dict(set_row.eligibility_set_json)
+        snapshot["limitations"] = ["tampered geometry-derived limitation"]
+        set_row.eligibility_set_json = snapshot
+        session.commit()
+
+    with (
+        db.session() as session,
+        pytest.raises(
+            ValidationError,
+            match=r"limitation|checksum|snapshot",
+        ),
+    ):
+        prepare_eligibility_backed_planning_request(
+            session=session,
+            owner_id="owner-a",
+            requested_by="planning-analyst",
+            eligibility_set_id=set_tamper.eligibility_set_record_id,
+        )
 
 
 def test_selection_policy_uses_all_by_default_and_canonical_subset_order(tmp_path: Path) -> None:
@@ -553,8 +762,13 @@ def test_no_solver_provider_geometry_or_quantum_path_is_invoked(
     source = Path(preparation_module.__file__).read_text(encoding="utf-8")
     assert "plan_observation_request" not in source
     assert "execute_observation_planning" not in source
+    assert "execute_provenance_anchored_planning" not in source
+    assert "derive_eligibility_from_geometry_run" not in source
+    assert "compute_observation_geometry" not in source
     assert "orbitmind.space" not in source
     assert "orbitmind.sources" not in source
+    assert "orbitmind.api" not in source
+    assert "orbitmind.optimization.solvers" not in source
     assert "orbitmind.quantum" not in source
 
 
