@@ -300,7 +300,8 @@ There are no unredacted sidecar internals unless explicitly safe.
 
 Future gates are planning checkpoints only:
 
-- Phase 5.3 API contract planning/specification, still docs/spec first;
+- [Phase 5.3 API contract planning/specification](VISUAL_MANIFEST_API_CONTRACT.md),
+  still docs/spec first;
 - future read-only manifest API implementation only after API contract review;
 - report specification after manifest semantics;
 - provenance/study graph specification after manifest identity/linking
