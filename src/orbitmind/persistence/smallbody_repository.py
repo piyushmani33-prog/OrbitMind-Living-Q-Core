@@ -217,6 +217,9 @@ class SqlAlchemySmallBodyRepository:
                 created_at=utcnow(),
             )
         )
+        # Ensure the query-run row exists before inserting nullable-FK close-approach rows;
+        # PostgreSQL enforces query_run_id during flush.
+        self._s.flush()
         for ca in result.records:
             self._s.add(
                 CloseApproachRow(
