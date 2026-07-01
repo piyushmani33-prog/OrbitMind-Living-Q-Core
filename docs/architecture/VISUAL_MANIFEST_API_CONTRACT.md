@@ -296,6 +296,12 @@ Future implementation should avoid transaction ownership mistakes.
 
 Future implementation should return safe DTOs only.
 
+Phase 5.4 mission v1 should source scientific context from persisted database
+records only. It should not read sidecar JSON or image files. It should omit
+sidecar-only fields such as per-artifact units and per-artifact sidecar
+verification. Per-artifact sidecar scientific context and file checksum
+re-authentication are deferred to a future reviewed slice.
+
 ## Scientific-honesty boundaries
 
 Manifest is discovery/index, not verification by itself.
