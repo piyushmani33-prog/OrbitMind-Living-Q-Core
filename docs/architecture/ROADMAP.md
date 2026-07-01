@@ -95,6 +95,10 @@ signed receipt claims, or quantum authority. See
 Larger instances / additional solvers, still classical-baseline-first and bounded.
 
 ## Phase 5 — Advanced visual intelligence
+Phase 5 begins with a visual-intelligence boundary and existing-artifact
+interpretation guide before any UI, manifest API, report, graph, map, or dashboard
+work. See [VISUAL_INTELLIGENCE_BOUNDARY.md](VISUAL_INTELLIGENCE_BOUNDARY.md).
+
 Interactive charts, maps (Leaflet), CesiumJS orbit view, D3 provenance graph,
 dashboards & reports.
 
