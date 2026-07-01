@@ -124,7 +124,7 @@ receipts, or command surfaces.
 
 Future gates are planning checkpoints only, not active implementation:
 
-- Phase 5.2 visual manifest planning/specification;
+- [Phase 5.2 visual manifest planning/specification](VISUAL_MANIFEST_SPECIFICATION.md);
 - future read-only visual manifest API, only after manifest semantics are
   approved;
 - static report specification, not PDF/export implementation yet;
