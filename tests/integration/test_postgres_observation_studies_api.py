@@ -229,3 +229,70 @@ def test_postgres_observation_study_api_success_owner_mismatch_and_tamper(
     assert tampered.status_code == 422
     assert tampered.json()["code"] == "validation_error"
     _assert_safe_error(tampered)
+
+
+def test_postgres_observation_study_integrity_summary_api_success_owner_mismatch_and_tamper(
+    pg_container: AppContainer,
+) -> None:
+    run_id, _request_id, execution = _persist_chain(
+        pg_container,
+        site_id="SITE-PG-STUDY-INTEGRITY-A",
+    )
+    other_run_id, _other_request_id, _other_execution = _persist_chain(
+        pg_container,
+        site_id="SITE-PG-STUDY-INTEGRITY-B",
+    )
+    owner_b_run_id, _owner_b_request_id, _owner_b_execution = _persist_chain(
+        pg_container,
+        owner_id="owner-b",
+        site_id="SITE-PG-STUDY-INTEGRITY-C",
+    )
+    route = f"{BASE}/geometry-planning-chain/integrity-summary"
+
+    with _client(pg_container, "owner-a") as owner_a:
+        success = owner_a.get(route, params=_params(run_id, execution))
+        mismatch = owner_a.get(route, params=_params(other_run_id, execution))
+    with _client(pg_container, "owner-b") as owner_b:
+        hidden_geometry = owner_b.get(route, params=_params(run_id, execution))
+        hidden_link = owner_b.get(route, params=_params(owner_b_run_id, execution))
+
+    assert success.status_code == 200
+    body = success.json()
+    assert body["owner_id"] == "owner-a"
+    assert body["geometry_run_id"] == run_id
+    assert body["eligibility_set_id"] == execution.eligibility_set_record_id
+    assert body["planning_request_id"] == execution.planning_request_id
+    assert body["planning_run_id"] == execution.planning_run_id
+    assert body["provenance_link_id"] == execution.link_record_id
+    assert body["provenance_link_checksum"] == execution.link_checksum
+    assert body["status"] == "chain-checks-consistent"
+    assert body["overall_passed"] is True
+    assert body["failed_check_count"] == 0
+    assert all(check["passed"] for check in body["checks"])
+    assert "checksum and stored-record consistency" in body["limitations"][-1]
+    assert "does not prove live tracking" in body["disclaimer"]
+    assert "result_json" not in success.text
+    assert "request_json" not in success.text
+    assert "link_json" not in success.text
+    assert "tle_line" not in success.text
+
+    assert mismatch.status_code == 422
+    assert hidden_geometry.status_code == 404
+    assert hidden_link.status_code == 404
+    for response in (mismatch, hidden_geometry, hidden_link):
+        assert "chain-checks-consistent" not in response.text
+        _assert_safe_error(response)
+
+    with pg_container.database.session() as session:
+        row = session.get(ObservationGeometryRunRow, run_id)
+        assert row is not None
+        row.geometry_checksum = sha256_text("pg-api-study-integrity-tampered-geometry")
+        session.commit()
+
+    with _client(pg_container, "owner-a", raise_server_exceptions=False) as owner_a:
+        tampered = owner_a.get(route, params=_params(run_id, execution))
+
+    assert tampered.status_code == 422
+    assert tampered.json()["code"] == "validation_error"
+    assert "chain-checks-consistent" not in tampered.text
+    _assert_safe_error(tampered)
