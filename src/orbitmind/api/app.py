@@ -20,6 +20,7 @@ from orbitmind.api.routers.memory import router as memory_router
 from orbitmind.api.routers.missions import router as missions_router
 from orbitmind.api.routers.observation_geometry import router as observation_geometry_router
 from orbitmind.api.routers.observation_planning import router as observation_planning_router
+from orbitmind.api.routers.observation_studies import router as observation_studies_router
 from orbitmind.api.routers.optimization import router as optimization_router
 from orbitmind.api.routers.small_bodies import router as small_bodies_router
 from orbitmind.api.routers.sources import router as sources_router
@@ -62,6 +63,7 @@ def create_app(container: AppContainer | None = None) -> FastAPI:
     app.include_router(optimization_router)
     app.include_router(observation_geometry_router)
     app.include_router(observation_planning_router)
+    app.include_router(observation_studies_router)
     return app
 
 
