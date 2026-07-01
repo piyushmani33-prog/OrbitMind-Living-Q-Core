@@ -136,6 +136,34 @@ Existing response disclaimer:
 > operational access, taskability, command readiness, approval, signed receipt status,
 > or quantum authority.
 
+## Optional: Retrieve a compact integrity summary
+
+When a compact consistency view is enough, use the same `geometry_run_id` and
+`provenance_link_id` with the optional integrity-summary route:
+
+```http
+GET /api/v1/observation-studies/geometry-planning-chain/integrity-summary?geometry_run_id={geometry_run_id}&provenance_link_id={link_id}
+```
+
+This route is a read-only record-integrity summary over the same persisted records
+used by the full study-chain route. A successful response returns status exactly
+`chain-checks-consistent` and summarizes read-time checksum and stored-record
+consistency for pinned/offline geometry-derived eligibility and classical planning
+records.
+
+The integrity-summary route is success-only and fail-closed. If the underlying
+chain fails authentication, mismatch, owner-isolation, or tamper checks, the API
+returns typed errors such as `404` or sanitized `422`. It does not return a
+failed-summary wire shape.
+
+This route does not replace the full study-chain route. Use the full study-chain
+route when detailed geometry, eligibility, and planning traceability is needed. Use
+the integrity-summary route when the compact consistency summary is enough.
+
+The integrity summary is not real-world authenticity, live tracking, operational
+access, taskability, command readiness, approval, a signed receipt, or
+quantum-authoritative.
+
 ## Replay and idempotency behavior
 
 The first successful provenance-anchored execution may return `201 Created`.
