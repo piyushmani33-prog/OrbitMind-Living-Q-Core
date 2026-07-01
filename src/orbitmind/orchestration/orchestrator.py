@@ -85,6 +85,9 @@ class PrimeOrchestrator:
         with self._db.session() as session:
             repo = SqlAlchemyMissionRepository(session)
             repo.add_mission(mission)
+            # Ensure the mission row exists before inserting nullable-FK audit rows;
+            # PostgreSQL enforces the mission_id foreign key during flush.
+            session.flush()
             repo.add_audit_event(
                 AuditEvent(
                     mission_id=mission.id,

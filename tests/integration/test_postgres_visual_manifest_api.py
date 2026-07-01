@@ -1,15 +1,9 @@
 """Live PostgreSQL API tests for the mission visual manifest route.
 
-Seeding note: the mission is persisted directly through the repository (parent
-mission flushed before child artifact/finding rows), not through the mission
-orchestrator HTTP endpoint. The orchestrator's ``_persist_received`` adds a
-mission plus a nullable-FK ``audit_events`` row in one session; SQLAlchemy does
-not force parent-before-child insert ordering for a nullable FK, so that path
-raises a ``ForeignKeyViolation`` on PostgreSQL (masked on SQLite, which does not
-enforce FKs). That is a pre-existing mission-persistence issue, out of Phase 5.4
-scope, tracked separately. Direct seeding validates the read-only manifest route
-on migrated PostgreSQL and also proves the route never reads artifact files
-(none are ever written here).
+Seeding note: the mission is persisted directly through the repository so this
+test stays focused on the read-only manifest route rather than mission creation.
+Direct seeding validates the route on migrated PostgreSQL and proves it never
+reads artifact files (none are ever written here).
 """
 
 from __future__ import annotations
