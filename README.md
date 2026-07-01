@@ -302,7 +302,8 @@ status, checksum). Binary images are never stored in the database.
 
 Phase 2 real connectors → Phase 3A small-body intelligence → Phase 3B scientific
 memory + deterministic retrieval (PostgreSQL) → **Phase 4A bounded classical-vs-quantum
-(Aer) scheduling benchmark** → Phase 4B+ optimization → Phase 5 advanced visuals →
+(Aer) scheduling benchmark** → Phase 4B–4F bounded offline observation study chain
+(complete) → further optimization (planned) → Phase 5 advanced visuals →
 Phase 6 Tool Forge → Phase 7 Research Autopilot → Phase 8 cloud hardening.
 See [`docs/architecture/ROADMAP.md`](docs/architecture/ROADMAP.md).
 
