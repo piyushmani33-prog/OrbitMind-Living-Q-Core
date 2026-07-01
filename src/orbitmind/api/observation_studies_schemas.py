@@ -21,6 +21,7 @@ from orbitmind.observation_planning.provenance import (
     ScientificInputVerificationStatus,
 )
 from orbitmind.observation_studies.models import ObservationStudyChain
+from orbitmind.observation_studies.reports import ObservationStudyChainIntegritySummary
 
 OBSERVATION_STUDY_DISCLAIMER = (
     "This is read-only authenticated traceability over pinned/offline geometry-derived "
@@ -159,4 +160,68 @@ class ObservationStudyChainResponse(BaseModel):
                 ObservationStudyCheckResponse(**check.model_dump()) for check in chain.checks
             ),
             limitations=chain.limitations,
+        )
+
+
+class ObservationStudyIntegrityCheckResponse(BaseModel):
+    """One safe read-time record consistency check."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    name: str
+    passed: bool
+    details: str
+
+
+class ObservationStudyIntegritySummaryResponse(BaseModel):
+    """Safe HTTP projection of a study-chain integrity summary."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    owner_id: str
+    geometry_run_id: str
+    geometry_run_checksum: str
+    source_identity_checksum: str
+    eligibility_set_id: str
+    eligibility_set_checksum: str
+    planning_request_id: str
+    planning_run_id: str
+    observation_plan_id: str | None
+    provenance_link_id: str
+    provenance_link_checksum: str
+    status: str
+    overall_passed: bool
+    check_count: int
+    failed_check_count: int
+    checks: tuple[ObservationStudyIntegrityCheckResponse, ...]
+    limitations: tuple[str, ...]
+    disclaimer: str
+
+    @classmethod
+    def from_summary(
+        cls,
+        summary: ObservationStudyChainIntegritySummary,
+    ) -> ObservationStudyIntegritySummaryResponse:
+        return cls(
+            owner_id=summary.owner_id,
+            geometry_run_id=summary.geometry_run_id,
+            geometry_run_checksum=summary.geometry_run_checksum,
+            source_identity_checksum=summary.source_identity_checksum,
+            eligibility_set_id=summary.eligibility_set_id,
+            eligibility_set_checksum=summary.eligibility_set_checksum,
+            planning_request_id=summary.planning_request_id,
+            planning_run_id=summary.planning_run_id,
+            observation_plan_id=summary.observation_plan_id,
+            provenance_link_id=summary.provenance_link_id,
+            provenance_link_checksum=summary.provenance_link_checksum,
+            status=summary.status,
+            overall_passed=summary.overall_passed,
+            check_count=summary.check_count,
+            failed_check_count=summary.failed_check_count,
+            checks=tuple(
+                ObservationStudyIntegrityCheckResponse(**check.model_dump())
+                for check in summary.checks
+            ),
+            limitations=summary.limitations,
+            disclaimer=summary.disclaimer,
         )
