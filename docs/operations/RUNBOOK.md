@@ -15,6 +15,10 @@ the few operational tasks that exist today; cloud/DR hardening is Phase 8.
 - `GET /version` — component versions.
 - `GET /api/v1/system/capabilities` — declared capabilities + availability.
 
+For the read-only offline observation study API flow that links persisted
+geometry-derived eligibility to provenance-anchored planning records, see
+[`docs/development/OBSERVATION_STUDY_API_FLOW.md`](../development/OBSERVATION_STUDY_API_FLOW.md).
+
 A non-200 or `"database":"unavailable"` indicates the SQLite file/path is missing
 or unwritable — check `ORBITMIND_DATABASE_URL` and the `data/` directory.
 

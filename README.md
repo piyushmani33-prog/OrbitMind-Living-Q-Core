@@ -97,6 +97,10 @@ Returns a typed `MissionDetailResponse` with `status`, `epistemic_status`,
 Retrieve later with `GET /api/v1/missions/{mission_id}` and
 `GET /api/v1/missions/{mission_id}/artifacts`.
 
+For the completed offline geometry-derived eligibility to provenance-anchored
+planning study flow, see
+[`docs/development/OBSERVATION_STUDY_API_FLOW.md`](docs/development/OBSERVATION_STUDY_API_FLOW.md).
+
 ## Data sources (Phase 2)
 
 Missions default to bundled **sample** data and run fully offline. An optional
