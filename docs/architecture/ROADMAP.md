@@ -80,6 +80,13 @@ conclusions; bounded scientific-memory entity links; visual artifacts + sidecars
 **No quantum-advantage claim; quantum never controls a production mission** (ADR-0024–0029).
 See [QUANTUM_OPTIMIZATION_BOUNDARY.md](QUANTUM_OPTIMIZATION_BOUNDARY.md).
 
+### Phase 4B-4D - Offline observation study chain (complete)
+Bounded observation planning, deterministic offline observation geometry, geometry-derived
+eligibility, provenance-anchored execution, and read-only observation study chain APIs are
+implemented without live tracking, taskability, command readiness, approval, signed receipt
+claims, or quantum authority. See
+[OBSERVATION_STUDY_API_FLOW.md](../development/OBSERVATION_STUDY_API_FLOW.md).
+
 ### Phase 4B+ (planned)
 Larger instances / additional solvers, still classical-baseline-first and bounded.
 
