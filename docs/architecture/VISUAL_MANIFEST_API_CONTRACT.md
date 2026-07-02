@@ -92,7 +92,9 @@ Reserved but deferred future domains:
 - `memory-evidence`
 
 `optimization-benchmark` may be the second-safest future domain, but it must
-preserve receipt, signing, and quantum-evidence redaction.
+preserve receipt, signing, and quantum-evidence redaction. It remains
+unimplemented; Phase 5.6 adds a dedicated future-domain contract in
+[OPTIMIZATION_BENCHMARK_VISUAL_MANIFEST_CONTRACT.md](OPTIMIZATION_BENCHMARK_VISUAL_MANIFEST_CONTRACT.md).
 
 `observation-study` and `integrity-summary` require a reviewed stable scope
 handle because existing surfaces are composite.
