@@ -283,15 +283,18 @@ def test_mission_visual_manifest_malformed_persisted_checksum_is_sanitized_422(
 def test_mission_visual_manifest_openapi_and_router_boundary(client: TestClient) -> None:
     paths = client.get("/openapi.json").json()["paths"]
     route = "/api/v1/visual-manifests/mission/{mission_id}"
+    optimization_route = "/api/v1/visual-manifests/optimization-benchmark/{benchmark_id}"
     assert route in paths
     assert set(paths[route]) == {"get"}
+    assert optimization_route in paths
+    assert set(paths[optimization_route]) == {"get"}
     visual_manifest_routes = {
         (path, method)
         for path, methods in paths.items()
         if path.startswith("/api/v1/visual-manifests")
         for method in methods
     }
-    assert visual_manifest_routes == {(route, "get")}
+    assert visual_manifest_routes == {(route, "get"), (optimization_route, "get")}
 
     router_source = Path(visual_manifests_router.__file__).read_text(encoding="utf-8")
     for forbidden in (
