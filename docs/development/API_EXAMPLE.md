@@ -115,6 +115,56 @@ and `output_types` (defaults to `["altitude_vs_time", "ground_track"]`).
 GET  /api/v1/missions/{mission_id}             # full detail (as above)
 GET  /api/v1/missions                          # paginated list (?limit&offset)
 GET  /api/v1/missions/{mission_id}/artifacts   # artifact metadata only
+GET  /api/v1/visual-manifests/mission/{mission_id}
+```
+
+The visual manifest endpoint is an additional read-only projection, not a
+replacement for `GET /api/v1/missions/{mission_id}/artifacts`. Mission visual
+manifest v1 is DB-only, path-free, sidecar-free, and non-authoritative. It is
+not live tracking, operational access, approval, a signed receipt,
+certification, taskability, command readiness, or quantum authority.
+
+Response shape (`MissionVisualManifestResponse`, trimmed):
+
+```json
+{
+  "schema_version": "visual-manifest-v1",
+  "manifest_id": "visual-manifest:mission:ea1547ed-d71e-4114-b0d0-8db59f1771a1:v1",
+  "read_at": "2026-07-02T06:04:46.689473Z",
+  "source_domain": "mission",
+  "scope_id": "ea1547ed-d71e-4114-b0d0-8db59f1771a1",
+  "items": [
+    {
+      "item_id": "artifact-1",
+      "item_type": "altitude_vs_time",
+      "media_type": "image/png",
+      "artifact_handle": "mission-artifact:artifact-1",
+      "checksum_handle": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "source_record_handles": [
+        "mission:ea1547ed-d71e-4114-b0d0-8db59f1771a1"
+      ],
+      "canonical_epistemic_status": "deterministic-calculation",
+      "verification_state": "mission-verification-passed",
+      "source_labels": ["mission-source:sample", "test-only:true"],
+      "limitations": [
+        "Artifact handles and checksum handles are persisted metadata only; sidecar scientific context, artifact-byte verification, and file checksum re-authentication are deferred to a future reviewed slice."
+      ],
+      "disclaimers": [
+        "This item is a path-free DB-backed artifact metadata projection, not artifact file authentication."
+      ],
+      "presentation_hints": {
+        "visual_role": "mission-artifact",
+        "display_label": "altitude vs time",
+        "scientific_authority": "none-added"
+      }
+    }
+  ],
+  "limitations": [
+    "Phase 5.4 mission v1 uses persisted database records only; it does not read sidecar JSON or image files, and it does not recompute file checksums.",
+    "manifest_id is a non-authoritative discovery/index identifier, not a receipt id, attestation id, signature id, approval id, or certification id."
+  ],
+  "disclaimer": "This visual manifest is a read-only discovery/index projection over persisted mission and artifact metadata. It is not verification by itself, not live tracking, not operational access, not taskability, not command readiness, not approval, not a signed receipt, not certification, and not quantum authority."
+}
 ```
 
 ## Error responses (safe, no internals)
