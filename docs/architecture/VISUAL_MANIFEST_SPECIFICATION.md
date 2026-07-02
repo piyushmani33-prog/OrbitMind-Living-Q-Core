@@ -313,7 +313,8 @@ Future gates are planning checkpoints only:
   still docs/spec first;
 - additional read-only manifest domain implementation only after API contract
   review;
-- report specification after manifest semantics;
+- [static report specification](STATIC_REPORT_SPECIFICATION.md) after
+  manifest semantics;
 - provenance/study graph specification after manifest identity/linking
   semantics;
 - map/orbit planning before Leaflet/CesiumJS;

@@ -100,6 +100,8 @@ visual-intelligence boundary, visual manifest specification, visual manifest API
 contract, mission-only read-only visual manifest API, optimization-benchmark
 read-only visual manifest API, guard coverage, and closure documentation are
 complete. See [VISUAL_INTELLIGENCE_BOUNDARY.md](VISUAL_INTELLIGENCE_BOUNDARY.md).
+The [static report specification](STATIC_REPORT_SPECIFICATION.md) is a
+docs-only gate for future report work; report generation remains deferred.
 
 Additional visual manifest domains (observation study, integrity, memory),
 interactive charts, maps (Leaflet), CesiumJS orbit view, D3 provenance graph,
