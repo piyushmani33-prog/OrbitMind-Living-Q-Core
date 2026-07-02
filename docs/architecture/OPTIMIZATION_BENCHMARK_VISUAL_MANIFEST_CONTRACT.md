@@ -25,6 +25,16 @@ Optimization benchmark manifests need this contract before implementation
 because they touch receipt, signing, quantum evidence, and solver-comparison
 boundaries.
 
+Phase 5.7 implementation clarification: the visual manifest response remains
+path-free and sidecar-free. The route may delegate to the existing benchmark
+read-authentication path, which can use existing sidecar authentication
+internally, but the route and response schema must not directly parse, expose,
+or repackage sidecar JSON.
+Deleting artifact files or required authentication sidecars can make delegated
+re-authentication fail. That failure must fail closed with a sanitized `422`
+and artifacts/evidence withheld wording. This differs intentionally from the
+mission visual manifest file-absence tolerance.
+
 ## Safe v1 top-level shape
 
 A future v1 response should mirror the mission visual manifest shape, but it is

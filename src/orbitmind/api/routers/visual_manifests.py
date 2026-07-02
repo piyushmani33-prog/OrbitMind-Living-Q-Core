@@ -7,9 +7,14 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request
 
-from orbitmind.api.deps import get_repository, get_source_repository
-from orbitmind.api.visual_manifest_schemas import MissionVisualManifestResponse
-from orbitmind.core.errors import NotFoundError, ValidationError
+from orbitmind.api.deps import get_optimization_service, get_repository, get_source_repository
+from orbitmind.api.optimization_views import ArtifactView
+from orbitmind.api.visual_manifest_schemas import (
+    MissionVisualManifestResponse,
+    OptimizationBenchmarkVisualManifestResponse,
+)
+from orbitmind.core.errors import EvidenceNotAuthenticatedError, NotFoundError, ValidationError
+from orbitmind.optimization.service import OptimizationService
 from orbitmind.persistence.repositories import SqlAlchemyMissionRepository
 from orbitmind.persistence.source_repository import SqlAlchemySourceRepository
 
@@ -17,6 +22,7 @@ router = APIRouter(prefix="/api/v1/visual-manifests", tags=["visual-manifests"])
 
 RepositoryDep = Annotated[SqlAlchemyMissionRepository, Depends(get_repository)]
 SourceRepositoryDep = Annotated[SqlAlchemySourceRepository, Depends(get_source_repository)]
+OptimizationServiceDep = Annotated[OptimizationService, Depends(get_optimization_service)]
 
 
 @router.get("/mission/{mission_id}", response_model=MissionVisualManifestResponse)
@@ -41,17 +47,50 @@ def get_mission_visual_manifest(
     )
 
 
+@router.get(
+    "/optimization-benchmark/{benchmark_id}",
+    response_model=OptimizationBenchmarkVisualManifestResponse,
+)
+def get_optimization_benchmark_visual_manifest(
+    request: Request,
+    benchmark_id: str,
+    service: OptimizationServiceDep,
+) -> OptimizationBenchmarkVisualManifestResponse:
+    """Return a path-free visual manifest for an authenticated optimization benchmark."""
+
+    _reject_query_params(request)
+    _require_clean_uuid(benchmark_id, "benchmark id")
+    auth = service.read_benchmark_evidence(benchmark_id)
+    if not auth.found:
+        raise NotFoundError("benchmark not found")
+    if auth.run is None or auth.integrity_failed:
+        raise ValidationError("benchmark evidence failed re-authentication; manifest withheld")
+    if not auth.authenticated:
+        raise EvidenceNotAuthenticatedError(
+            "benchmark evidence is not authenticated; manifest withheld"
+        )
+    artifacts = [ArtifactView(**artifact) for artifact in service.get_artifacts(benchmark_id)]
+    return OptimizationBenchmarkVisualManifestResponse.from_authenticated_benchmark(
+        run=auth.run,
+        artifacts=artifacts,
+        verified=auth.authenticated,
+        integrity_failed=auth.integrity_failed,
+        receipt_status=auth.receipt_status,
+        comparison_conclusion=auth.safe_conclusion(),
+    )
+
+
 def _reject_query_params(request: Request) -> None:
     if request.query_params:
         raise ValidationError("unsupported visual-manifest query parameter")
 
 
-def _require_clean_uuid(value: str) -> None:
+def _require_clean_uuid(value: str, field_name: str = "mission id") -> None:
     if not value or value.strip() != value or any(char in value for char in "\r\n\t/\\:"):
-        raise ValidationError("mission id is not a valid identifier")
+        raise ValidationError(f"{field_name} is not a valid identifier")
     try:
         parsed = uuid.UUID(value)
     except (ValueError, AttributeError, TypeError) as exc:
-        raise ValidationError("mission id is not a valid identifier") from exc
+        raise ValidationError(f"{field_name} is not a valid identifier") from exc
     if str(parsed) != value.lower():
-        raise ValidationError("mission id is not a valid identifier")
+        raise ValidationError(f"{field_name} is not a valid identifier")
