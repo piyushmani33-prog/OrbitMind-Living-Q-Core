@@ -70,6 +70,13 @@ never trusted on its own.
   malformed benchmark is withheld with a bounded `422`, and an **unauthenticated** one
   (no signer / unaccepted / failed receipt) returns `409 evidence_not_authenticated` — diagnostic
   artifacts are never served as ordinary evidence.
+- `GET /api/v1/visual-manifests/optimization-benchmark/<id>` returns a read-only visual manifest
+  projection for authenticated benchmark artifact metadata. This visual manifest is a path-free,
+  sidecar-free, non-authoritative API response; it is **not** the signed receipt's canonical
+  artifact manifest. It delegates to the same benchmark read authentication as the artifact
+  endpoint, so deleted artifact files or required authentication sidecars can make it fail closed
+  with a sanitized `422`. The response never exposes receipt/signing internals, quantum internals,
+  raw samples, circuits, QUBO internals, or solver internals.
 - `GET /benchmarks/<id>/evidence-graph` re-authenticates, then navigates **only that benchmark's
   own** memory edges (selected by `benchmark_id` ownership, so one benchmark's tamper cannot
   affect another's edges); if re-auth fails every edge is flagged `integrity_failed` and

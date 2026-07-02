@@ -15,16 +15,17 @@ It builds on [VISUAL_INTELLIGENCE_BOUNDARY.md](VISUAL_INTELLIGENCE_BOUNDARY.md)
 and [VISUAL_MANIFEST_SPECIFICATION.md](VISUAL_MANIFEST_SPECIFICATION.md). It
 prepares acceptance criteria for a later implementation slice.
 
-Phase 5.4 status update: the mission-only v1 route is now implemented:
+Status update: two domain-specific v1 routes are now implemented:
 
 ```http
 GET /api/v1/visual-manifests/mission/{mission_id}
+GET /api/v1/visual-manifests/optimization-benchmark/{benchmark_id}
 ```
 
-That route is read-only, DB-only, path-free, sidecar-free, and mission-scoped.
-It does not implement generic multi-domain dispatch, reports, dashboards, maps,
+These routes are read-only, path-free, sidecar-free, and domain-specific. They
+do not implement generic multi-domain dispatch, reports, dashboards, maps,
 graphs, rendering, exports, live data, provider behavior, or Quantum Studio.
-All non-mission visual manifest domains remain reserved and deferred.
+All other visual manifest domains remain reserved and deferred.
 
 ## Contract is not implementation
 
@@ -49,7 +50,8 @@ GET /api/v1/visual-manifests/{domain}/{scope_id}
 ```
 
 This generic route is not implemented. Phase 5.4 implemented the mission-only
-route named above instead of a generic dispatcher.
+route and Phase 5.7 implemented the optimization-benchmark route named above
+instead of a generic dispatcher.
 
 This shape follows the existing resource-read style and treats one
 `(domain, scope_id)` pair as one scoped manifest resource. Query parameters are
@@ -73,28 +75,26 @@ An invalid domain should return a typed `422`, not `404`.
 
 A valid domain with a missing scope should return `404`.
 
-The first implementation has started with exactly one domain.
-
-The implemented first domain is:
+Implemented domains:
 
 - `mission`
+- `optimization-benchmark`
 
 `mission` was the safest first domain because it has a single UUID-style scope
 handle, an existing mission artifact inventory, no owner-scoping complexity in
 current mission reads, and directly demonstrates locator normalization away from
 relative path conventions toward safe handles and checksums.
 
+`optimization-benchmark` is implemented as the second domain-specific route. It
+delegates to the existing benchmark read-authentication path and preserves
+receipt, signing, solver-comparison, and quantum-evidence redaction. See
+[OPTIMIZATION_BENCHMARK_VISUAL_MANIFEST_CONTRACT.md](OPTIMIZATION_BENCHMARK_VISUAL_MANIFEST_CONTRACT.md).
+
 Reserved but deferred future domains:
 
-- `optimization-benchmark`
 - `observation-study`
 - `integrity-summary`
 - `memory-evidence`
-
-`optimization-benchmark` may be the second-safest future domain, but it must
-preserve receipt, signing, and quantum-evidence redaction. It remains
-unimplemented; Phase 5.6 adds a dedicated future-domain contract in
-[OPTIMIZATION_BENCHMARK_VISUAL_MANIFEST_CONTRACT.md](OPTIMIZATION_BENCHMARK_VISUAL_MANIFEST_CONTRACT.md).
 
 `observation-study` and `integrity-summary` require a reviewed stable scope
 handle because existing surfaces are composite.
@@ -296,13 +296,15 @@ Phase 5.3.
 
 Phase 5.4 implemented only one domain: `mission`.
 
-Phase 5.4 did not implement all reserved domains.
+Phase 5.7 implemented one additional domain: `optimization-benchmark`.
 
-Phase 5.4 did not implement reports, graphs, maps, dashboards, frontend,
+These phases did not implement all reserved domains.
+
+These phases did not implement reports, graphs, maps, dashboards, frontend,
 providers, or quantum work.
 
-The Phase 5.4 API over persisted records includes unit/API tests and
-PostgreSQL HTTP-boundary validation.
+The implemented visual manifest APIs include unit/API tests and PostgreSQL
+HTTP-boundary validation where persisted records are involved.
 
 Future non-mission implementation should delegate to existing domain/query
 services.
