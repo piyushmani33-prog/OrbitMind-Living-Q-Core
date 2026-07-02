@@ -12,6 +12,18 @@ dashboard, graph, map, orbit view, or UI implementation.
 Phase 5.1 does not implement rendering, regeneration, reports, exports,
 frontend work, APIs, or new computation.
 
+Phase 5.9 status: the initial visual manifest family is now closed with two
+domain-specific read-only routes:
+
+- `GET /api/v1/visual-manifests/mission/{mission_id}`;
+- `GET /api/v1/visual-manifests/optimization-benchmark/{benchmark_id}`.
+
+No generic dispatcher or mutation routes exist. Additional visual manifest
+domains remain deferred and require separate planning and review. Phase 5
+remains the umbrella for deferred reports, graphs, maps, orbit views,
+dashboards, rendering/export, frontend, provider/live-data behavior, Quantum
+Studio, and other visual-domain work.
+
 ## Safe visual inputs
 
 The safe inputs for future visual-intelligence work are existing persisted
@@ -125,8 +137,8 @@ receipts, or command surfaces.
 Future gates are planning checkpoints only, not active implementation:
 
 - [Phase 5.2 visual manifest planning/specification](VISUAL_MANIFEST_SPECIFICATION.md);
-- future read-only visual manifest API, only after manifest semantics are
-  approved;
+- additional read-only visual manifest domains, only after manifest semantics
+  and domain-specific contracts are approved;
 - static report specification, not PDF/export implementation yet;
 - provenance/study graph semantics before D3 or graph UI;
 - map/orbit UI planning before Leaflet/CesiumJS work;
@@ -177,7 +189,7 @@ Phase 5.1 does not add:
 
 A new review is required before:
 
-- adding a visual manifest schema/API;
+- adding or changing a visual manifest schema/API, including a new domain;
 - exposing artifact or sidecar metadata through a new public route;
 - rendering study-chain or integrity-summary visuals;
 - adding reports or exports;

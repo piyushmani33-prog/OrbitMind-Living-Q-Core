@@ -95,15 +95,16 @@ signed receipt claims, or quantum authority. See
 Larger instances / additional solvers, still classical-baseline-first and bounded.
 
 ## Phase 5 — Advanced visual intelligence
-Phase 5.1–5.7 established the visual-intelligence boundary, visual manifest
-specification, visual manifest API contract, mission-only read-only visual
-manifest API, and optimization-benchmark read-only visual manifest API. See
-[VISUAL_INTELLIGENCE_BOUNDARY.md](VISUAL_INTELLIGENCE_BOUNDARY.md).
+Phase 5.1–5.9 closes the initial visual manifest family: the
+visual-intelligence boundary, visual manifest specification, visual manifest API
+contract, mission-only read-only visual manifest API, optimization-benchmark
+read-only visual manifest API, guard coverage, and closure documentation are
+complete. See [VISUAL_INTELLIGENCE_BOUNDARY.md](VISUAL_INTELLIGENCE_BOUNDARY.md).
 
 Additional visual manifest domains (observation study, integrity, memory),
 interactive charts, maps (Leaflet), CesiumJS orbit view, D3 provenance graph,
 dashboards, reports, rendering/export, live data/provider behavior, frontend,
-and Quantum Studio remain planned / deferred.
+and Quantum Studio remain deferred.
 
 ## Phase 6 — Tool Forge
 Manifests, dependency policy, static analysis, test generation, sandbox execution,

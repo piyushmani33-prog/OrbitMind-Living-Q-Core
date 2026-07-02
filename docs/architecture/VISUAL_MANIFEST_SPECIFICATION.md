@@ -13,6 +13,16 @@ This specification does not implement an API. It does not implement schemas,
 routes, migrations, rendering, reports, dashboards, graphs, maps, exports, or
 UI. It must conform to [VISUAL_INTELLIGENCE_BOUNDARY.md](VISUAL_INTELLIGENCE_BOUNDARY.md).
 
+Phase 5.9 status: the initial visual manifest family is closed with two
+implemented domain-specific read-only routes:
+
+- `GET /api/v1/visual-manifests/mission/{mission_id}`;
+- `GET /api/v1/visual-manifests/optimization-benchmark/{benchmark_id}`.
+
+No generic dispatcher or mutation routes exist. `observation-study`,
+`integrity-summary`, and `memory-evidence` remain reserved/deferred and require
+separate planning and review before implementation.
+
 ## Manifest is not authority
 
 A visual manifest is not verification by itself.
@@ -241,20 +251,19 @@ expose raw internal graph/query structures by default.
 
 ## Future API considerations
 
-This section is planning only.
+This section is planning only. Phase 5.2 itself did not implement an API.
 
-No API is implemented in Phase 5.2.
+The implemented initial routes are domain-specific, read-only, and strict about
+unknown parameters. Future additional-domain manifest APIs should delegate to
+existing domain/query services. They should reject unknown parameters. They
+should avoid recomputation. They should avoid mutation. They should return safe
+manifest DTOs only.
 
-A future manifest API, if approved, should likely be one read-only owner-aware
-route. It should delegate to existing domain/query services. It should reject
-unknown parameters. It should avoid recomputation. It should avoid mutation. It
-should return safe manifest DTOs only.
+Future additional-domain APIs should not expose raw sidecars, raw paths, raw
+`result_json`, SQL internals, or provider secrets.
 
-It should not expose raw sidecars, raw paths, raw `result_json`, SQL internals,
-or provider secrets.
-
-PostgreSQL validation becomes required only if a future API/query implementation
-touches persisted records.
+PostgreSQL validation becomes required for additional future API/query
+implementation that touches persisted records.
 
 ## Scientific-honesty boundaries
 
@@ -302,7 +311,8 @@ Future gates are planning checkpoints only:
 
 - [Phase 5.3 API contract planning/specification](VISUAL_MANIFEST_API_CONTRACT.md),
   still docs/spec first;
-- future read-only manifest API implementation only after API contract review;
+- additional read-only manifest domain implementation only after API contract
+  review;
 - report specification after manifest semantics;
 - provenance/study graph specification after manifest identity/linking
   semantics;
