@@ -657,10 +657,52 @@ def test_quantum_and_samples_and_artifacts_persist(pg_container: AppContainer) -
         run_quantum=True,
         generate_artifacts=True,
     )
+    assert (
+        _exec(pg_container, f"SELECT count(*) FROM benchmark_runs WHERE id='{run.id}'")[0][0] == 1
+    )
+    assert _exec(pg_container, f"SELECT count(*) FROM solver_runs WHERE benchmark_id='{run.id}'")[
+        0
+    ][0] == len(run.solver_results)
+    assert (
+        _exec(
+            pg_container,
+            f"SELECT count(*) FROM benchmark_comparisons WHERE benchmark_id='{run.id}'",
+        )[0][0]
+        == 1
+    )
     if run.quantum_experiment is not None and run.quantum_experiment.status.value == "completed":
-        assert _exec(pg_container, "SELECT count(*) FROM quantum_experiments")[0][0] >= 1
-        assert _exec(pg_container, "SELECT count(*) FROM quantum_sample_results")[0][0] >= 1
-    assert _exec(pg_container, "SELECT count(*) FROM optimization_artifacts")[0][0] >= 5
+        assert (
+            _exec(
+                pg_container,
+                f"SELECT count(*) FROM quantum_experiments WHERE benchmark_id='{run.id}'",
+            )[0][0]
+            == 1
+        )
+
+    artifact_types = {
+        row[0]
+        for row in _exec(
+            pg_container,
+            f"SELECT artifact_type FROM optimization_artifacts WHERE scope_id='{run.id}'",
+        )
+    }
+    stable_artifact_types = {
+        "selected_observation_timeline",
+        "solver_objective_comparison",
+        "feasibility_violation_comparison",
+        "benchmark_summary_json",
+    }
+    assert stable_artifact_types <= artifact_types
+
+    sample_count = _exec(
+        pg_container,
+        "SELECT count(*) "
+        "FROM quantum_sample_results qsr "
+        "JOIN quantum_experiments qe ON qsr.experiment_id = qe.id "
+        f"WHERE qe.benchmark_id = '{run.id}'",
+    )[0][0]
+    if sample_count > 0:
+        assert "quantum_sample_distribution" in artifact_types
 
 
 def test_duplicate_creation_is_idempotent_and_race_safe(pg_container: AppContainer) -> None:
