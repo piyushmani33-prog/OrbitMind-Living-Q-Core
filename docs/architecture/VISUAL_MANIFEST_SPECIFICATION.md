@@ -317,7 +317,8 @@ Future gates are planning checkpoints only:
   manifest semantics;
 - [provenance/study graph specification](PROVENANCE_STUDY_GRAPH_SEMANTICS.md)
   after manifest identity/linking semantics;
-- map/orbit planning before Leaflet/CesiumJS;
+- [map/orbit view specification](MAP_ORBIT_VIEW_SPECIFICATION.md) before
+  Leaflet/CesiumJS;
 - dashboard planning before frontend work.
 
 Phase 5.3 should not jump directly to route implementation. Each later gate
