@@ -2,43 +2,36 @@
 
 ## Purpose and status
 
-This is a Phase 5.6 documentation-only contract for a future
-`optimization-benchmark` visual manifest domain.
-
-No optimization-benchmark visual manifest route is implemented in Phase 5.6.
-This document does not add API routes, schemas, routers, persistence, runtime
-behavior, rendering, reports, exports, frontend work, provider/live-data
-behavior, or Quantum Studio work.
-
-The future route idea is:
+This document began as the Phase 5.6 documentation-only contract for the
+`optimization-benchmark` visual manifest domain. Phase 5.7 implemented the
+domain-specific route:
 
 ```http
 GET /api/v1/visual-manifests/optimization-benchmark/{benchmark_id}
 ```
 
-That route is only a future domain-specific proposal. A future implementation
-must not create a generic visual manifest dispatcher. Future visual manifest
-implementation must remain domain-specific unless separately reviewed and
-approved.
+The implemented route remains domain-specific. It does not create a generic
+visual manifest dispatcher, and future visual manifest implementation must
+remain domain-specific unless separately reviewed and approved.
 
 Optimization benchmark manifests need this contract before implementation
 because they touch receipt, signing, quantum evidence, and solver-comparison
 boundaries.
 
 Phase 5.7 implementation clarification: the visual manifest response remains
-path-free and sidecar-free. The route may delegate to the existing benchmark
-read-authentication path, which can use existing sidecar authentication
-internally, but the route and response schema must not directly parse, expose,
-or repackage sidecar JSON.
+path-free and sidecar-free. The route delegates to the existing benchmark
+read-authentication path, which can use existing detached sidecar authentication
+internally, but the route and response schema do not directly parse, expose, or
+repackage sidecar JSON.
 Deleting artifact files or required authentication sidecars can make delegated
 re-authentication fail. That failure must fail closed with a sanitized `422`
-and artifacts/evidence withheld wording. This differs intentionally from the
-mission visual manifest file-absence tolerance.
+and manifest/artifact metadata withheld wording. This differs intentionally
+from the mission visual manifest file-absence tolerance.
 
 ## Safe v1 top-level shape
 
-A future v1 response should mirror the mission visual manifest shape, but it is
-not implemented yet. Safe top-level concepts are:
+The implemented v1 response mirrors the mission visual manifest shape while
+remaining optimization-specific. Safe top-level concepts are:
 
 - `schema_version`
 - `manifest_id`
@@ -53,13 +46,12 @@ not implemented yet. Safe top-level concepts are:
 receipt id, attestation id, signature id, approval id, certification id, or
 operational clearance.
 
-`read_at` should be a timezone-aware UTC timestamp if this route is later
-implemented.
+`read_at` is a timezone-aware UTC timestamp.
 
 ## Safe item concepts
 
-Future item projections may include only path-free, safe artifact identity and
-label fields:
+Item projections include only path-free, safe artifact identity and label
+fields:
 
 - item id
 - item type
@@ -73,10 +65,10 @@ label fields:
 - disclaimers
 - non-authoritative presentation hints
 
-`ArtifactView` is the current projection baseline for optimization artifact
-metadata. It exposes safe artifact metadata and deliberately does not expose
-on-disk paths. A future optimization benchmark visual manifest must preserve
-that boundary: on-disk paths are never exposed.
+`ArtifactView` is the projection baseline for optimization artifact metadata.
+It exposes safe artifact metadata and deliberately does not expose on-disk
+paths. The optimization benchmark visual manifest preserves that boundary:
+on-disk paths are never exposed.
 
 Presentation hints are layout or grouping suggestions only. They do not add
 scientific authority, verification, approval, certification, command readiness,
@@ -84,8 +76,8 @@ or operational meaning.
 
 ## Read-time evidence state
 
-A future manifest may project only the existing read-time authentication state
-already exposed by authenticated benchmark reads:
+The manifest projects only the existing read-time authentication state already
+exposed by authenticated benchmark reads:
 
 - `verified`
 - `integrity_failed`
@@ -97,14 +89,14 @@ Allowed `receipt_status` values are:
 - `none`
 - `integrity-failed`
 
-The manifest may project these states only as already exposed by the
-authenticated benchmark read path. It must never recompute verification,
-re-authenticate independently, re-sign anything, issue a new receipt, upgrade
-evidence status, reinterpret receipt status, or expose receipt internals.
+The manifest projects these states only as already exposed by the authenticated
+benchmark read path. It must never recompute verification, re-authenticate
+independently, re-sign anything, issue a new receipt, upgrade evidence status,
+reinterpret receipt status, or expose receipt internals.
 
-If a future implementation needs authenticated artifact metadata, it should
-delegate to the existing benchmark read/authentication path rather than
-duplicating authentication logic.
+Authenticated artifact metadata is served only after delegation to the existing
+benchmark read/authentication path rather than duplicating authentication
+logic.
 
 ## Receipt and signing boundary
 
@@ -118,7 +110,7 @@ only. It is not:
 - operational clearance
 - command readiness
 
-A future optimization benchmark manifest must never expose:
+The optimization benchmark manifest must never expose:
 
 - receipt envelopes
 - canonical receipt entries
@@ -139,7 +131,7 @@ receipt validation internals from the response shape.
 Quantum-related visual manifest items may appear only as artifact identity
 metadata and labels sourced from authenticated reads.
 
-Future responses must never expose:
+Responses must never expose:
 
 - unredacted `quantum_evidence`
 - raw quantum samples
@@ -162,7 +154,7 @@ an error or integrity failure.
 The manifest may project persisted comparison labels only as recorded. It must
 preserve classical-baseline-authoritative framing.
 
-A future manifest must not:
+The manifest must not:
 
 - re-derive solver comparison conclusions
 - reinterpret comparison conclusions
@@ -180,7 +172,7 @@ claims of general quantum advantage.
 
 ## Excluded fields and internals
 
-A future optimization benchmark manifest must explicitly prohibit exposure of:
+The optimization benchmark manifest explicitly prohibits exposure of:
 
 - artifact `path`
 - `sidecar_path`
@@ -209,7 +201,7 @@ tests, and documentation examples.
 
 ## Scientific-honesty boundaries
 
-A future optimization benchmark manifest must remain:
+The optimization benchmark manifest remains:
 
 - read-only
 - DB-only
@@ -233,9 +225,9 @@ The manifest is a discovery/index projection over already persisted records. It
 does not verify truth by itself and must not upgrade the scientific meaning of
 the underlying benchmark, artifacts, receipts, or solver comparisons.
 
-## Future acceptance criteria
+## Acceptance criteria and guard tests
 
-Any future implementation must include guard tests for:
+Implementation guard tests cover or must continue to cover:
 
 - clean benchmark id validation
 - unknown benchmark returning `404`
@@ -251,8 +243,8 @@ Any future implementation must include guard tests for:
 - no rendering, report, export, or frontend work
 - PostgreSQL HTTP-boundary validation
 
-Guard tests should also confirm that the route remains domain-specific and does
-not introduce a generic visual manifest dispatcher.
+Guard tests also confirm that the route remains domain-specific and does not
+introduce a generic visual manifest dispatcher.
 
 ## Owner scope and trust model
 
@@ -263,17 +255,14 @@ Future owner isolation must be designed separately before changing `404` or
 isolation semantics for optimization benchmark manifests. Client-supplied owner
 or principal parameters must not be accepted by default.
 
-## Explicit exclusions for Phase 5.6
+## Explicit exclusions
 
-Phase 5.6 does not add:
+Phase 5.6 was documentation-only. Phase 5.7 implemented only the
+domain-specific optimization-benchmark visual manifest route. This contract and
+implemented route still do not add:
 
-- code
-- tests
 - migrations
-- API routes
-- schemas
 - generic dispatcher
-- optimization visual manifest implementation
 - reports
 - PDF
 - export

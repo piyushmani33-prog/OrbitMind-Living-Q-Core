@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -19,6 +20,7 @@ from orbitmind.api.app import create_app
 from orbitmind.api.container import AppContainer
 from orbitmind.core.config import Settings
 from orbitmind.optimization import fixtures
+from orbitmind.optimization.models import BenchmarkRun
 
 _PG_URL = os.environ.get("ORBITMIND_TEST_POSTGRES_URL")
 
@@ -71,17 +73,17 @@ def pg_client(pg_container: AppContainer) -> Iterator[TestClient]:
         yield client
 
 
-def _create_benchmark(container: AppContainer) -> str:
+def _create_benchmark(container: AppContainer) -> BenchmarkRun:
     problem = container.optimization_service.create_problem(fixtures.fixture("default"))
     run, _findings = container.optimization_service.benchmark(
         problem.id, seed=7, run_quantum=False, generate_artifacts=True
     )
     auth = container.optimization_service.read_benchmark_evidence(run.id)
     assert auth.authenticated and not auth.integrity_failed
-    return run.id
+    return run
 
 
-def _assert_safe_text(text_value: str) -> None:
+def _assert_safe_text(text_value: str, *extra_forbidden: str) -> None:
     lowered = text_value.lower()
     for forbidden in (
         '"path"',
@@ -103,15 +105,36 @@ def _assert_safe_text(text_value: str) -> None:
         "circuit",
         "qubo",
         "provider state",
+        *extra_forbidden,
     ):
         assert forbidden not in lowered
+
+
+def _assert_withheld_error(response: Any, *extra_forbidden: str) -> None:
+    assert response.status_code == 422
+    body = response.json()
+    assert set(body) == {"code", "message"}
+    assert body["code"] == "validation_error"
+    assert "manifest withheld" in body["message"]
+    assert "evidence" in body["message"]
+    for field in (
+        "schema_version",
+        "manifest_id",
+        "items",
+        "verified",
+        "receipt_status",
+        "comparison_conclusion",
+    ):
+        assert field not in response.text
+    _assert_safe_text(response.text, *extra_forbidden)
 
 
 def test_postgres_optimization_benchmark_visual_manifest_http_boundary(
     pg_client: TestClient,
     pg_container: AppContainer,
 ) -> None:
-    benchmark_id = _create_benchmark(pg_container)
+    run = _create_benchmark(pg_container)
+    benchmark_id = run.id
 
     success = pg_client.get(f"{BASE}/{benchmark_id}")
     invalid = pg_client.get(f"{BASE}/not-a-uuid")
@@ -155,7 +178,8 @@ def test_postgres_optimization_benchmark_visual_manifest_checksum_tamper_is_422(
     pg_client: TestClient,
     pg_container: AppContainer,
 ) -> None:
-    benchmark_id = _create_benchmark(pg_container)
+    run = _create_benchmark(pg_container)
+    benchmark_id = run.id
     with pg_container.database.engine.begin() as conn:
         conn.execute(
             text(
@@ -169,3 +193,26 @@ def test_postgres_optimization_benchmark_visual_manifest_checksum_tamper_is_422(
     assert response.status_code == 422
     assert response.json()["code"] == "validation_error"
     _assert_safe_text(response.text)
+
+
+@pytest.mark.parametrize("delete_target", ["artifact", "sidecar"])
+def test_postgres_optimization_benchmark_visual_manifest_file_absence_is_422(
+    pg_client: TestClient,
+    pg_container: AppContainer,
+    delete_target: str,
+) -> None:
+    run = _create_benchmark(pg_container)
+    clean = pg_client.get(f"{BASE}/{run.id}")
+    assert clean.status_code == 200, clean.text
+
+    root = pg_container.settings.resolved_artifacts_dir()
+    rel = str(run.artifacts[0]["path"])
+    if delete_target == "sidecar":
+        rel = f"{rel}.json"
+    target = root / rel
+    assert target.is_file()
+    target.unlink()
+
+    response = pg_client.get(f"{BASE}/{run.id}")
+
+    _assert_withheld_error(response, rel, target.name, str(root))
