@@ -139,7 +139,8 @@ Future gates are planning checkpoints only, not active implementation:
 - [Phase 5.2 visual manifest planning/specification](VISUAL_MANIFEST_SPECIFICATION.md);
 - additional read-only visual manifest domains, only after manifest semantics
   and domain-specific contracts are approved;
-- static report specification, not PDF/export implementation yet;
+- [static report specification](STATIC_REPORT_SPECIFICATION.md), not
+  PDF/export implementation yet;
 - provenance/study graph semantics before D3 or graph UI;
 - map/orbit UI planning before Leaflet/CesiumJS work;
 - dashboard planning before frontend work.
