@@ -143,7 +143,8 @@ Future gates are planning checkpoints only, not active implementation:
   PDF/export implementation yet;
 - [provenance/study graph semantics](PROVENANCE_STUDY_GRAPH_SEMANTICS.md)
   before D3 or graph UI;
-- map/orbit UI planning before Leaflet/CesiumJS work;
+- [map/orbit view specification](MAP_ORBIT_VIEW_SPECIFICATION.md) before
+  Leaflet/CesiumJS work;
 - dashboard planning before frontend work.
 
 Each gate requires separate planning and review before implementation.

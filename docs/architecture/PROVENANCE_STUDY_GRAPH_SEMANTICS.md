@@ -237,6 +237,9 @@ Reports do not add authority to graphs. Graphs do not add authority to reports.
 Persisted records and authenticated read paths remain the evidence sources.
 Additional visual manifest domains remain deferred and require separate review.
 
+Future map/orbit views that reference graph context are governed by the
+[map/orbit view specification](MAP_ORBIT_VIEW_SPECIFICATION.md).
+
 ## Excluded fields and internals
 
 Provenance/study graphs must not expose:
@@ -316,4 +319,6 @@ Future graph implementation requires separate reviewed planning for:
 - deterministic-output tests;
 - redaction tests;
 - PostgreSQL validation if persisted records are read;
+- map/orbit view references only under
+  [MAP_ORBIT_VIEW_SPECIFICATION.md](MAP_ORBIT_VIEW_SPECIFICATION.md);
 - rendering, D3, or frontend only after separate approval.
