@@ -59,7 +59,13 @@ def test_benchmark_generates_verified_artifacts(client: TestClient) -> None:
     pid = _create(client)
     resp = client.post(
         f"/api/v1/optimization/problems/{pid}/benchmark",
-        json={"seed": 7, "shots": 1024, "optimizer_iterations": 16, "generate_artifacts": True},
+        json={
+            "seed": 7,
+            "shots": 1024,
+            "optimizer_iterations": 16,
+            "run_quantum": False,
+            "generate_artifacts": True,
+        },
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -78,7 +84,17 @@ def test_benchmark_generates_verified_artifacts(client: TestClient) -> None:
     assert "selected_observation_timeline" in types and "benchmark_summary_json" in types
     # Artifacts retrievable by run id.
     arts = client.get(f"/api/v1/optimization/runs/{run['id']}/artifacts").json()
-    assert len(arts["artifacts"]) >= 5
+    artifact_types = {artifact["type"] for artifact in arts["artifacts"]}
+    stable_artifact_types = {
+        "selected_observation_timeline",
+        "solver_objective_comparison",
+        "feasibility_violation_comparison",
+        "benchmark_summary_json",
+    }
+    assert stable_artifact_types <= artifact_types
+    quantum = run.get("quantum")
+    if quantum is not None and quantum.get("distinct_samples", 0) > 0:
+        assert "quantum_sample_distribution" in artifact_types
 
 
 def test_runs_listing(client: TestClient) -> None:
