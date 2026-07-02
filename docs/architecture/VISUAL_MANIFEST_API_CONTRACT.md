@@ -2,14 +2,14 @@
 
 ## Purpose and status
 
-This is a Phase 5.3 documentation-only API contract.
+This began as a Phase 5.3 documentation-only API contract.
 
-It specifies a future read-only visual manifest API. The future API is a
-discovery and index projection over already persisted records.
+It specifies the read-only visual manifest API family. Visual manifest APIs are
+discovery and index projections over already persisted records.
 
-This document does not implement API routes, schema classes, routers, tests,
+Phase 5.3 did not implement API routes, schema classes, routers, tests,
 migrations, persistence, rendering, reports, dashboards, graphs, maps, exports,
-or UI.
+or UI. Later slices implemented the initial domain-specific route family.
 
 It builds on [VISUAL_INTELLIGENCE_BOUNDARY.md](VISUAL_INTELLIGENCE_BOUNDARY.md)
 and [VISUAL_MANIFEST_SPECIFICATION.md](VISUAL_MANIFEST_SPECIFICATION.md). It
@@ -41,9 +41,10 @@ No tests are added in Phase 5.3 unless markdown tooling already exists.
 
 PostgreSQL validation is not required for Phase 5.3.
 
-## Future route shape
+## Route shape
 
-Recommended future route shape for later multi-domain expansion:
+Earlier planning considered a generic route shape for later multi-domain
+expansion:
 
 ```http
 GET /api/v1/visual-manifests/{domain}/{scope_id}
@@ -51,7 +52,8 @@ GET /api/v1/visual-manifests/{domain}/{scope_id}
 
 This generic route is not implemented. Phase 5.4 implemented the mission-only
 route and Phase 5.7 implemented the optimization-benchmark route named above
-instead of a generic dispatcher.
+instead of a generic dispatcher. Additional domains must be separately planned
+and reviewed before implementation.
 
 This shape follows the existing resource-read style and treats one
 `(domain, scope_id)` pair as one scoped manifest resource. Query parameters are
@@ -60,12 +62,12 @@ reserved for bounded inclusion flags only.
 Composite multi-ID domains must not be forced into this shape until a reviewed
 stable scope handle exists.
 
-Rejected alternatives:
+Rejected or deferred alternatives:
 
 - `GET /api/v1/visual-manifests?domain=...&scope_id=...` is less preferred
   because core identity belongs in the route path.
-- Domain-specific separate routes should be avoided initially because they risk
-  route sprawl.
+- A generic dispatcher remains deferred. Domain-specific routes are acceptable
+  only when separately reviewed and kept narrow enough to avoid route sprawl.
 
 ## Domain allowlist and rollout
 
@@ -109,8 +111,9 @@ Allowed future query parameters are bounded inclusion flags only:
 - `include_diagnostics`
 
 Parameters must use an explicit allowlist only. Unknown query parameters must
-be rejected with a typed `422`. Future implementation should use an
-unknown-parameter rejection pattern consistent with existing strict read APIs.
+be rejected with a typed `422`. Future additional-domain implementation should
+use an unknown-parameter rejection pattern consistent with existing strict read
+APIs.
 
 Explicitly rejected query parameters include:
 
@@ -219,7 +222,7 @@ matrix.
 
 ## Non-leakage requirements
 
-Future implementation must not expose:
+Future additional-domain implementation must not expose:
 
 - raw absolute filesystem paths
 - artifacts-root value
@@ -252,7 +255,7 @@ Future implementation must not expose:
 
 ## Future API behavior constraints
 
-Future API behavior must be:
+Future additional-domain API behavior must be:
 
 - read-only
 - no mutation
@@ -271,7 +274,7 @@ Future API behavior must be:
 
 This section is planning only.
 
-Future implementation must include tests and guards for:
+Future additional-domain implementation must include tests and guards for:
 
 - OpenAPI route surface contains exactly the intended new `GET` route
 - no `POST`, `PUT`, `PATCH`, or `DELETE` visual manifest routes
@@ -289,8 +292,8 @@ Future implementation must include tests and guards for:
   required
 - owner-scoped future domains return `404` for cross-owner access
 
-These are acceptance criteria for a later implementation, not tests added in
-Phase 5.3.
+These are acceptance criteria for later additional-domain implementation, not
+tests added in Phase 5.3.
 
 ## Implementation notes
 
@@ -306,12 +309,13 @@ providers, or quantum work.
 The implemented visual manifest APIs include unit/API tests and PostgreSQL
 HTTP-boundary validation where persisted records are involved.
 
-Future non-mission implementation should delegate to existing domain/query
-services.
+Future additional-domain implementation should delegate to existing
+domain/query services.
 
-Future non-mission implementation should avoid transaction ownership mistakes.
+Future additional-domain implementation should avoid transaction ownership
+mistakes.
 
-Future non-mission implementation should return safe DTOs only.
+Future additional-domain implementation should return safe DTOs only.
 
 Phase 5.4 mission v1 sources scientific context from persisted database
 records only. It does not read sidecar JSON or image files. It omits
