@@ -15,6 +15,17 @@ It builds on [VISUAL_INTELLIGENCE_BOUNDARY.md](VISUAL_INTELLIGENCE_BOUNDARY.md)
 and [VISUAL_MANIFEST_SPECIFICATION.md](VISUAL_MANIFEST_SPECIFICATION.md). It
 prepares acceptance criteria for a later implementation slice.
 
+Phase 5.4 status update: the mission-only v1 route is now implemented:
+
+```http
+GET /api/v1/visual-manifests/mission/{mission_id}
+```
+
+That route is read-only, DB-only, path-free, sidecar-free, and mission-scoped.
+It does not implement generic multi-domain dispatch, reports, dashboards, maps,
+graphs, rendering, exports, live data, provider behavior, or Quantum Studio.
+All non-mission visual manifest domains remain reserved and deferred.
+
 ## Contract is not implementation
 
 No route is implemented in Phase 5.3.
@@ -31,13 +42,14 @@ PostgreSQL validation is not required for Phase 5.3.
 
 ## Future route shape
 
-Recommended future route shape:
+Recommended future route shape for later multi-domain expansion:
 
 ```http
 GET /api/v1/visual-manifests/{domain}/{scope_id}
 ```
 
-This is a future route, not implemented now.
+This generic route is not implemented. Phase 5.4 implemented the mission-only
+route named above instead of a generic dispatcher.
 
 This shape follows the existing resource-read style and treats one
 `(domain, scope_id)` pair as one scoped manifest resource. Query parameters are
@@ -61,13 +73,13 @@ An invalid domain should return a typed `422`, not `404`.
 
 A valid domain with a missing scope should return `404`.
 
-The first future implementation should start with exactly one domain.
+The first implementation has started with exactly one domain.
 
-The recommended first implementation domain is:
+The implemented first domain is:
 
 - `mission`
 
-`mission` is the safest first domain because it has a single UUID-style scope
+`mission` was the safest first domain because it has a single UUID-style scope
 handle, an existing mission artifact inventory, no owner-scoping complexity in
 current mission reads, and directly demonstrates locator normalization away from
 relative path conventions toward safe handles and checksums.
@@ -278,26 +290,27 @@ Future implementation must include tests and guards for:
 These are acceptance criteria for a later implementation, not tests added in
 Phase 5.3.
 
-## Future implementation notes
+## Implementation notes
 
-Phase 5.4 should implement only one domain first, preferably `mission`.
+Phase 5.4 implemented only one domain: `mission`.
 
-Phase 5.4 should not implement all reserved domains.
+Phase 5.4 did not implement all reserved domains.
 
-Phase 5.4 should not implement reports, graphs, maps, dashboards, frontend,
+Phase 5.4 did not implement reports, graphs, maps, dashboards, frontend,
 providers, or quantum work.
 
-If Phase 5.4 adds an API over persisted records, it should include relevant
-unit/API tests and PostgreSQL HTTP-boundary validation.
+The Phase 5.4 API over persisted records includes unit/API tests and
+PostgreSQL HTTP-boundary validation.
 
-Future implementation should delegate to existing domain/query services.
+Future non-mission implementation should delegate to existing domain/query
+services.
 
-Future implementation should avoid transaction ownership mistakes.
+Future non-mission implementation should avoid transaction ownership mistakes.
 
-Future implementation should return safe DTOs only.
+Future non-mission implementation should return safe DTOs only.
 
-Phase 5.4 mission v1 should source scientific context from persisted database
-records only. It should not read sidecar JSON or image files. It should omit
+Phase 5.4 mission v1 sources scientific context from persisted database
+records only. It does not read sidecar JSON or image files. It omits
 sidecar-only fields such as per-artifact units and per-artifact sidecar
 verification. Per-artifact sidecar scientific context and file checksum
 re-authentication are deferred to a future reviewed slice.
