@@ -315,8 +315,8 @@ Future gates are planning checkpoints only:
   review;
 - [static report specification](STATIC_REPORT_SPECIFICATION.md) after
   manifest semantics;
-- provenance/study graph specification after manifest identity/linking
-  semantics;
+- [provenance/study graph specification](PROVENANCE_STUDY_GRAPH_SEMANTICS.md)
+  after manifest identity/linking semantics;
 - map/orbit planning before Leaflet/CesiumJS;
 - dashboard planning before frontend work.
 

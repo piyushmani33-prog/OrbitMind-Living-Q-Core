@@ -141,7 +141,8 @@ Future gates are planning checkpoints only, not active implementation:
   and domain-specific contracts are approved;
 - [static report specification](STATIC_REPORT_SPECIFICATION.md), not
   PDF/export implementation yet;
-- provenance/study graph semantics before D3 or graph UI;
+- [provenance/study graph semantics](PROVENANCE_STUDY_GRAPH_SEMANTICS.md)
+  before D3 or graph UI;
 - map/orbit UI planning before Leaflet/CesiumJS work;
 - dashboard planning before frontend work.
 

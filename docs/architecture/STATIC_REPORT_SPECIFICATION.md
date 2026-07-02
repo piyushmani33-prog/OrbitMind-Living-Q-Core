@@ -184,6 +184,10 @@ Persisted records and authenticated read paths remain the evidence sources.
 Additional visual manifest domains remain deferred and require separate
 planning and review.
 
+Future graph references are governed by the
+[provenance/study graph semantics](PROVENANCE_STUDY_GRAPH_SEMANTICS.md)
+specification.
+
 ## Excluded fields and internals
 
 Static reports must not expose:
@@ -262,3 +266,5 @@ Future report generation requires separate reviewed planning for:
 - deterministic-output tests;
 - PostgreSQL validation if persisted records are read;
 - no PDF, export, or rendering until separately approved.
+- provenance/study graph references only under
+  [PROVENANCE_STUDY_GRAPH_SEMANTICS.md](PROVENANCE_STUDY_GRAPH_SEMANTICS.md).
