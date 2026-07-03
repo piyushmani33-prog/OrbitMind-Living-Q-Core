@@ -2,28 +2,36 @@
 
 ## Purpose and status
 
-This is a docs-only contract for a future Product Summary / Read-Product
+This began as a docs-only contract for a Product Summary / Read-Product
 Catalog surface.
 
-It implements no API, schema, router, test, migration, persistence table,
-dashboard UI, frontend, rendering, charts, graph drawing, map drawing,
-provider/live-data behavior, command/task surface, recommendation engine,
-export/PDF behavior, Quantum Studio work, or runtime behavior.
-
-Implementation remains blocked until this contract is reviewed and merged, and
-then followed by a separate implementation-planning pass.
-
-## Future route
-
-The future route documented by this contract is:
+Status update: Product Summary Read Surface v1 is implemented only as Surface
+A, the static JSON read-product capability catalog:
 
 ```http
 GET /api/v1/product-summaries/read-products
 ```
 
-This route is future-only. This contract does not implement it.
+This status update implements no Surface B per-scope composition, persisted
+domain data reads, owner-scoped data reads, dashboard UI, frontend, rendering,
+charts, graph drawing, map drawing, provider/live-data behavior, command/task
+surface, recommendation engine, export/PDF behavior, Quantum Studio work, or
+runtime behavior beyond the single static catalog route.
 
-Route rules for a future implementation:
+Additional implementation remains blocked until separately planned and
+reviewed.
+
+## Implemented route
+
+The implemented Surface A route documented by this contract is:
+
+```http
+GET /api/v1/product-summaries/read-products
+```
+
+No other product-summary route is implemented by this status update.
+
+Route rules:
 
 - product-summary and read-product-catalog language, not dashboard UI language;
 - path-based;
@@ -99,7 +107,7 @@ contract.
 
 ## DTO pins
 
-Future response constants are:
+Response constants are:
 
 ```text
 schema_version = "product-summary-v1"
@@ -110,7 +118,7 @@ read_at = timezone-aware UTC
 
 Use `summary_type` as the discriminator. Do not add `surface_type`.
 
-Future top-level sections are:
+Top-level sections are:
 
 - `implemented_read_products`;
 - `deferred_read_products`;
@@ -149,7 +157,7 @@ verdict, or badge.
 
 Counts are optional and should be avoided unless they are clearly redundant.
 
-If counts are included in a future implementation:
+If counts are included in a later reviewed implementation:
 
 - counts may only be self-evident tallies of enumerated catalog entries;
 - counts must never be data-derived aggregates;
@@ -215,7 +223,7 @@ Surface A may include only static deterministic capability metadata:
 
 ## Forbidden inputs and outputs
 
-The future catalog must exclude:
+The catalog must exclude:
 
 - raw evidence;
 - raw sidecars;
@@ -254,7 +262,7 @@ errors, tests, and documentation examples.
 
 ## Determinism and non-leakage
 
-Future implementation must provide:
+The implementation must provide:
 
 - stable entry ordering;
 - timezone-aware UTC `read_at`;
@@ -281,9 +289,9 @@ test is acceptable but not mandatory.
 Alembic head remains `m8b9c0d1e2f3` unless a separate reviewed migration
 changes it.
 
-## Future implementation test gates
+## Implementation test gates
 
-Before any future implementation merge, tests must verify:
+Implementation tests must verify:
 
 - exact route exists once;
 - no generic dispatcher;
@@ -306,7 +314,7 @@ Before any future implementation merge, tests must verify:
 
 ## Catalog and OpenAPI consistency gate
 
-Future implementation must include a bidirectional catalog and OpenAPI
+Implementation must include a bidirectional catalog and OpenAPI
 consistency test:
 
 - every catalog entry marked `implemented` must have its route present in
@@ -329,8 +337,8 @@ the catalog diverge.
 
 ## Implemented read products to catalog
 
-Current implemented read products to list as `implemented` in a future Surface
-A response are:
+Current implemented read products listed as `implemented` in the Surface A
+response are:
 
 - Mission visual manifest API:
   `GET /api/v1/visual-manifests/mission/{mission_id}`;
@@ -347,7 +355,7 @@ A response are:
 
 ## Deferred and unsupported entries to catalog
 
-Future Surface A should include these deferred or unsupported entries:
+Surface A includes these deferred or unsupported entries:
 
 - Observation-study visual manifest:
   `GET /api/v1/visual-manifests/observation-study/{geometry_run_id}/{provenance_link_id}`;
@@ -357,17 +365,17 @@ Future Surface A should include these deferred or unsupported entries:
   surface only, not UI.
 - Per-scope composition Surface B: status `deferred`; note that it requires a
   separate reviewed contract.
-- Rendering, frontend, provider/live-data, and exports: status `unsupported`
-  or `deferred`; note that no implementation is authorized.
+- Rendering, frontend, provider/live-data, exports, graph drawing, and map
+  drawing: status `unsupported`; note that no implementation is authorized.
 
 ## Explicit exclusions
 
-This contract does not implement or authorize:
+Beyond the single implemented Surface A static catalog route, this contract
+does not implement or authorize:
 
-- product summary API implementation;
-- read-product catalog schema implementation;
-- router implementation;
-- tests;
+- additional product summary API implementation;
+- additional read-product catalog schema implementation;
+- additional router implementation;
 - migrations;
 - persistence tables;
 - persisted domain data reads;
