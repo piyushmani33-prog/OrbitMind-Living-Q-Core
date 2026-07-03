@@ -367,4 +367,5 @@ Future dashboard implementation requires separate reviewed planning for:
 - PostgreSQL validation if persisted records are read;
 - UI, frontend, charts, or widgets only after separate approval;
 - no action, task, or recommendation panels unless separately approved;
-- Phase 5 visual-planning closure audit after this specification merges.
+- the [Phase 5 visual-planning closure audit](PHASE_5_VISUAL_PLANNING_CLOSURE_AUDIT.md),
+  which closes planning only and authorizes no implementation.

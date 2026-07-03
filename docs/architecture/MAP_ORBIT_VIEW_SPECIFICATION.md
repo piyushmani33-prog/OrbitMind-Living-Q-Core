@@ -399,4 +399,6 @@ Future map/orbit implementation requires separate reviewed planning for:
 - PostgreSQL validation if persisted records are read;
 - dashboard references only under
   [DASHBOARD_VIEW_SPECIFICATION.md](DASHBOARD_VIEW_SPECIFICATION.md);
-- rendering, CesiumJS, Leaflet, or frontend only after separate approval.
+- rendering, CesiumJS, Leaflet, or frontend only after separate approval;
+- the [Phase 5 visual-planning closure audit](PHASE_5_VISUAL_PLANNING_CLOSURE_AUDIT.md),
+  which closes planning only and authorizes no implementation.

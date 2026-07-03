@@ -4,10 +4,11 @@
 
 This is a Phase 5.2 documentation-only specification.
 
-The visual manifest is a future read-only discovery/index contract. It
-describes how existing persisted mission artifacts, sidecars, authenticated
-optimization artifacts, observation study-chain records, integrity summaries,
-and provenance/evidence metadata could be represented safely.
+At Phase 5.2, the visual manifest was specified as a future read-only
+discovery/index contract. It describes how existing persisted mission artifacts,
+sidecars, authenticated optimization artifacts, observation study-chain records,
+integrity summaries, and provenance/evidence metadata could be represented
+safely.
 
 This specification does not implement an API. It does not implement schemas,
 routes, migrations, rendering, reports, dashboards, graphs, maps, exports, or
@@ -22,6 +23,9 @@ implemented domain-specific read-only routes:
 No generic dispatcher or mutation routes exist. `observation-study`,
 `integrity-summary`, and `memory-evidence` remain reserved/deferred and require
 separate planning and review before implementation.
+
+The [Phase 5 visual-planning closure audit](PHASE_5_VISUAL_PLANNING_CLOSURE_AUDIT.md)
+records planning-layer closure only and authorizes no implementation work.
 
 ## Manifest is not authority
 
@@ -320,7 +324,9 @@ Future gates are planning checkpoints only:
 - [map/orbit view specification](MAP_ORBIT_VIEW_SPECIFICATION.md) before
   Leaflet/CesiumJS;
 - [dashboard view specification](DASHBOARD_VIEW_SPECIFICATION.md) before
-  frontend work.
+  frontend work;
+- [Phase 5 visual-planning closure audit](PHASE_5_VISUAL_PLANNING_CLOSURE_AUDIT.md),
+  a status record only.
 
 Phase 5.3 should not jump directly to route implementation. Each later gate
 needs separate planning/review.

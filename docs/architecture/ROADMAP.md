@@ -111,6 +111,8 @@ deferred.
 The [dashboard view specification](DASHBOARD_VIEW_SPECIFICATION.md) is a
 docs-only gate; dashboard UI, charts, widgets, rendering, and frontend remain
 deferred.
+The [Phase 5 visual-planning closure audit](PHASE_5_VISUAL_PLANNING_CLOSURE_AUDIT.md)
+closes the planning layer only; it authorizes no implementation surfaces.
 
 Additional visual manifest domains (observation study, integrity, memory),
 interactive charts, maps (Leaflet), CesiumJS orbit view, D3 provenance graph,

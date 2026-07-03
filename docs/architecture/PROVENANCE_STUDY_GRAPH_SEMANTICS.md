@@ -326,4 +326,6 @@ Future graph implementation requires separate reviewed planning for:
   [MAP_ORBIT_VIEW_SPECIFICATION.md](MAP_ORBIT_VIEW_SPECIFICATION.md);
 - dashboard references only under
   [DASHBOARD_VIEW_SPECIFICATION.md](DASHBOARD_VIEW_SPECIFICATION.md);
-- rendering, D3, or frontend only after separate approval.
+- rendering, D3, or frontend only after separate approval;
+- the [Phase 5 visual-planning closure audit](PHASE_5_VISUAL_PLANNING_CLOSURE_AUDIT.md),
+  which closes planning only and authorizes no implementation.
