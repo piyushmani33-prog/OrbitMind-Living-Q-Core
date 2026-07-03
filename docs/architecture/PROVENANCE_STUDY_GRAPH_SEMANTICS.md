@@ -2,14 +2,19 @@
 
 ## Purpose and status
 
-This is a docs-only Phase 5 graph semantics specification.
+This began as a docs-only Phase 5 graph semantics specification.
 
-It does not implement graph rendering. It does not implement D3, frontend,
-dashboard, export, PDF generation, report generation, graph API routes, graph
-persistence tables, provider/live-data behavior, or Quantum Studio.
+Status update: observation-study geometry-planning-chain graph API v1 is
+implemented under the
+[Provenance Study Graph API Contract](PROVENANCE_STUDY_GRAPH_API_CONTRACT.md).
+This document does not implement graph rendering, D3, frontend, dashboard,
+export, PDF generation, report generation, graph persistence tables,
+provider/live-data behavior, Quantum Studio, generic graph dispatch, or any
+other graph API surface.
 
-This specification gates future graph API, rendering, D3, dashboard, or other UI
-work. Any future graph implementation requires separate planning and review.
+This specification continues to gate future graph API, rendering, D3,
+dashboard, or other UI work. Any future graph implementation beyond the
+implemented v1 observation-study surface requires separate planning and review.
 
 ## Definition
 
@@ -297,7 +302,7 @@ This specification does not add:
 - export;
 - PDF;
 - report generation;
-- graph API routes;
+- additional graph API routes;
 - graph persistence tables;
 - migrations;
 - new visual manifest domains;
@@ -311,12 +316,13 @@ This specification does not add:
 
 ## Future gates
 
-Future graph implementation requires separate reviewed planning for:
+Future graph implementation beyond the implemented v1 observation-study surface
+requires separate reviewed planning for:
 
-- graph API or CLI, if any;
 - the [Provenance Study Graph API Contract](PROVENANCE_STUDY_GRAPH_API_CONTRACT.md),
-  which is a docs-only contract for the first future observation-study graph
-  API surface and authorizes no implementation;
+  which governs the implemented observation-study geometry-planning-chain graph
+  API v1 route and authorizes no additional implementation;
+- additional graph API or CLI surfaces, if any;
 - selected scope handles;
 - owner-scoping and cross-domain isolation;
 - node materialization strategy, if any;

@@ -2,37 +2,46 @@
 
 ## Purpose and status
 
-This is a docs-only Phase 5 Provenance Study Graph API Contract.
+This began as a docs-only Phase 5 Provenance Study Graph API Contract.
 
 This contract narrows the broad
 [provenance/study graph semantics](PROVENANCE_STUDY_GRAPH_SEMANTICS.md)
-specification to the first future graph API surface before any implementation
-work begins.
+specification to the first graph API surface before implementation work began.
 
-Implementation remains blocked until this contract is reviewed and merged.
-
-## Contract-not-implementation statement
-
-This contract is a docs-only planning artifact. It authorizes no API, schema,
-router, persistence, rendering, frontend, dashboard, provider/live-data,
-command/task, recommendation, Quantum Studio, or runtime implementation work.
-
-This contract does not add graph API routes, graph rendering, D3, frontend,
-dashboard UI, map/orbit rendering, provider/live-data behavior, PDF/export,
-graph persistence tables, migrations, a generic dispatcher, Quantum Studio, or
-quantum implementation work.
-
-## Future route shape
-
-The first future route idea is:
+Status update: observation-study geometry-planning-chain graph API v1 is
+implemented as the only provenance study graph API surface:
 
 ```text
 GET /api/v1/provenance-graphs/observation-study/geometry-planning-chain?geometry_run_id={geometry_run_id}&provenance_link_id={provenance_link_id}
 ```
 
-This route is not implemented by this contract.
+No other graph API domains, generic graph dispatcher, graph persistence,
+rendering, D3, frontend, dashboard, map/orbit, provider/live-data, memory graph
+expansion, Quantum Studio, or quantum implementation work is implemented by
+this status update.
 
-Future implementation rules:
+## Contract-not-implementation statement
+
+This contract remains the governing contract for the implemented v1 route and
+for deferred graph work. It authorizes no additional API, schema, router,
+persistence, rendering, frontend, dashboard, provider/live-data, command/task,
+recommendation, Quantum Studio, or runtime implementation work beyond the
+single implemented v1 route named above.
+
+This contract does not add graph rendering, D3, frontend, dashboard UI,
+map/orbit rendering, provider/live-data behavior, PDF/export, graph persistence
+tables, migrations, a generic dispatcher, Quantum Studio, or quantum
+implementation work.
+
+## Implemented route shape
+
+The implemented v1 route is:
+
+```text
+GET /api/v1/provenance-graphs/observation-study/geometry-planning-chain?geometry_run_id={geometry_run_id}&provenance_link_id={provenance_link_id}
+```
+
+Implementation rules:
 
 - domain-specific route only;
 - JSON-only;
@@ -47,18 +56,18 @@ Future implementation rules:
 
 ## Composite query parameter contract
 
-The future route requires exactly these query parameters:
+The implemented v1 route requires exactly these query parameters:
 
 - `geometry_run_id`;
 - `provenance_link_id`.
 
-Future implementation should reuse observation-study router conventions:
+The implementation reuses observation-study router conventions:
 
 - allowlist query rejection;
 - clean identifier checks;
 - trusted owner dependency.
 
-The future route must reject all unknown query parameters, including:
+The route rejects all unknown query parameters, including:
 
 - `owner_id`;
 - `principal`;
@@ -70,13 +79,13 @@ The future route must reject all unknown query parameters, including:
 The route must use the trusted owner dependency only. It must never use a
 client-supplied owner value.
 
-This future route intentionally differs from visual-manifest and static-report
+This route intentionally differs from visual-manifest and static-report
 routes that blanket-reject all query parameters, because this graph scope is a
 composite read over two required identifiers.
 
 ## Observation-study-only first scope
 
-The first future graph scope is:
+The implemented v1 graph scope is:
 
 ```text
 observation-study geometry-planning-chain
@@ -101,7 +110,7 @@ Deferred graph scopes:
 
 ## Scope handle
 
-The future graph scope handle is:
+The v1 graph scope handle is:
 
 ```text
 observation-study-chain:{geometry_run_id}:{provenance_link_id}
@@ -116,7 +125,7 @@ separate reviewed planning.
 
 ## Node identity
 
-Future node IDs use this deterministic format:
+V1 node IDs use this deterministic format:
 
 ```text
 study-graph-node:{node_type}:{record_id}
@@ -134,7 +143,7 @@ Node IDs are:
 
 ## Node schema concept
 
-Future graph nodes should be JSON objects containing only safe graph projection
+V1 graph nodes are JSON objects containing only safe graph projection
 metadata, such as:
 
 - deterministic node ID;
@@ -151,7 +160,7 @@ sidecars, or hidden owner information.
 
 ## Edge schema concept
 
-Future graph edges should be JSON objects containing only safe relationship
+V1 graph edges are JSON objects containing only safe relationship
 projection metadata, such as:
 
 - deterministic edge ID, if edge IDs are used;
@@ -168,7 +177,7 @@ or report/manifest convenience.
 
 ## Allowed node types
 
-The first future surface may use only these node types:
+The implemented v1 surface uses only these node types:
 
 - `geometry-run`;
 - `eligibility-provenance`;
@@ -179,7 +188,7 @@ The first future surface may use only these node types:
 - `provenance-link`;
 - `integrity-summary`, success-only.
 
-The first future surface must not use:
+The implemented v1 surface must not use:
 
 - mission nodes;
 - optimization benchmark nodes;
@@ -193,7 +202,7 @@ The first future surface must not use:
 
 ## Allowed edge types
 
-The first future surface may use only these recorded relationship projections:
+The implemented v1 surface uses only these recorded relationship projections:
 
 1. `eligibility-provenance derived-from geometry-run`
 2. `eligibility-set uses eligibility-provenance`
@@ -235,7 +244,7 @@ Proof/source labels must name relationship kinds only. They must never expose:
 
 The first graph surface is owner-scoped.
 
-Future implementation rules:
+V1 implementation rules:
 
 - use trusted owner dependency only;
 - never accept owner, principal, or user query parameters;
@@ -249,7 +258,7 @@ Future implementation rules:
 
 ## Owner-isolation test matrix
 
-Future implementation tests must include:
+V1 implementation tests include:
 
 - owner A can read owner A chain;
 - owner B cannot read owner A chain;
@@ -265,7 +274,7 @@ Future implementation tests must include:
 
 ## Fail-closed integrity behavior
 
-Future implementation must fail closed:
+V1 implementation fails closed:
 
 - hidden or missing owner-scoped records return `404`;
 - tamper returns sanitized `422`;
@@ -313,13 +322,13 @@ Error responses must not contain graph-shaped fields, including:
 
 Receipt and signing state is not applicable to observation-study graph v1.
 
-The first future surface must not include `receipt_status`.
+The implemented v1 surface must not include `receipt_status`.
 
 The graph must preserve no signed receipt authority.
 
 ## Quantum exclusions
 
-The first future surface must not include:
+The implemented v1 surface must not include:
 
 - quantum nodes;
 - quantum diagnostics;
@@ -369,7 +378,7 @@ Future graph surfaces must never expose:
 
 ## Deterministic output rules
 
-Future output must be:
+V1 output must be:
 
 - JSON-only;
 - generated on demand;
@@ -402,7 +411,7 @@ Edges should be ordered lexicographically by:
 
 ## PostgreSQL validation gates
 
-Future implementation must include:
+V1 implementation must include:
 
 - migrated PostgreSQL validation;
 - no `create_all()`;
@@ -419,10 +428,11 @@ Future implementation must include:
 
 ## Future implementation gates
 
-Future implementation requires separate reviewed planning for:
+Future graph implementation beyond the implemented v1 observation-study route
+requires separate reviewed planning for:
 
-- graph route registration;
-- graph response schemas;
+- additional graph route registration;
+- additional graph response schemas;
 - selected scope handle behavior;
 - owner-scoping and cross-domain isolation;
 - node materialization strategy, if any;
@@ -437,9 +447,10 @@ behavior, command/task surfaces, and recommendations require separate approval.
 
 ## Explicit exclusions
 
-This contract does not implement or authorize:
+This contract does not implement or authorize beyond the single implemented v1
+observation-study route:
 
-- graph API implementation;
+- additional graph API surfaces;
 - graph rendering;
 - D3;
 - frontend;
@@ -484,7 +495,7 @@ Existing routes are not modified by this contract.
 
 ## Scientific-honesty boundaries
 
-Future graph surfaces must preserve:
+Graph surfaces must preserve:
 
 - no live tracking;
 - no real-time position authority;
