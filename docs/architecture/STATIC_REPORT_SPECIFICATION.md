@@ -191,6 +191,9 @@ specification.
 Future map/orbit view references are governed by the
 [map/orbit view specification](MAP_ORBIT_VIEW_SPECIFICATION.md).
 
+Future dashboard references are governed by the
+[dashboard view specification](DASHBOARD_VIEW_SPECIFICATION.md).
+
 ## Excluded fields and internals
 
 Static reports must not expose:

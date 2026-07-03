@@ -108,6 +108,9 @@ deferred.
 The [map/orbit view specification](MAP_ORBIT_VIEW_SPECIFICATION.md) is a
 docs-only gate; map/orbit rendering, Leaflet, CesiumJS, and frontend remain
 deferred.
+The [dashboard view specification](DASHBOARD_VIEW_SPECIFICATION.md) is a
+docs-only gate; dashboard UI, charts, widgets, rendering, and frontend remain
+deferred.
 
 Additional visual manifest domains (observation study, integrity, memory),
 interactive charts, maps (Leaflet), CesiumJS orbit view, D3 provenance graph,

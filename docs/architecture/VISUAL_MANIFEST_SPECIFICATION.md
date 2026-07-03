@@ -319,7 +319,8 @@ Future gates are planning checkpoints only:
   after manifest identity/linking semantics;
 - [map/orbit view specification](MAP_ORBIT_VIEW_SPECIFICATION.md) before
   Leaflet/CesiumJS;
-- dashboard planning before frontend work.
+- [dashboard view specification](DASHBOARD_VIEW_SPECIFICATION.md) before
+  frontend work.
 
 Phase 5.3 should not jump directly to route implementation. Each later gate
 needs separate planning/review.
