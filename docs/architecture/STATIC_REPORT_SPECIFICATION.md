@@ -271,6 +271,8 @@ Future report generation requires separate reviewed planning for:
 - redaction tests;
 - deterministic-output tests;
 - PostgreSQL validation if persisted records are read;
-- no PDF, export, or rendering until separately approved.
+- no PDF, export, or rendering until separately approved;
 - provenance/study graph references only under
-  [PROVENANCE_STUDY_GRAPH_SEMANTICS.md](PROVENANCE_STUDY_GRAPH_SEMANTICS.md).
+  [PROVENANCE_STUDY_GRAPH_SEMANTICS.md](PROVENANCE_STUDY_GRAPH_SEMANTICS.md);
+- the [Phase 5 visual-planning closure audit](PHASE_5_VISUAL_PLANNING_CLOSURE_AUDIT.md),
+  which closes planning only and authorizes no implementation.

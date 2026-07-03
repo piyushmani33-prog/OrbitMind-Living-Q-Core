@@ -24,6 +24,9 @@ remains the umbrella for deferred reports, graphs, maps, orbit views,
 dashboards, rendering/export, frontend, provider/live-data behavior, Quantum
 Studio, and other visual-domain work.
 
+The [Phase 5 visual-planning closure audit](PHASE_5_VISUAL_PLANNING_CLOSURE_AUDIT.md)
+records planning-layer closure only and authorizes no implementation work.
+
 ## Safe visual inputs
 
 The safe inputs for future visual-intelligence work are existing persisted
@@ -146,7 +149,9 @@ Future gates are planning checkpoints only, not active implementation:
 - [map/orbit view specification](MAP_ORBIT_VIEW_SPECIFICATION.md) before
   Leaflet/CesiumJS work;
 - [dashboard view specification](DASHBOARD_VIEW_SPECIFICATION.md) before
-  frontend work.
+  frontend work;
+- [Phase 5 visual-planning closure audit](PHASE_5_VISUAL_PLANNING_CLOSURE_AUDIT.md),
+  a status record only.
 
 Each gate requires separate planning and review before implementation.
 
