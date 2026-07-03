@@ -240,6 +240,9 @@ Additional visual manifest domains remain deferred and require separate review.
 Future map/orbit views that reference graph context are governed by the
 [map/orbit view specification](MAP_ORBIT_VIEW_SPECIFICATION.md).
 
+Future dashboards that reference graph context are governed by the
+[dashboard view specification](DASHBOARD_VIEW_SPECIFICATION.md).
+
 ## Excluded fields and internals
 
 Provenance/study graphs must not expose:
@@ -321,4 +324,6 @@ Future graph implementation requires separate reviewed planning for:
 - PostgreSQL validation if persisted records are read;
 - map/orbit view references only under
   [MAP_ORBIT_VIEW_SPECIFICATION.md](MAP_ORBIT_VIEW_SPECIFICATION.md);
+- dashboard references only under
+  [DASHBOARD_VIEW_SPECIFICATION.md](DASHBOARD_VIEW_SPECIFICATION.md);
 - rendering, D3, or frontend only after separate approval.

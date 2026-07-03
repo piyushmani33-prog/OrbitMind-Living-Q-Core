@@ -341,6 +341,15 @@ Graph references must follow the edge-projection and owner-scoping semantics
 from the provenance/study graph semantics specification. Graph references are
 not proof by themselves.
 
+## Relationship to dashboards
+
+Future dashboards may reference map/orbit view summaries or withheld states.
+
+Dashboards must follow the
+[dashboard view specification](DASHBOARD_VIEW_SPECIFICATION.md). Dashboard
+references do not add operational authority, live tracking, provider data, or
+map/orbit rendering.
+
 ## Out of scope
 
 This specification does not add:
@@ -388,4 +397,6 @@ Future map/orbit implementation requires separate reviewed planning for:
 - tile, terrain, or imagery source review;
 - operator disclosure for any external source;
 - PostgreSQL validation if persisted records are read;
+- dashboard references only under
+  [DASHBOARD_VIEW_SPECIFICATION.md](DASHBOARD_VIEW_SPECIFICATION.md);
 - rendering, CesiumJS, Leaflet, or frontend only after separate approval.

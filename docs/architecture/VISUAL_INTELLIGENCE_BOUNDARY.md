@@ -145,7 +145,8 @@ Future gates are planning checkpoints only, not active implementation:
   before D3 or graph UI;
 - [map/orbit view specification](MAP_ORBIT_VIEW_SPECIFICATION.md) before
   Leaflet/CesiumJS work;
-- dashboard planning before frontend work.
+- [dashboard view specification](DASHBOARD_VIEW_SPECIFICATION.md) before
+  frontend work.
 
 Each gate requires separate planning and review before implementation.
 
