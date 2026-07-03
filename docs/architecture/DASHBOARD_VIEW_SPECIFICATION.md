@@ -17,6 +17,12 @@ rendering, APIs, persistence, live/provider behavior, action/task surfaces, and
 recommendation behavior. Future dashboard UI, API, rendering, frontend, or
 persistence work requires separate planning and review.
 
+The [Product Summary Read Surface Contract](PRODUCT_SUMMARY_READ_SURFACE_CONTRACT.md)
+is a docs-only contract for a future JSON-only static read-product catalog. It
+is not dashboard UI, inherits this specification's aggregation and rollup
+limits, and authorizes no implementation; implementation remains blocked until
+separate planning and review.
+
 ## Definition
 
 Future dashboards are read-only and non-authoritative deterministic
