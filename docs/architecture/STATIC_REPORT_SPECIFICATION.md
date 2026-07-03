@@ -4,13 +4,22 @@
 
 This is a docs-only Phase 5 static report specification.
 
-It does not implement report generation. It does not implement PDF generation,
-export, rendering, charts, maps, graphs, dashboards, frontend work,
-provider/live-data behavior, or Quantum Studio.
+Status update: mission static report v1 is implemented as a domain-specific,
+on-demand JSON route:
 
-This specification gates a future reviewed report-generator slice. A future
-generator requires separate planning and review before any API, CLI,
-persistence, rendering, export, or runtime behavior is implemented.
+```text
+GET /api/v1/static-reports/mission/{mission_id}
+```
+
+This does not implement static reports generally. Optimization benchmark
+reports, all other report domains, PDF/export, Markdown or HTML rendering,
+report persistence, scheduling, email delivery, frontend work, dashboard UI,
+report authoring, provider/live-data behavior, and Quantum Studio remain
+future/deferred.
+
+This specification gates future reviewed report-generator slices. Additional
+report domains or output modes require separate planning and review before any
+API, CLI, persistence, rendering, export, or runtime behavior is implemented.
 
 ## Definition
 
