@@ -128,10 +128,10 @@ The [dashboard view specification](DASHBOARD_VIEW_SPECIFICATION.md) is a
 docs-only gate; dashboard UI, charts, widgets, rendering, and frontend remain
 deferred.
 The [Product Summary Read Surface Contract](PRODUCT_SUMMARY_READ_SURFACE_CONTRACT.md)
-is a docs-only gate for a future static JSON read-product catalog;
-implementation, dashboard UI, rendering, frontend, provider/live-data,
-exports, Surface B per-scope composition, and observation-study visual manifest
-implementation remain deferred.
+governs the implemented Surface A static JSON read-product catalog; dashboard
+UI, rendering, frontend, provider/live-data, exports, Surface B per-scope
+composition, and observation-study visual manifest implementation remain
+deferred.
 The [Phase 5 visual-planning closure audit](PHASE_5_VISUAL_PLANNING_CLOSURE_AUDIT.md)
 closes the planning layer only; it authorizes no implementation surfaces.
 
