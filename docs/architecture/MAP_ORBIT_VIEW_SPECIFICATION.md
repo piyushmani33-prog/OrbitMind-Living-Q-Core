@@ -388,7 +388,9 @@ Future map/orbit implementation requires separate reviewed planning for:
 - map/orbit API or CLI, if any;
 - selected scope handles;
 - owner-scoping and cross-domain isolation;
-- coordinate-display DTOs;
+- coordinate-display DTOs under the docs-only
+  [Map/Orbit DTO Contract](MAP_ORBIT_DTO_CONTRACT.md), which authorizes no
+  implementation;
 - interval-display DTOs;
 - map/orbit materialization strategy, if any;
 - deterministic-output tests;
