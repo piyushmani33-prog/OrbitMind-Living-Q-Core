@@ -314,6 +314,9 @@ This specification does not add:
 Future graph implementation requires separate reviewed planning for:
 
 - graph API or CLI, if any;
+- the [Provenance Study Graph API Contract](PROVENANCE_STUDY_GRAPH_API_CONTRACT.md),
+  which is a docs-only contract for the first future observation-study graph
+  API surface and authorizes no implementation;
 - selected scope handles;
 - owner-scoping and cross-domain isolation;
 - node materialization strategy, if any;
