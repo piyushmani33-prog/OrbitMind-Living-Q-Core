@@ -27,6 +27,15 @@ do not implement generic multi-domain dispatch, reports, dashboards, maps,
 graphs, rendering, exports, live data, provider behavior, or Quantum Studio.
 All other visual manifest domains remain reserved and deferred.
 
+The [Observation-study Visual Manifest Contract](OBSERVATION_STUDY_VISUAL_MANIFEST_CONTRACT.md)
+documents this future route only:
+
+```http
+GET /api/v1/visual-manifests/observation-study/{geometry_run_id}/{provenance_link_id}
+```
+
+That docs-only contract authorizes no implementation and no generic dispatcher.
+
 ## Contract is not implementation
 
 No route is implemented in Phase 5.3.
@@ -100,6 +109,10 @@ Reserved but deferred future domains:
 
 `observation-study` and `integrity-summary` require a reviewed stable scope
 handle because existing surfaces are composite.
+
+`observation-study` now has a docs-only contract that adopts
+`observation-study-chain:{geometry_run_id}:{provenance_link_id}` as the
+future route's server-derived `scope_id`; implementation remains deferred.
 
 `memory-evidence` requires graph and citation semantics review.
 

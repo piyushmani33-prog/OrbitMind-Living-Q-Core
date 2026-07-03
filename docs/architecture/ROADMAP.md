@@ -111,6 +111,11 @@ The [Provenance Study Graph API Contract](PROVENANCE_STUDY_GRAPH_API_CONTRACT.md
 governs the implemented observation-study geometry-planning-chain graph API v1
 route; other graph APIs, graph rendering, D3, frontend, dashboard, map/orbit,
 and provider/live-data work remain deferred.
+The [Observation-study Visual Manifest Contract](OBSERVATION_STUDY_VISUAL_MANIFEST_CONTRACT.md)
+is a docs-only gate for a future record-index observation-study visual
+manifest; implementation, generic dispatch, graph rendering, dashboard UI,
+provider/live-data, coordinates, map/orbit, quantum, and cross-domain
+aggregation remain deferred.
 The [map/orbit view specification](MAP_ORBIT_VIEW_SPECIFICATION.md) is a
 docs-only gate; map/orbit rendering, Leaflet, CesiumJS, and frontend remain
 deferred.

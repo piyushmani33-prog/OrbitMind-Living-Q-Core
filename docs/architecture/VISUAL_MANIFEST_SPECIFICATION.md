@@ -24,6 +24,11 @@ No generic dispatcher or mutation routes exist. `observation-study`,
 `integrity-summary`, and `memory-evidence` remain reserved/deferred and require
 separate planning and review before implementation.
 
+The [Observation-study Visual Manifest Contract](OBSERVATION_STUDY_VISUAL_MANIFEST_CONTRACT.md)
+is a docs-only gate for the future observation-study visual manifest. It
+authorizes no implementation; the observation-study manifest route remains
+blocked until separate implementation planning and review.
+
 The [Phase 5 visual-planning closure audit](PHASE_5_VISUAL_PLANNING_CLOSURE_AUDIT.md)
 records planning-layer closure only and authorizes no implementation work.
 
