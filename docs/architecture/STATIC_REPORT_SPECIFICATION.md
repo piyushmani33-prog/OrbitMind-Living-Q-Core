@@ -4,18 +4,22 @@
 
 This is a docs-only Phase 5 static report specification.
 
-Status update: mission static report v1 is implemented as a domain-specific,
-on-demand JSON route:
+Status update: mission static report v1 and optimization-benchmark static
+report v1 are implemented as domain-specific, on-demand JSON routes:
 
 ```text
 GET /api/v1/static-reports/mission/{mission_id}
+GET /api/v1/static-reports/optimization-benchmark/{benchmark_id}
 ```
 
-This does not implement static reports generally. Optimization benchmark
-reports, all other report domains, PDF/export, Markdown or HTML rendering,
-report persistence, scheduling, email delivery, frontend work, dashboard UI,
-report authoring, provider/live-data behavior, and Quantum Studio remain
-future/deferred.
+This does not implement static reports generally. All other report domains,
+PDF/export, Markdown or HTML rendering, report persistence, scheduling, email
+delivery, frontend work, dashboard UI, report authoring, provider/live-data
+behavior, and Quantum Studio remain future/deferred.
+
+Optimization-benchmark static report v1 fails closed rather than emitting
+partial report bodies because unauthenticated evidence is diagnostic only and
+must not be served as a report product.
 
 This specification gates future reviewed report-generator slices. Additional
 report domains or output modes require separate planning and review before any

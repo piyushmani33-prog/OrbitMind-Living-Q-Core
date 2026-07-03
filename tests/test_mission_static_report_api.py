@@ -395,15 +395,18 @@ def test_mission_static_report_shape_differs_from_visual_manifest(
 def test_mission_static_report_openapi_and_router_boundary(client: TestClient) -> None:
     paths = client.get("/openapi.json").json()["paths"]
     route = "/api/v1/static-reports/mission/{mission_id}"
+    optimization_route = "/api/v1/static-reports/optimization-benchmark/{benchmark_id}"
     assert route in paths
     assert set(paths[route]) == {"get"}
+    assert optimization_route in paths
+    assert set(paths[optimization_route]) == {"get"}
     static_report_routes = {
         (path, method)
         for path, methods in paths.items()
         if path.startswith("/api/v1/static-reports")
         for method in methods
     }
-    assert static_report_routes == {(route, "get")}
+    assert static_report_routes == {(route, "get"), (optimization_route, "get")}
     assert "/api/v1/static-reports/{domain}/{scope_id}" not in paths
 
     router_source = Path(static_reports_router.__file__).read_text(encoding="utf-8")
@@ -435,7 +438,7 @@ def test_mission_static_report_openapi_and_router_boundary(client: TestClient) -
         "orbitmind.space.propagation",
         "orbitmind.sources.celestrak",
         "orbitmind.sources.jpl",
-        "orbitmind.optimization",
+        "orbitmind.optimization.solvers",
         "orbitmind.quantum",
         "httpx",
         "requests",
