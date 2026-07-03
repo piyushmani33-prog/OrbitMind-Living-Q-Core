@@ -2,12 +2,26 @@
 
 ## Purpose and status
 
-This is a docs-only contract. It authorizes no API, schema, router,
-persistence, rendering, frontend, Leaflet, CesiumJS, D3, dashboard UI,
-provider/live-data, live tracking, command/task, recommendation, Quantum
-Studio, or runtime implementation work.
+This began as a docs-only contract. The contract itself authorized no API,
+schema, router, persistence, rendering, frontend, Leaflet, CesiumJS, D3,
+dashboard UI, provider/live-data, live tracking, command/task, recommendation,
+Quantum Studio, or runtime implementation work.
 
-Implementation remains blocked until this contract is reviewed and merged.
+Status update: Mission Map/Orbit Context v1 is implemented as a
+domain-specific, coordinate-free, on-demand JSON route:
+
+```text
+GET /api/v1/map-orbit-contexts/mission/{mission_id}
+```
+
+This does not implement Map/Orbit Contexts generally. Coordinate payloads,
+rendering, Leaflet, CesiumJS, D3, frontend, dashboard UI, provider/live-data,
+live tracking, map/orbit persistence, generic dispatch, observation-study
+map/orbit contexts, optimization-benchmark map/orbit contexts, cross-domain
+contexts, Quantum Studio, and quantum implementation remain deferred.
+
+Additional implementation remains blocked until separately planned, reviewed,
+and merged.
 
 This contract defines bounded read-only Map/Orbit Context semantics before any
 map/orbit implementation. It narrows the broader
@@ -27,9 +41,10 @@ Coordinate-display DTOs require separate reviewed planning.
 
 ## Contract-not-implementation statement
 
-This document does not implement map/orbit APIs, DTOs, context schemas, routes,
-rendering, frontend behavior, provider/live-data behavior, persistence tables,
-or migrations.
+This contract did not itself implement map/orbit APIs, DTOs, context schemas,
+routes, rendering, frontend behavior, provider/live-data behavior, persistence
+tables, or migrations. The later Mission Map/Orbit Context v1 implementation is
+limited to the single domain-specific route named above.
 
 It does not authorize map rendering, orbit rendering, Leaflet, CesiumJS, D3,
 dashboard UI, PDF/export, live tracking, real-time position authority,
@@ -59,17 +74,17 @@ add a path segment or query parameter for choosing context type.
 Observation-study map/orbit contexts, optimization-benchmark map/orbit
 contexts, and cross-domain map/orbit contexts remain deferred.
 
-## Future route idea
+## Implemented mission route
 
-The future route idea is:
+The implemented Mission Map/Orbit Context v1 route is:
 
 ```text
 GET /api/v1/map-orbit-contexts/mission/{mission_id}
 ```
 
-This route is future-only. It is not implemented by this contract.
+No other map/orbit context route is implemented by this status update.
 
-Future route rules:
+Route rules:
 
 - domain-specific mission route only;
 - JSON-only;
@@ -86,19 +101,19 @@ Future route rules:
 - invalid or path-like `mission_id` returns a typed sanitized `422`;
 - missing mission returns `404`.
 
-The route uses product-noun naming. Future wire values should use
+The route uses product-noun naming. Wire values use
 `Map/Orbit Context`, `map-orbit-context-v1`, and `map-orbit-contexts` wording
 instead of exposing DTO implementation jargon on the wire.
 
-## Future schema and version naming
+## Schema and version naming
 
-The recommended future schema version is:
+The schema version is:
 
 ```text
 map-orbit-context-v1
 ```
 
-Future top-level fields are:
+Top-level fields are:
 
 - `schema_version`;
 - `context_id`;
@@ -113,7 +128,7 @@ Future top-level fields are:
 - `limitations`;
 - `disclaimer`.
 
-Pinned future values:
+Pinned values:
 
 ```text
 schema_version = "map-orbit-context-v1"

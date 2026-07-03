@@ -114,9 +114,9 @@ and provider/live-data work remain deferred.
 The [map/orbit view specification](MAP_ORBIT_VIEW_SPECIFICATION.md) is a
 docs-only gate; map/orbit rendering, Leaflet, CesiumJS, and frontend remain
 deferred.
-The [Map/Orbit DTO Contract](MAP_ORBIT_DTO_CONTRACT.md) is the docs-only gate
-for the first future mission map/orbit context; implementation, rendering,
-Leaflet, CesiumJS, D3, frontend, provider/live-data, live tracking, dashboard,
+The [Map/Orbit DTO Contract](MAP_ORBIT_DTO_CONTRACT.md) governs the implemented
+mission Map/Orbit Context v1 route; coordinate payloads, rendering, Leaflet,
+CesiumJS, D3, frontend, provider/live-data, live tracking, dashboard,
 persistence, cross-domain contexts, observation-study contexts, optimization
 contexts, and Quantum Studio remain deferred.
 The [dashboard view specification](DASHBOARD_VIEW_SPECIFICATION.md) is a
