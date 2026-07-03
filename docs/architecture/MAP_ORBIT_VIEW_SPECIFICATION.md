@@ -15,6 +15,19 @@ Leaflet, frontend/dashboard, API, persistence, provider/live-data behavior, and
 coordinate-display DTO work. Future rendering, API, UI, provider, or
 coordinate-display DTO work requires separate planning and review.
 
+Status update: Mission Map/Orbit Context v1 is implemented as a
+domain-specific, coordinate-free, on-demand JSON route:
+
+```text
+GET /api/v1/map-orbit-contexts/mission/{mission_id}
+```
+
+This does not implement map/orbit views generally. Coordinate payloads,
+rendering, Leaflet, CesiumJS, D3, frontend, dashboard UI, provider/live-data,
+live tracking, map/orbit persistence, generic dispatch, observation-study
+map/orbit contexts, optimization-benchmark map/orbit contexts, cross-domain
+contexts, Quantum Studio, and quantum implementation remain deferred.
+
 ## Definition
 
 A future map/orbit view is read-only and non-authoritative. It is a

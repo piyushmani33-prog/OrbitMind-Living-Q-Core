@@ -16,6 +16,7 @@ from fastapi import FastAPI
 from orbitmind import __version__
 from orbitmind.api.container import AppContainer
 from orbitmind.api.errors import register_exception_handlers
+from orbitmind.api.routers.map_orbit_contexts import router as map_orbit_contexts_router
 from orbitmind.api.routers.memory import router as memory_router
 from orbitmind.api.routers.missions import router as missions_router
 from orbitmind.api.routers.observation_geometry import router as observation_geometry_router
@@ -70,6 +71,7 @@ def create_app(container: AppContainer | None = None) -> FastAPI:
     app.include_router(provenance_graphs_router)
     app.include_router(visual_manifests_router)
     app.include_router(static_reports_router)
+    app.include_router(map_orbit_contexts_router)
     return app
 
 
