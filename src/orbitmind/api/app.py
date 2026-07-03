@@ -22,6 +22,7 @@ from orbitmind.api.routers.observation_geometry import router as observation_geo
 from orbitmind.api.routers.observation_planning import router as observation_planning_router
 from orbitmind.api.routers.observation_studies import router as observation_studies_router
 from orbitmind.api.routers.optimization import router as optimization_router
+from orbitmind.api.routers.provenance_graphs import router as provenance_graphs_router
 from orbitmind.api.routers.small_bodies import router as small_bodies_router
 from orbitmind.api.routers.sources import router as sources_router
 from orbitmind.api.routers.space_objects import router as space_objects_router
@@ -66,6 +67,7 @@ def create_app(container: AppContainer | None = None) -> FastAPI:
     app.include_router(observation_geometry_router)
     app.include_router(observation_planning_router)
     app.include_router(observation_studies_router)
+    app.include_router(provenance_graphs_router)
     app.include_router(visual_manifests_router)
     app.include_router(static_reports_router)
     return app
