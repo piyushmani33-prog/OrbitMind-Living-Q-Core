@@ -107,6 +107,10 @@ and provider/live-data work remain deferred.
 The [provenance/study graph semantics](PROVENANCE_STUDY_GRAPH_SEMANTICS.md)
 specification is a docs-only gate; graph rendering, D3, and frontend remain
 deferred.
+The [Provenance Study Graph API Contract](PROVENANCE_STUDY_GRAPH_API_CONTRACT.md)
+is the docs-only gate for the first future graph API surface; graph
+implementation, rendering, D3, frontend, dashboard, map/orbit, and
+provider/live-data work remain deferred.
 The [map/orbit view specification](MAP_ORBIT_VIEW_SPECIFICATION.md) is a
 docs-only gate; map/orbit rendering, Leaflet, CesiumJS, and frontend remain
 deferred.
