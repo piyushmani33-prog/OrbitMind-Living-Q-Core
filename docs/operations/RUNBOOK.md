@@ -10,6 +10,12 @@ the few operational tasks that exist today; cloud/DR hardening is Phase 8.
 # stop: Ctrl-C
 ```
 
+For SQLite/local development, startup may create missing ORM tables as a
+convenience. For PostgreSQL, Alembic is the schema authority: run
+`alembic upgrade head` before app startup. PostgreSQL startup does not bootstrap
+schema via ORM `create_all()`, though it still records the source catalog once
+the migrated schema is present.
+
 ## Health checks
 - `GET /health` — status, version, Python, DB connectivity, execution mode, quantum.
 - `GET /version` — component versions.

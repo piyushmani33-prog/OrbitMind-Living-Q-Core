@@ -89,6 +89,8 @@ def pg_container(tmp_path: Path) -> AppContainer:
         evidence_signing_key="test-evidence-signing-key-0123456789abcdef",
     )
     container = AppContainer(settings=settings)
+    # On PostgreSQL, init_storage() must only sync source definitions; Alembic is
+    # the schema authority, so this must not call ORM metadata create_all().
     container.init_storage()
     assert container.database.is_postgres
     with container.database.engine.begin() as conn:
