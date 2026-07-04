@@ -50,9 +50,14 @@ ORBITMIND_TEST_POSTGRES_URL=$URL python -m pytest -m postgres -v
 In CI the `postgres-integration` job (`.github/workflows/ci.yml`) runs these against a
 PostgreSQL 16 service container; the default offline job is unchanged.
 
-Current test inventory after the read-product pause: `python -m pytest -m postgres
---collect-only -q` collects **117** postgres-marked tests. This is a collection
-count only; a live PostgreSQL pass still requires `ORBITMIND_TEST_POSTGRES_URL`.
+Current test inventory after the read-product pause is verified by:
+`.venv\Scripts\python.exe -m pytest -m postgres --collect-only -q`. It
+collects **118** postgres-marked tests. This is a collection count only; a live
+PostgreSQL pass still requires `ORBITMIND_TEST_POSTGRES_URL`.
+
+For the broader one-person local smoke checklist, including the optional
+PostgreSQL lane, see
+[`docs/operations/SOLO_ALPHA_SMOKE_FLOW.md`](SOLO_ALPHA_SMOKE_FLOW.md).
 
 ## Validation of record (2026-06-20)
 Performed against a real local PostgreSQL via the Compose profile:

@@ -21,6 +21,9 @@ the migrated schema is present.
 - `GET /version` — component versions.
 - `GET /api/v1/system/capabilities` — declared capabilities + availability.
 
+For a bounded one-person local smoke checklist, see
+[`docs/operations/SOLO_ALPHA_SMOKE_FLOW.md`](SOLO_ALPHA_SMOKE_FLOW.md).
+
 For the read-only offline observation study API flow that links persisted
 geometry-derived eligibility to provenance-anchored planning records, see
 [`docs/development/OBSERVATION_STUDY_API_FLOW.md`](../development/OBSERVATION_STUDY_API_FLOW.md).
