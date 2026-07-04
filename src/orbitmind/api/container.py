@@ -196,8 +196,9 @@ class AppContainer:
         )
 
     def init_storage(self) -> None:
-        """Ensure the schema exists and the source catalog is recorded (local/dev)."""
-        self.database.create_all()
+        """Ensure local schema exists and the source catalog is recorded."""
+        if not self.database.is_postgres:
+            self.database.create_all()
         with self.database.session() as session:
             source_repo = SqlAlchemySourceRepository(session)
             for definition in self.catalog.list():

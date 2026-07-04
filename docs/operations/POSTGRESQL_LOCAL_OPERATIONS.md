@@ -22,6 +22,11 @@ export ORBITMIND_DATABASE_URL="postgresql+psycopg://orbitmind:orbitmind@127.0.0.
 alembic upgrade head         # applies migrations incl. the FTS GIN index
 ```
 
+Alembic is the PostgreSQL schema authority. App startup does not bootstrap the
+PostgreSQL schema with ORM metadata `create_all()`; run `alembic upgrade head`
+before starting a PostgreSQL-backed app or validation run. ORM `create_all()`
+remains a SQLite/local/offline test convenience only.
+
 > **Windows:** use `127.0.0.1`, **not** `localhost`. `localhost` resolves to IPv6 `::1`
 > first; the Docker port-forward is IPv4-only, so psycopg waits out a ~130s IPv6 timeout
 > before falling back. `127.0.0.1` connects immediately.
@@ -44,6 +49,10 @@ ORBITMIND_TEST_POSTGRES_URL=$URL python -m pytest -m postgres -v
 ```
 In CI the `postgres-integration` job (`.github/workflows/ci.yml`) runs these against a
 PostgreSQL 16 service container; the default offline job is unchanged.
+
+Current test inventory after the read-product pause: `python -m pytest -m postgres
+--collect-only -q` collects **117** postgres-marked tests. This is a collection
+count only; a live PostgreSQL pass still requires `ORBITMIND_TEST_POSTGRES_URL`.
 
 ## Validation of record (2026-06-20)
 Performed against a real local PostgreSQL via the Compose profile:
