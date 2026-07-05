@@ -13,8 +13,7 @@ from orbitmind.api.app import create_app
 from orbitmind.api.container import AppContainer
 from orbitmind.core.config import Settings
 from orbitmind.persistence.database import Database
-
-_TEST_SIGNING_KEY = "test-evidence-signing-key-0123456789abcdef"
+from tests.signing_fixtures import TEST_ONLY_EVIDENCE_SIGNING_MATERIAL
 
 
 def _settings(tmp_path: Path) -> Settings:
@@ -23,7 +22,7 @@ def _settings(tmp_path: Path) -> Settings:
         artifacts_dir=tmp_path / "artifacts",
         cache_dir=tmp_path / "cache",
         env="test",
-        evidence_signing_key=_TEST_SIGNING_KEY,
+        evidence_signing_key=TEST_ONLY_EVIDENCE_SIGNING_MATERIAL,
     )
 
 
