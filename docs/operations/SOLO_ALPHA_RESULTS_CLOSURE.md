@@ -257,3 +257,7 @@ This closure does not claim:
 - Do not start UI, frontend, rendering, provider/live-data, export, or quantum
   work from this result.
 - Next safe fork should be planning-only and selected explicitly.
+
+For the first trusted operator boundary governing who may run the local/API-only
+Solo Alpha smoke flow and how feedback must be reported, see
+[`docs/operations/FIRST_TRUSTED_OPERATOR_BOUNDARY.md`](FIRST_TRUSTED_OPERATOR_BOUNDARY.md).

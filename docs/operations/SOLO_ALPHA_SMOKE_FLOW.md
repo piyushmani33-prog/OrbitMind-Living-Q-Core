@@ -12,6 +12,8 @@ rendering, exports, or quantum behavior.
 For the factual closure record of the SQLite and PostgreSQL Solo Alpha smoke
 runs, see
 [`docs/operations/SOLO_ALPHA_RESULTS_CLOSURE.md`](SOLO_ALPHA_RESULTS_CLOSURE.md).
+For who may run this checklist and how feedback must be reported, see
+[`docs/operations/FIRST_TRUSTED_OPERATOR_BOUNDARY.md`](FIRST_TRUSTED_OPERATOR_BOUNDARY.md).
 
 ## Preconditions
 - Start from a clean git working tree.
