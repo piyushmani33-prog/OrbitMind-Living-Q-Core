@@ -23,6 +23,9 @@ the migrated schema is present.
 
 For a bounded one-person local smoke checklist, see
 [`docs/operations/SOLO_ALPHA_SMOKE_FLOW.md`](SOLO_ALPHA_SMOKE_FLOW.md).
+For the factual closure record of the completed SQLite and PostgreSQL Solo
+Alpha smoke runs, see
+[`docs/operations/SOLO_ALPHA_RESULTS_CLOSURE.md`](SOLO_ALPHA_RESULTS_CLOSURE.md).
 
 For the read-only offline observation study API flow that links persisted
 geometry-derived eligibility to provenance-anchored planning records, see

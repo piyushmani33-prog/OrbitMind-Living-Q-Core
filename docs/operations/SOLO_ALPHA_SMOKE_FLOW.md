@@ -9,6 +9,10 @@ This checklist is not certification, not approval, not readiness scoring, and
 not production authority. It does not validate live provider data, frontend/UI,
 rendering, exports, or quantum behavior.
 
+For the factual closure record of the SQLite and PostgreSQL Solo Alpha smoke
+runs, see
+[`docs/operations/SOLO_ALPHA_RESULTS_CLOSURE.md`](SOLO_ALPHA_RESULTS_CLOSURE.md).
+
 ## Preconditions
 - Start from a clean git working tree.
 - Use the existing `.venv`.
