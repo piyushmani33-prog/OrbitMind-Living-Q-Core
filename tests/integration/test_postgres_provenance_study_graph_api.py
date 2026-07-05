@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
+from tests.signing_fixtures import TEST_ONLY_EVIDENCE_SIGNING_MATERIAL
 
 from orbitmind.api.app import create_app
 from orbitmind.api.container import AppContainer
@@ -86,7 +87,7 @@ def pg_container(tmp_path: Path) -> AppContainer:
         artifacts_dir=tmp_path / "artifacts",
         cache_dir=tmp_path / "cache",
         env="test",
-        evidence_signing_key="test-evidence-signing-key-0123456789abcdef",
+        evidence_signing_key=TEST_ONLY_EVIDENCE_SIGNING_MATERIAL,
     )
     container = AppContainer(settings=settings)
     container.init_storage = lambda: None  # type: ignore[method-assign]

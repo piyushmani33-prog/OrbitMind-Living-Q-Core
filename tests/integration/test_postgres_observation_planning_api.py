@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select, text, update
+from tests.signing_fixtures import TEST_ONLY_EVIDENCE_SIGNING_MATERIAL
 
 import orbitmind.observation_planning.orchestration as orchestration_module
 from orbitmind.api.app import create_app
@@ -78,6 +79,8 @@ pytestmark = [
 
 BASE = "/api/v1/observation-planning"
 GEOMETRY_BASE = "/api/v1/observation-geometry"
+_INFEASIBLE_IDEMPOTENCY_LABEL = "pg-api-infeasible"
+_INVALID_IDEMPOTENCY_LABEL = "pg-api-invalid"
 _TABLES = (
     "observation_planning_provenance_links",
     "observation_eligibility_windows",
@@ -102,7 +105,7 @@ def pg_container(tmp_path: Path) -> AppContainer:
         artifacts_dir=tmp_path / "artifacts",
         cache_dir=tmp_path / "cache",
         env="test",
-        evidence_signing_key="test-evidence-signing-key-0123456789abcdef",
+        evidence_signing_key=TEST_ONLY_EVIDENCE_SIGNING_MATERIAL,
     )
     container = AppContainer(settings=settings)
     container.init_storage = lambda: None  # type: ignore[method-assign]
@@ -169,7 +172,10 @@ def _payload(
 
 
 def _infeasible_payload() -> dict[str, object]:
-    payload = _payload(name="postgres api infeasible", idempotency_key="pg-api-infeasible")
+    payload = _payload(
+        name="postgres api infeasible",
+        idempotency_key=_INFEASIBLE_IDEMPOTENCY_LABEL,
+    )
     payload["opportunities"] = [
         _opportunity("OPP-A", start_min=60, end_min=90),
         _opportunity("OPP-B", start_min=70, end_min=100),
@@ -179,7 +185,7 @@ def _infeasible_payload() -> dict[str, object]:
 
 
 def _invalid_payload() -> dict[str, object]:
-    payload = _payload(name="postgres api invalid", idempotency_key="pg-api-invalid")
+    payload = _payload(name="postgres api invalid", idempotency_key=_INVALID_IDEMPOTENCY_LABEL)
     opportunity = dict(payload["opportunities"][0])  # type: ignore[index]
     opportunity["satellite_id"] = "SAT-MISSING"
     payload["opportunities"] = [opportunity]

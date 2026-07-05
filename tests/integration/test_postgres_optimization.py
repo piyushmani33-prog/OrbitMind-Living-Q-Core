@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 from sqlalchemy import text
+from tests.signing_fixtures import TEST_ONLY_EVIDENCE_SIGNING_MATERIAL
 
 from orbitmind.api.container import AppContainer
 from orbitmind.core.config import Settings
@@ -51,7 +52,7 @@ def pg_container(tmp_path: Path) -> AppContainer:
         artifacts_dir=tmp_path / "art",
         cache_dir=tmp_path / "cache",
         env="test",
-        evidence_signing_key="test-evidence-signing-key-0123456789abcdef",
+        evidence_signing_key=TEST_ONLY_EVIDENCE_SIGNING_MATERIAL,
     )
     container = AppContainer(settings=settings)  # no init_storage(): use the migrated schema
     assert container.database.is_postgres

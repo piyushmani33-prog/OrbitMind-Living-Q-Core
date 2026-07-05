@@ -15,6 +15,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 from tests.conftest import load_jpl_fixture, make_jpl_transport
+from tests.signing_fixtures import TEST_ONLY_EVIDENCE_SIGNING_MATERIAL
 
 from orbitmind.api.app import create_app
 from orbitmind.api.container import AppContainer
@@ -52,7 +53,7 @@ def pg_container(tmp_path: Path) -> Iterator[AppContainer]:
         jpl_sbdb_enabled=True,
         jpl_cad_enabled=True,
         env="test",
-        evidence_signing_key="test-evidence-signing-key-0123456789abcdef",
+        evidence_signing_key=TEST_ONLY_EVIDENCE_SIGNING_MATERIAL,
     )
     transport = make_jpl_transport(cad=load_jpl_fixture("cad_response.json"))
     container = AppContainer(settings, jpl_transport=transport, jpl_sleep=lambda _: None)

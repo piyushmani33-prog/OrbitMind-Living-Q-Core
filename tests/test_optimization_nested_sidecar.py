@@ -34,10 +34,9 @@ from orbitmind.optimization.receipts import (
     authenticate_sidecar_offline,
 )
 from orbitmind.quantum.adapter import quantum_available
+from tests.signing_fixtures import TEST_ONLY_EVIDENCE_SIGNING_MATERIAL
 
 pytestmark = pytest.mark.skipif(not quantum_available(), reason="qiskit/qiskit-aer not installed")
-
-_SIGNING_KEY = "test-evidence-signing-key-0123456789abcdef"
 
 
 @dataclass
@@ -71,7 +70,7 @@ def _build_quantum(tmp: Path, db_name: str, *, seed: int = 7) -> tuple[AppContai
         database_url=f"sqlite:///{(tmp / db_name).as_posix()}",
         artifacts_dir=tmp / "artifacts",
         env="test",
-        evidence_signing_key=_SIGNING_KEY,
+        evidence_signing_key=TEST_ONLY_EVIDENCE_SIGNING_MATERIAL,
     )
     container = AppContainer(settings=settings)
     container.init_storage()
