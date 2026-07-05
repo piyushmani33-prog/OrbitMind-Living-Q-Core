@@ -26,6 +26,8 @@ For a bounded one-person local smoke checklist, see
 For the factual closure record of the completed SQLite and PostgreSQL Solo
 Alpha smoke runs, see
 [`docs/operations/SOLO_ALPHA_RESULTS_CLOSURE.md`](SOLO_ALPHA_RESULTS_CLOSURE.md).
+For the first trusted operator boundary, see
+[`docs/operations/FIRST_TRUSTED_OPERATOR_BOUNDARY.md`](FIRST_TRUSTED_OPERATOR_BOUNDARY.md).
 
 For the read-only offline observation study API flow that links persisted
 geometry-derived eligibility to provenance-anchored planning records, see
