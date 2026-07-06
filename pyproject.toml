@@ -8,8 +8,8 @@ version = "0.1.0"
 description = "OrbitMind Living Q-Core — evidence-grounded scientific intelligence platform (Phase 0/1: orbital vertical slice)"
 readme = "README.md"
 requires-python = ">=3.12"
-license = { text = "Proprietary" }
-authors = [{ name = "OrbitMind" }]
+license = { text = "MIT" }
+authors = [{ name = "Piyush Mani" }]
 keywords = ["orbital", "satellite", "sgp4", "scientific-computing", "fastapi"]
 
 # Phase 0/1 runtime dependencies only. The full platform stack (Redis, Temporal,
@@ -51,8 +51,9 @@ dev = [
 ]
 
 [project.urls]
-Documentation = "https://example.invalid/orbitmind/docs"
-Repository = "https://example.invalid/orbitmind"
+Homepage = "https://github.com/piyushmani33-prog/OrbitMind-Living-Q-Core"
+Repository = "https://github.com/piyushmani33-prog/OrbitMind-Living-Q-Core"
+Documentation = "https://github.com/piyushmani33-prog/OrbitMind-Living-Q-Core/tree/main/docs"
 
 [tool.setuptools]
 package-dir = { "" = "src" }

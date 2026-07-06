@@ -19,6 +19,17 @@ visual artifacts — **fully offline and reproducible**.
 - Not production-ready, not public alpha, not live tracking, not live-provider validation,
   and not quantum advantage.
 
+## Reproducibility scope
+
+- "Reproducible" means the **same inputs produce the same logical deterministic
+  mission result and the same structured JSON/provenance** on the supported/pinned
+  environment.
+- Generated **PNG artifact bytes may vary** across matplotlib / numpy / font /
+  backend / platform versions; **plot PNG byte identity is not the reproducibility
+  contract**.
+- Artifacts are **local inspection aids, not authority** — the typed response,
+  provenance, and audit trail are the record.
+
 ## What OrbitMind is (today)
 
 - A FastAPI **modular monolith** (`src/orbitmind`) with strong internal boundaries.
@@ -101,6 +112,25 @@ python -m uvicorn orbitmind.api.app:app --reload --port 8000
 
 Operational endpoints: `GET /health`, `GET /version`,
 `GET /api/v1/system/capabilities`.
+
+## Verify the backend
+
+The offline quality gates (no network, no PostgreSQL required):
+
+```bash
+python -m ruff check .
+python -m ruff format --check .
+python -m mypy src
+python -m pytest -q
+python -m alembic heads      # expect a single head
+```
+
+PostgreSQL validation is **optional locally** and requires a configured, disposable
+PostgreSQL plus the documented operations (see
+[`docs/operations/POSTGRESQL_LOCAL_OPERATIONS.md`](docs/operations/POSTGRESQL_LOCAL_OPERATIONS.md)).
+The `postgres`-marked tests skip cleanly unless `ORBITMIND_TEST_POSTGRES_URL` is set;
+a local skip is **not** a live PostgreSQL pass, and no PostgreSQL result is claimed
+here unless it was actually run.
 
 ## API usage example
 
