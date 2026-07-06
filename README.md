@@ -49,6 +49,11 @@ visual artifacts — **fully offline and reproducible**.
 - No microservices, no agent swarm, no quantum-on-the-mission-path (quantum is a
   bounded, optional, simulator-only adapter — see ADR-0005).
 
+> The optional, local **Quantum Simulator v0** (numpy-only, Qiskit-free, off the
+> mission path) has a runnable terminal demo — see
+> [`docs/quantum/SIMULATOR_V0_USAGE.md`](docs/quantum/SIMULATOR_V0_USAGE.md) and
+> [`examples/quantum_simulator_v0_demo.py`](examples/quantum_simulator_v0_demo.py).
+
 ## What I need feedback on
 
 - Whether the README and setup flow are clear from a fresh clone.
