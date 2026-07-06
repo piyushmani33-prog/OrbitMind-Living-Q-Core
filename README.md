@@ -1,5 +1,11 @@
 # OrbitMind Living Q-Core
 
+[![CI](https://github.com/piyushmani33-prog/OrbitMind-Living-Q-Core/actions/workflows/ci.yml/badge.svg)](https://github.com/piyushmani33-prog/OrbitMind-Living-Q-Core/actions/workflows/ci.yml)
+
+Validation: the reviewer gates are documented below under
+[Verify the backend](#verify-the-backend); check the CI status above (or on the
+latest PR) before reviewing.
+
 Evidence-grounded scientific intelligence platform. **Phase 0/1** delivers a
 deterministic *satellite / Earth-orbit* vertical slice: submit a structured orbital
 mission, propagate a satellite with SGP4 from bundled sample data, verify the
@@ -18,6 +24,10 @@ visual artifacts — **fully offline and reproducible**.
 - Status: Solo Alpha / reviewer-ready for local technical review.
 - Not production-ready, not public alpha, not live tracking, not live-provider validation,
   and not quantum advantage.
+
+The current reviewed core is the deterministic orbital workflow with provenance and
+audit; quantum work is a bounded, simulator-only, off-mission-path seam — not the
+headline claim.
 
 ## Reproducibility scope
 
