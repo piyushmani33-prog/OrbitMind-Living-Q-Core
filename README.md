@@ -62,6 +62,10 @@ visual artifacts — **fully offline and reproducible**.
 - Whether deterministic sample/test-only data handling is clear.
 - Whether the audit, provenance, and evidence discipline is easy to follow.
 
+Reviewing locally? See the
+[`First Trusted Operator Dry-Run Pack`](docs/operations/FIRST_TRUSTED_OPERATOR_DRY_RUN.md)
+for a short, bounded review flow and feedback form.
+
 ## Architecture summary
 
 ```
