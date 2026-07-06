@@ -10,6 +10,15 @@ visual artifacts — **fully offline and reproducible**.
 > are a *deterministic calculation*, never a claim about a satellite's current
 > position. See [Safety boundaries](#safety-boundaries).
 
+## TL;DR / current status
+
+- OrbitMind is a local/API-first scientific workflow platform.
+- Current stack: Python/FastAPI, SQLite, PostgreSQL.
+- Current capability: deterministic mission workflow using bundled sample/test-only data.
+- Status: Solo Alpha / reviewer-ready for local technical review.
+- Not production-ready, not public alpha, not live tracking, not live-provider validation,
+  and not quantum advantage.
+
 ## What OrbitMind is (today)
 
 - A FastAPI **modular monolith** (`src/orbitmind`) with strong internal boundaries.
@@ -29,6 +38,14 @@ visual artifacts — **fully offline and reproducible**.
 - No microservices, no agent swarm, no quantum-on-the-mission-path (quantum is a
   bounded, optional, simulator-only adapter — see ADR-0005).
 
+## What I need feedback on
+
+- Whether the README and setup flow are clear from a fresh clone.
+- Whether the local API flow is understandable within 5 minutes.
+- Whether the safety boundaries are obvious and hard to misread.
+- Whether deterministic sample/test-only data handling is clear.
+- Whether the audit, provenance, and evidence discipline is easy to follow.
+
 ## Architecture summary
 
 ```
@@ -46,10 +63,20 @@ Requires Python **3.12+** (production baseline 3.12; this repo was developed and
 tested on 3.14.4 — see [ADR-0002](docs/architecture/decisions/ADR-0002-python-version-policy.md)).
 
 ```bash
-# from the project root, using the existing .venv
-.venv\Scripts\python -m pip install -e ".[dev]"   # runtime + dev tools
-# optional quantum extra (already present locally):
-.venv\Scripts\python -m pip install -e ".[quantum]"
+# from the project root
+python -m venv .venv
+
+# Windows PowerShell / cmd
+.venv\Scripts\activate
+
+# macOS / Linux
+source .venv/bin/activate
+
+python -m pip install --upgrade pip
+python -m pip install -e ".[dev]"   # runtime + dev tools
+
+# optional simulator-only quantum extra
+python -m pip install -e ".[quantum]"
 ```
 
 ### Environment
@@ -64,11 +91,11 @@ All configuration is read only by `orbitmind.core.config.Settings`
 ## Local execution
 
 ```bash
-# create the SQLite schema (dev convenience) — or use Alembic (below)
-.venv\Scripts\alembic upgrade head
+# create/update the local schema
+python -m alembic upgrade head
 
 # run the API
-.venv\Scripts\python -m uvicorn orbitmind.api.app:app --reload --port 8000
+python -m uvicorn orbitmind.api.app:app --reload --port 8000
 # open http://127.0.0.1:8000/docs  (interactive API)
 ```
 
@@ -92,10 +119,31 @@ curl -s http://127.0.0.1:8000/api/v1/missions/orbit-propagation \
       }'
 ```
 
+Bundled sample/test-only output is shaped like:
+
+```json
+{
+  "mission_id": "2fff8db5-de60-47a6-af15-548712059315",
+  "status": "completed",
+  "epistemic_status": "deterministic-calculation",
+  "sample_count": 31,
+  "source": {
+    "test_only": true
+  },
+  "artifacts": [
+    {"name": "altitude_vs_time"},
+    {"name": "ground_track"}
+  ]
+}
+```
+
 Returns a typed `MissionDetailResponse` with `status`, `epistemic_status`,
 `samples`, `findings`, `provenance`, `artifacts`, `audit`, and a `disclaimer`.
 Retrieve later with `GET /api/v1/missions/{mission_id}` and
 `GET /api/v1/missions/{mission_id}/artifacts`.
+
+Generated local artifacts can be inspected under `artifacts/<mission_id>/`.
+Current mission artifact names include `altitude_vs_time` and `ground_track`.
 
 For the completed offline geometry-derived eligibility to provenance-anchored
 planning study flow, see
