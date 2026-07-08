@@ -140,6 +140,20 @@ python -m uvicorn orbitmind.api.app:app --reload --port 8000
 Operational endpoints: `GET /health`, `GET /version`,
 `GET /api/v1/system/capabilities`.
 
+## One-command offline sample
+
+To run the bundled deterministic ISS sample without starting the API server:
+
+```bash
+python -m orbitmind.sample
+```
+
+The runner uses local SQLite, bundled sample/test-only TLE data, and the existing
+mission workflow. It prints a concise mission summary, the generated
+`altitude_vs_time` and `ground_track` artifact paths, checksums, and the on-demand
+mission static report identifier. It is not live tracking and performs no
+provider fetch.
+
 ## Verify the backend
 
 The offline quality gates (no network, no PostgreSQL required):
