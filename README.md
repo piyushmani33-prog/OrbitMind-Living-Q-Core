@@ -2,11 +2,19 @@
 
 [![CI](https://github.com/piyushmani33-prog/OrbitMind-Living-Q-Core/actions/workflows/ci.yml/badge.svg)](https://github.com/piyushmani33-prog/OrbitMind-Living-Q-Core/actions/workflows/ci.yml)
 
+> **Review this first (5-minute orientation).**
+> - Reviewed core: a deterministic SGP4 orbital-mission workflow with provenance and audit.
+> - Local/offline-first; runs on bundled **sample/test-only** data (not live tracking).
+> - Review scope: README/setup clarity, safety boundaries, the local API flow, and provenance/audit.
+> - Forward-phase docs (Phase 2–8) exist below for transparency but are **out of scope** for this first review.
+> - Start here: [First Trusted Operator Dry-Run Pack](docs/operations/FIRST_TRUSTED_OPERATOR_DRY_RUN.md).
+
 Validation: the reviewer gates are documented below under
 [Verify the backend](#verify-the-backend); check the CI status above (or on the
 latest PR) before reviewing.
 
-Evidence-grounded scientific intelligence platform. **Phase 0/1** delivers a
+Deterministic, local/API-first satellite-orbit workflow with provenance and audit —
+currently Solo Alpha / reviewer-ready. **Phase 0/1** delivers a
 deterministic *satellite / Earth-orbit* vertical slice: submit a structured orbital
 mission, propagate a satellite with SGP4 from bundled sample data, verify the
 output, persist everything with provenance, and return a typed response plus two
@@ -198,6 +206,9 @@ For the completed offline geometry-derived eligibility to provenance-anchored
 planning study flow, see
 [`docs/development/OBSERVATION_STUDY_API_FLOW.md`](docs/development/OBSERVATION_STUDY_API_FLOW.md).
 
+> **Forward-phase documentation below (Phase 2–8) is kept for transparency but is
+> not required for the first trusted review.**
+
 ## Data sources (Phase 2)
 
 Missions default to bundled **sample** data and run fully offline. An optional
@@ -353,9 +364,9 @@ See [QUANTUM_OPTIMIZATION_BOUNDARY.md](docs/architecture/QUANTUM_OPTIMIZATION_BO
 ## Testing
 
 ```bash
-.venv\Scripts\python -m ruff check .
-.venv\Scripts\python -m mypy src
-.venv\Scripts\python -m pytest --cov=orbitmind --cov-report=term-missing
+python -m ruff check .
+python -m mypy src
+python -m pytest --cov=orbitmind --cov-report=term-missing
 ```
 
 All tests run **offline** (no network, no external DB, temp dirs/DBs, fixed seeds).
@@ -392,8 +403,10 @@ status, checksum). Binary images are never stored in the database.
 - In-process synchronous workflow (no durable/long-running workflows yet).
 - CelesTrak endpoint/format/cadence are verified against official docs (R-012a
   closed; `docs/architecture/CELESTRAK_VERIFICATION.md`); its **legal/commercial-use
-  rights remain unconfirmed** (R-012b open) and are labelled "requires review".
-  Alpha-5 (alphanumeric) catalogue ids are not yet supported (numeric only, R-016).
+  rights remain unconfirmed** (R-012b — CelesTrak legal/commercial-use rights
+  confirmation; open) and are labelled "requires review".
+  Alpha-5 (alphanumeric) catalogue ids are not yet supported (numeric only,
+  R-016 — Alpha-5 alphanumeric catalogue-id support).
 
 ## Roadmap
 
@@ -411,7 +424,7 @@ See [`docs/architecture/ROADMAP.md`](docs/architecture/ROADMAP.md).
 - Every output is labeled `verified-fact | deterministic-calculation |
   model-estimate | hypothesis | assumption | unknown | rejected` (ADR-0006).
 - Artifacts are written only under the configured artifacts directory; path
-  traversal is rejected (SR-13).
+  traversal is rejected (SR-13 — artifact path-traversal rejection).
 - Network is disabled by default; a live CelesTrak request needs two explicit
   switches, is HTTPS-only + host-allowlisted, and never happens during startup,
   `/health`, or tests (ADR-0009).
