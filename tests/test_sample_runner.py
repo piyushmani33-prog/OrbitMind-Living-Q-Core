@@ -1,0 +1,105 @@
+"""Tests for the one-command offline sample runner."""
+
+from __future__ import annotations
+
+from io import StringIO
+from pathlib import Path
+
+import pytest
+
+import orbitmind.sample as sample_module
+from orbitmind.core.config import Settings
+from orbitmind.sample import run_sample, write_summary
+
+
+def _settings(tmp_path: Path) -> Settings:
+    return Settings(
+        database_url=f"sqlite:///{(tmp_path / 'sample.db').as_posix()}",
+        artifacts_dir=tmp_path / "artifacts",
+        cache_dir=tmp_path / "cache",
+        env="test",
+        log_level="WARNING",
+        network_enabled=False,
+        celestrak_enabled=False,
+        jpl_sbdb_enabled=False,
+        jpl_cad_enabled=False,
+        quantum_enabled=False,
+    )
+
+
+def test_run_sample_uses_existing_offline_mission_workflow(tmp_path: Path) -> None:
+    result = run_sample(_settings(tmp_path))
+
+    assert result.mission.status.value == "completed"
+    assert result.mission.epistemic_status.value == "deterministic-calculation"
+    assert result.mission.sample_count == 31
+    assert result.mission.source is not None
+    assert result.mission.source.test_only is True
+    assert result.mission.provenance[0].method == "sgp4-propagation"
+    assert result.mission.provenance[0].inputs_hash
+
+    artifacts = {artifact.type.value: artifact for artifact in result.mission.artifacts}
+    assert set(artifacts) == {"altitude_vs_time", "ground_track"}
+    for artifact in artifacts.values():
+        assert result.artifact_path(artifact).is_file()
+        assert result.sidecar_path(artifact).is_file()
+        assert len(artifact.checksum) == 64
+
+    assert result.static_report.schema_version == "static-report-v1"
+    assert result.static_report.scope_id == result.mission.mission_id
+    assert result.static_report.mission_summary.artifact_count == 2
+
+
+def test_write_summary_is_bounded_and_reviewer_readable(tmp_path: Path) -> None:
+    result = run_sample(_settings(tmp_path))
+    stream = StringIO()
+
+    write_summary(result, stream)
+
+    output = stream.getvalue()
+    assert "OrbitMind offline sample completed" in output
+    assert f"mission_id: {result.mission.mission_id}" in output
+    assert "status: completed" in output
+    assert "epistemic_status: deterministic-calculation" in output
+    assert "sample_count: 31" in output
+    assert "source.test_only: true" in output
+    assert "altitude_vs_time" in output
+    assert "ground_track" in output
+    assert "local image: " in output
+    assert "local sidecar: " in output
+    assert str(tmp_path.resolve()) not in output
+    assert "schema_version: static-report-v1" in output
+    assert "not live tracking" in output
+    assert "no provider fetch" in output
+    assert "no command readiness" in output
+    assert "no quantum advantage claim" in output
+
+
+def test_main_runs_sample_without_api_server(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sample_module, "_sample_settings", lambda: _settings(tmp_path))
+    stream = StringIO()
+
+    exit_code = sample_module.main([], stdout=stream)
+
+    assert exit_code == 0
+    assert "OrbitMind offline sample completed" in stream.getvalue()
+
+
+def test_main_reports_unexpected_failures_without_traceback(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def fail_run_sample(_settings: Settings) -> object:
+        raise RuntimeError("boom with internal detail")
+
+    monkeypatch.setattr(sample_module, "run_sample", fail_run_sample)
+
+    exit_code = sample_module.main([])
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "unexpected_error" in captured.err
+    assert "offline sample could not complete" in captured.err
+    assert "Traceback" not in captured.err
+    assert "boom with internal detail" not in captured.err

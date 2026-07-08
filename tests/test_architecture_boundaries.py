@@ -30,6 +30,13 @@ _SOURCE_ROOT = Path(orbitmind.__file__).resolve().parent
 # capability self-report. Any future addition here is a conscious, reviewed edit.
 _ALLOWED_QUANTUM_CONSUMERS = ("quantum", "optimization", "observability")
 
+# Narrow composition-root exception: ``orbitmind.sample`` is an executable reviewer
+# entrypoint (``python -m orbitmind.sample``), not domain/core/business logic. CLI
+# composition roots may import the API layer to wire the existing app container and
+# DTO projections for an executable local flow. This does not permit domain, core,
+# orbital, or arbitrary future modules to import ``orbitmind.api``.
+_API_IMPORT_ENTRYPOINT_EXCEPTIONS = {_SOURCE_ROOT / "sample.py"}
+
 
 def _imported_modules(source: str) -> set[str]:
     """Return the set of absolute module names imported by a source file."""
@@ -81,6 +88,8 @@ def test_core_has_no_internal_orbitmind_imports() -> None:
 def test_no_module_imports_api_except_api() -> None:
     """Boundary: no module outside ``api/`` imports ``orbitmind.api``."""
     for py_file in _python_files(exclude_packages=("api",)):
+        if py_file in _API_IMPORT_ENTRYPOINT_EXCEPTIONS:
+            continue
         offending = _offending_imports(py_file, "orbitmind.api")
         assert not offending, (
             f"[no-api-backimport] {py_file} imports the API layer {offending}; "
