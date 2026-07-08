@@ -144,19 +144,13 @@ def conclude(
         return _classical_fallback()
     if quantum_experiment.status == ExperimentStatus.FAILED:
         return ComparisonConclusion.EXPERIMENT_FAILED, f"quantum failed: {quantum_experiment.error}"
-    if quantum_experiment.status in (
-        ExperimentStatus.TIMED_OUT,
-        ExperimentStatus.CANCELLED,
-        ExperimentStatus.PENDING,
-        ExperimentStatus.RUNNING,
-        ExperimentStatus.INCONCLUSIVE,
-    ):
+    if quantum_experiment.status != ExperimentStatus.COMPLETED:
+        # Any non-completed (and non-FAILED/UNSUPPORTED, handled above) status is
+        # non-positive by policy — conservative for any future ExperimentStatus too.
         return (
             ComparisonConclusion.INSUFFICIENT_EVIDENCE,
             f"quantum status '{quantum_experiment.status.value}' is non-positive by policy",
         )
-    if quantum_experiment.status != ExperimentStatus.COMPLETED:
-        return ComparisonConclusion.INSUFFICIENT_EVIDENCE, "quantum run did not complete"
     # The quantum experiment must be the SAME instance as the classical baselines.
     if (
         exact_result is not None
