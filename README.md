@@ -9,6 +9,18 @@
 > - Forward-phase docs (Phase 2–8) exist below for transparency but are **out of scope** for this first review.
 > - Start here: [First Trusted Operator Dry-Run Pack](docs/operations/FIRST_TRUSTED_OPERATOR_DRY_RUN.md).
 
+**Try this first** after installing dependencies (see
+[Installation](#installation)):
+
+```bash
+python -m orbitmind.sample
+```
+
+It runs the bundled offline ISS sample and writes a checksum-backed artifact
+bundle — PNGs, JSON sidecars, `static_report.json`, and a human-readable
+`static_report.md` — plus a terminal summary. It uses stale sample/test-only
+data only; it is not live tracking and not a production/public-alpha workflow.
+
 Validation: the reviewer gates are documented below under
 [Verify the backend](#verify-the-backend); check the CI status above (or on the
 latest PR) before reviewing.
