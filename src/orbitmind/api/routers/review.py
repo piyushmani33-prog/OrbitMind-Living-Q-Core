@@ -463,7 +463,7 @@ def _checksum_row(
 
 
 def _artifact_href(mission_id: str, filename: str) -> str:
-    return f"/review/artifacts/{escape(mission_id)}/{escape(filename)}"
+    return f"/review/artifacts/{escape(str(mission_id))}/{escape(filename)}"
 
 
 def _format_sample(sample: OrbitalStateSample | None) -> str:
