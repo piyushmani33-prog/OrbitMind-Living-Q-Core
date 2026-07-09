@@ -59,6 +59,22 @@ def test_run_sample_uses_existing_offline_mission_workflow(tmp_path: Path) -> No
     assert report_json["schema_version"] == "static-report-v1"
     assert report_json["report_id"] == result.static_report.report_id
 
+    expected_markdown_path = tmp_path / "artifacts" / result.mission.mission_id / "static_report.md"
+    assert result.static_report_markdown_path == expected_markdown_path
+    assert result.static_report_markdown_path.is_file()
+    assert result.static_report_markdown_path.parent == (
+        tmp_path / "artifacts" / result.mission.mission_id
+    )
+    assert len(result.static_report_markdown_checksum) == 64
+
+    report_markdown = result.static_report_markdown_path.read_text(encoding="utf-8")
+    assert "# OrbitMind Offline Sample Static Report" in report_markdown
+    assert f"Report ID: {result.static_report.report_id}" in report_markdown
+    assert "Schema version: static-report-v1" in report_markdown
+    assert f"Mission ID: {result.mission.mission_id}" in report_markdown
+    assert "Bundled stale sample TLE only; not live tracking." in report_markdown
+    assert "No quantum advantage claim." in report_markdown
+
 
 def test_write_summary_is_bounded_and_reviewer_readable(tmp_path: Path) -> None:
     result = run_sample(_settings(tmp_path))
@@ -79,7 +95,10 @@ def test_write_summary_is_bounded_and_reviewer_readable(tmp_path: Path) -> None:
     assert "local sidecar: " in output
     assert f"local file: {result.display_static_report_path()}" in output
     assert f"checksum: {result.static_report_checksum}" in output
+    assert f"local markdown: {result.display_static_report_markdown_path()}" in output
+    assert f"markdown_checksum: {result.static_report_markdown_checksum}" in output
     assert "static_report.json" in output
+    assert "static_report.md" in output
     assert str(tmp_path.resolve()) not in output
     assert "schema_version: static-report-v1" in output
     assert "not live tracking" in output

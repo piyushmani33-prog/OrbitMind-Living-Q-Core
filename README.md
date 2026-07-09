@@ -151,8 +151,8 @@ python -m orbitmind.sample
 The runner uses local SQLite, bundled sample/test-only TLE data, and the existing
 mission workflow. It prints a concise mission summary, the generated
 `altitude_vs_time` and `ground_track` artifact paths, checksums, and the on-demand
-mission static report file/checksum. It is not live tracking and performs no
-provider fetch.
+mission static report JSON and Markdown files/checksums. It is not live tracking
+and performs no provider fetch.
 
 ## Verify the backend
 
