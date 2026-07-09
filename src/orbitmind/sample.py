@@ -15,6 +15,7 @@ import json
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TextIO
 
@@ -23,17 +24,42 @@ from orbitmind.api.routers.missions import _build_detail
 from orbitmind.api.schemas import MissionDetailResponse, OrbitPropagationRequest
 from orbitmind.api.static_report_schemas import MissionStaticReportResponse
 from orbitmind.api.visual_manifest_schemas import MissionVisualManifestResponse
-from orbitmind.core.checksums import sha256_file
+from orbitmind.core.checksums import sha256_file, sha256_text
 from orbitmind.core.config import PROJECT_ROOT, Settings
-from orbitmind.core.errors import OrbitMindError
+from orbitmind.core.errors import NotFoundError, OrbitMindError
 from orbitmind.core.logging import configure_logging
+from orbitmind.governance.provenance import EvidenceReference
+from orbitmind.orchestration.orchestrator import PrimeOrchestrator
+from orbitmind.orchestration.source_resolver import SourceResolver
 from orbitmind.persistence.repositories import SqlAlchemyMissionRepository
 from orbitmind.persistence.source_repository import SqlAlchemySourceRepository
-from orbitmind.space.models import OrbitalStateSample
+from orbitmind.sources.registry import SourceRegistry
+from orbitmind.space.elements import ElementParseError, validate_propagatable
+from orbitmind.space.models import OrbitalSourceRecord, OrbitalStateSample
+from orbitmind.space.propagation import PropagationService
+from orbitmind.verification.checks import VerificationService
+from orbitmind.visualization.charts import VisualizationService
 from orbitmind.visualization.models import ArtifactRecord
 
 SAMPLE_DATABASE_PATH = PROJECT_ROOT / "data" / "orbitmind_sample.db"
 DEFAULT_SAMPLE_ID = "iss"
+CUSTOM_TLE_SATELLITE_ID = "CUSTOM_TLE"
+MAX_CUSTOM_TLE_LABEL_LENGTH = 80
+MAX_CUSTOM_TLE_LINE_LENGTH = 100
+
+_BUNDLED_SAMPLE_MARKDOWN_SAFETY_BOUNDARY = (
+    "Bundled stale sample TLE only; not live tracking.",
+    "No provider fetch.",
+    "No command readiness, approval, or certification.",
+    "No quantum advantage claim.",
+)
+_CUSTOM_TLE_MARKDOWN_SAFETY_BOUNDARY = (
+    "User-provided offline TLE only; not live tracking.",
+    "No provider fetch.",
+    "No CelesTrak fetch.",
+    "No command readiness, approval, or certification.",
+    "No quantum advantage claim.",
+)
 
 
 @dataclass(frozen=True)
@@ -57,6 +83,68 @@ OFFLINE_SAMPLES: dict[str, OfflineSampleDefinition] = {
         },
     )
 }
+
+
+class CustomOfflineTleRegistry(SourceRegistry):
+    """Single-record in-memory registry for reviewer-provided offline TLE input."""
+
+    def __init__(
+        self,
+        *,
+        satellite_id: str,
+        satellite_label: str,
+        tle_line1: str,
+        tle_line2: str,
+        epoch_utc: datetime,
+    ) -> None:
+        checksum = sha256_text(f"{tle_line1}\n{tle_line2}\n")
+        self._satellite_id = satellite_id
+        self._tle_line1 = tle_line1
+        self._tle_line2 = tle_line2
+        self._record = OrbitalSourceRecord(
+            satellite_id=satellite_id,
+            name=satellite_label,
+            norad_cat_id=_parse_tle_norad_id(tle_line1),
+            source_name="user-provided offline TLE",
+            source_url="(reviewer form input)",
+            epoch_utc=epoch_utc.isoformat(),
+            fixture_created="provided during local reviewer run",
+            data_use_note=(
+                "User-provided offline TLE for local reviewer sandbox only; NOT live tracking."
+            ),
+            checksum=checksum,
+            test_only=True,
+        )
+
+    def supported_satellite_ids(self) -> set[str]:
+        """Identifiers available in this one-off offline registry."""
+
+        return {self._satellite_id}
+
+    def get_source_record(self, satellite_id: str) -> OrbitalSourceRecord:
+        """Return provenance for the reviewer-provided TLE."""
+
+        if satellite_id != self._satellite_id:
+            raise NotFoundError("unknown satellite identifier")
+        return self._record
+
+    def get_tle(self, satellite_id: str) -> tuple[str, str]:
+        """Return the reviewer-provided TLE lines after the caller selects the record."""
+
+        self.get_source_record(satellite_id)
+        return (self._tle_line1, self._tle_line2)
+
+    def evidence_reference(self, satellite_id: str) -> EvidenceReference:
+        """A path-free evidence pointer for reviewer-provided offline input."""
+
+        record = self.get_source_record(satellite_id)
+        return EvidenceReference(
+            kind="tle-user-input",
+            locator="reviewer:offline-custom-tle",
+            description=(
+                f"{record.name} (user-provided offline TLE, sha256={record.checksum[:12]}...)"
+            ),
+        )
 
 
 @dataclass(frozen=True)
@@ -105,10 +193,67 @@ def run_sample(
 
     sample = _get_sample_definition(sample_id)
     effective_settings = settings or _sample_settings()
-    container = AppContainer(settings=effective_settings)
+    return _run_offline_mission(
+        settings=effective_settings,
+        request_payload=sample.request,
+        markdown_safety_boundary=_BUNDLED_SAMPLE_MARKDOWN_SAFETY_BOUNDARY,
+    )
+
+
+def run_custom_tle_sample(
+    settings: Settings | None = None,
+    *,
+    satellite_label: str | None,
+    tle_line1: str,
+    tle_line2: str,
+) -> SampleRunResult:
+    """Run a deterministic local reviewer mission from one pasted offline TLE."""
+
+    label = _normalize_custom_tle_label(satellite_label)
+    line1 = _normalize_custom_tle_line(tle_line1, field_name="TLE line 1")
+    line2 = _normalize_custom_tle_line(tle_line2, field_name="TLE line 2")
     try:
+        validate_propagatable(line1, line2)
+    except ElementParseError as exc:
+        raise ValueError("TLE lines must parse and propagate at epoch") from exc
+    epoch_utc = _parse_tle_epoch(line1)
+    registry = CustomOfflineTleRegistry(
+        satellite_id=CUSTOM_TLE_SATELLITE_ID,
+        satellite_label=label,
+        tle_line1=line1,
+        tle_line2=line2,
+        epoch_utc=epoch_utc,
+    )
+    request_payload = {
+        "satellite_id": CUSTOM_TLE_SATELLITE_ID,
+        "start_time": epoch_utc.isoformat(),
+        "end_time": (epoch_utc + timedelta(hours=1)).isoformat(),
+        "step_seconds": 120,
+    }
+    effective_settings = settings or _sample_settings()
+    return _run_offline_mission(
+        settings=effective_settings,
+        request_payload=request_payload,
+        registry=registry,
+        markdown_safety_boundary=_CUSTOM_TLE_MARKDOWN_SAFETY_BOUNDARY,
+    )
+
+
+def _run_offline_mission(
+    *,
+    settings: Settings,
+    request_payload: dict[str, object],
+    registry: SourceRegistry | None = None,
+    markdown_safety_boundary: tuple[str, ...],
+) -> SampleRunResult:
+    """Run an offline mission through the existing app/orchestrator/repository path."""
+
+    container = AppContainer(settings=settings)
+    try:
+        if registry is not None:
+            _use_source_registry(container, registry)
         container.init_storage()
-        payload = OrbitPropagationRequest.model_validate(sample.request)
+        payload = OrbitPropagationRequest.model_validate(request_payload)
         mission_id = container.orchestrator.run_orbit_mission(
             raw_request=payload.model_dump(mode="json"),
             request=payload.to_domain(),
@@ -129,21 +274,22 @@ def run_sample(
             static_report = MissionStaticReportResponse.from_manifest(manifest)
             static_report_path, static_report_checksum = _write_static_report_json(
                 static_report=static_report,
-                artifacts_root=effective_settings.resolved_artifacts_dir(),
+                artifacts_root=settings.resolved_artifacts_dir(),
                 mission_id=mission_id,
             )
             static_report_markdown_path, static_report_markdown_checksum = (
                 _write_static_report_markdown(
                     static_report=static_report,
                     mission=detail,
-                    artifacts_root=effective_settings.resolved_artifacts_dir(),
+                    artifacts_root=settings.resolved_artifacts_dir(),
                     mission_id=mission_id,
+                    safety_boundary=markdown_safety_boundary,
                 )
             )
         return SampleRunResult(
             mission=detail,
             static_report=static_report,
-            artifacts_root=effective_settings.resolved_artifacts_dir(),
+            artifacts_root=settings.resolved_artifacts_dir(),
             static_report_path=static_report_path,
             static_report_checksum=static_report_checksum,
             static_report_markdown_path=static_report_markdown_path,
@@ -279,6 +425,61 @@ def _get_sample_definition(sample_id: str) -> OfflineSampleDefinition:
         raise ValueError(f"unsupported bundled offline sample: {sample_id}") from exc
 
 
+def _use_source_registry(container: AppContainer, registry: SourceRegistry) -> None:
+    container.registry = registry
+    container.resolver = SourceResolver(registry, container.catalog, None)
+    container.orchestrator = PrimeOrchestrator(
+        settings=container.settings,
+        database=container.database,
+        registry=registry,
+        propagation=PropagationService(),
+        verification=VerificationService(),
+        visualization=VisualizationService(container.settings.resolved_artifacts_dir()),
+        resolver=container.resolver,
+    )
+
+
+def _normalize_custom_tle_label(value: str | None) -> str:
+    if value is None or not value.strip():
+        return "User-provided offline TLE"
+    label = value.strip()
+    if len(label) > MAX_CUSTOM_TLE_LABEL_LENGTH:
+        raise ValueError("satellite label must be 80 characters or fewer")
+    if "<" in label or ">" in label:
+        raise ValueError("satellite label contains unsupported markup characters")
+    return label
+
+
+def _normalize_custom_tle_line(value: str, *, field_name: str) -> str:
+    line = value.strip()
+    if not line:
+        raise ValueError(f"{field_name} is required")
+    if len(line) > MAX_CUSTOM_TLE_LINE_LENGTH:
+        raise ValueError(f"{field_name} must be 100 characters or fewer")
+    expected_prefix = "1 " if field_name == "TLE line 1" else "2 "
+    if not line.startswith(expected_prefix):
+        raise ValueError(f"{field_name} must start with '{expected_prefix}'")
+    return line
+
+
+def _parse_tle_epoch(line1: str) -> datetime:
+    try:
+        year_two_digit = int(line1[18:20])
+        day_of_year = float(line1[20:32])
+    except (ValueError, IndexError) as exc:
+        raise ValueError("TLE line 1 epoch is not parseable") from exc
+    year = 2000 + year_two_digit if year_two_digit < 57 else 1900 + year_two_digit
+    return (datetime(year, 1, 1, tzinfo=UTC) + timedelta(days=day_of_year - 1.0)).astimezone(UTC)
+
+
+def _parse_tle_norad_id(line1: str) -> int | None:
+    try:
+        raw = line1[2:7].strip()
+        return int(raw) if raw else None
+    except ValueError:
+        return None
+
+
 def _write_sample_point(label: str, sample: OrbitalStateSample | None, stream: TextIO) -> None:
     if sample is None:
         return
@@ -317,11 +518,16 @@ def _write_static_report_markdown(
     mission: MissionDetailResponse,
     artifacts_root: Path,
     mission_id: str,
+    safety_boundary: tuple[str, ...],
 ) -> tuple[Path, str]:
     report_path = artifacts_root / mission_id / "static_report.md"
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(
-        _render_static_report_markdown(static_report=static_report, mission=mission),
+        _render_static_report_markdown(
+            static_report=static_report,
+            mission=mission,
+            safety_boundary=safety_boundary,
+        ),
         encoding="utf-8",
     )
     return report_path, sha256_file(report_path)
@@ -331,6 +537,7 @@ def _render_static_report_markdown(
     *,
     static_report: MissionStaticReportResponse,
     mission: MissionDetailResponse,
+    safety_boundary: tuple[str, ...],
 ) -> str:
     source_test_only = mission.source.test_only if mission.source is not None else None
     source_checksum = mission.source.checksum if mission.source is not None else "unavailable"
@@ -361,18 +568,9 @@ def _render_static_report_markdown(
     ]
     for artifact in sorted(mission.artifacts, key=lambda item: item.type.value):
         lines.append(f"| {artifact.type.value} | image | {artifact.checksum} |")
-    lines.extend(
-        [
-            "",
-            "## Safety boundary",
-            "",
-            "- Bundled stale sample TLE only; not live tracking.",
-            "- No provider fetch.",
-            "- No command readiness, approval, or certification.",
-            "- No quantum advantage claim.",
-            "",
-        ]
-    )
+    lines.extend(["", "## Safety boundary", ""])
+    lines.extend(f"- {item}" for item in safety_boundary)
+    lines.append("")
     return "\n".join(lines)
 
 
