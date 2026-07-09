@@ -50,6 +50,8 @@ class SampleRunResult:
     artifacts_root: Path
     static_report_path: Path
     static_report_checksum: str
+    static_report_markdown_path: Path
+    static_report_markdown_checksum: str
 
     def artifact_path(self, artifact: ArtifactRecord) -> Path:
         """Return the absolute image path for an artifact record."""
@@ -70,6 +72,10 @@ class SampleRunResult:
     def display_static_report_path(self) -> Path:
         """Return a local, project-relative static report path for CLI display."""
         return _display_path(self.static_report_path, self.artifacts_root)
+
+    def display_static_report_markdown_path(self) -> Path:
+        """Return a local, project-relative Markdown report path for CLI display."""
+        return _display_path(self.static_report_markdown_path, self.artifacts_root)
 
 
 def run_sample(settings: Settings | None = None) -> SampleRunResult:
@@ -103,12 +109,22 @@ def run_sample(settings: Settings | None = None) -> SampleRunResult:
                 artifacts_root=effective_settings.resolved_artifacts_dir(),
                 mission_id=mission_id,
             )
+            static_report_markdown_path, static_report_markdown_checksum = (
+                _write_static_report_markdown(
+                    static_report=static_report,
+                    mission=detail,
+                    artifacts_root=effective_settings.resolved_artifacts_dir(),
+                    mission_id=mission_id,
+                )
+            )
         return SampleRunResult(
             mission=detail,
             static_report=static_report,
             artifacts_root=effective_settings.resolved_artifacts_dir(),
             static_report_path=static_report_path,
             static_report_checksum=static_report_checksum,
+            static_report_markdown_path=static_report_markdown_path,
+            static_report_markdown_checksum=static_report_markdown_checksum,
         )
     finally:
         container.database.engine.dispose()
@@ -152,6 +168,11 @@ def write_summary(result: SampleRunResult, stream: TextIO = sys.stdout) -> None:
     print("  generated_on_demand: true", file=stream)
     print(f"  local file: {result.display_static_report_path()}", file=stream)
     print(f"  checksum: {result.static_report_checksum}", file=stream)
+    print(
+        f"  local markdown: {result.display_static_report_markdown_path()}",
+        file=stream,
+    )
+    print(f"  markdown_checksum: {result.static_report_markdown_checksum}", file=stream)
     print("", file=stream)
     print("Safety boundary", file=stream)
     print("  bundled stale sample TLE only; not live tracking; no provider fetch", file=stream)
@@ -227,6 +248,71 @@ def _write_static_report_json(
     )
     report_path.write_text(f"{body}\n", encoding="utf-8")
     return report_path, sha256_file(report_path)
+
+
+def _write_static_report_markdown(
+    *,
+    static_report: MissionStaticReportResponse,
+    mission: MissionDetailResponse,
+    artifacts_root: Path,
+    mission_id: str,
+) -> tuple[Path, str]:
+    report_path = artifacts_root / mission_id / "static_report.md"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(
+        _render_static_report_markdown(static_report=static_report, mission=mission),
+        encoding="utf-8",
+    )
+    return report_path, sha256_file(report_path)
+
+
+def _render_static_report_markdown(
+    *,
+    static_report: MissionStaticReportResponse,
+    mission: MissionDetailResponse,
+) -> str:
+    source_test_only = mission.source.test_only if mission.source is not None else None
+    source_checksum = mission.source.checksum if mission.source is not None else "unavailable"
+    provenance_inputs_hash = (
+        mission.provenance[0].inputs_hash if mission.provenance else "unavailable"
+    )
+    lines = [
+        "# OrbitMind Offline Sample Static Report",
+        "",
+        f"- Report ID: {static_report.report_id}",
+        f"- Schema version: {static_report.schema_version}",
+        f"- Mission ID: {static_report.mission_summary.mission_id}",
+        "- Generated on demand: true",
+        "",
+        "## Mission summary",
+        "",
+        f"- Status: {mission.status.value}",
+        f"- Epistemic status: {mission.epistemic_status.value}",
+        f"- Sample count: {mission.sample_count}",
+        f"- Source test only: {str(source_test_only).lower()}",
+        f"- Source checksum: {source_checksum}",
+        f"- Inputs hash: {provenance_inputs_hash}",
+        "",
+        "## Artifacts",
+        "",
+        "| Name | Type | Checksum |",
+        "| --- | --- | --- |",
+    ]
+    for artifact in sorted(mission.artifacts, key=lambda item: item.type.value):
+        lines.append(f"| {artifact.type.value} | image | {artifact.checksum} |")
+    lines.extend(
+        [
+            "",
+            "## Safety boundary",
+            "",
+            "- Bundled stale sample TLE only; not live tracking.",
+            "- No provider fetch.",
+            "- No command readiness, approval, or certification.",
+            "- No quantum advantage claim.",
+            "",
+        ]
+    )
+    return "\n".join(lines)
 
 
 def _display_path(path: Path, artifacts_root: Path) -> Path:
