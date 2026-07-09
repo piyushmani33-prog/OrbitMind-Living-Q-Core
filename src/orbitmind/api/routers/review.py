@@ -115,12 +115,13 @@ def get_reviewer_artifact(
         raise NotFoundError("review artifact not found")
     artifact_path = container.settings.resolved_artifacts_dir() / mission_id / filename
     try:
-        artifact_path.resolve().relative_to(container.settings.resolved_artifacts_dir().resolve())
+        resolved_path = artifact_path.resolve()
+        resolved_path.relative_to(container.settings.resolved_artifacts_dir().resolve())
     except ValueError as exc:  # pragma: no cover - filename allowlist prevents this.
         raise NotFoundError("review artifact not found") from exc
-    if not artifact_path.is_file():
+    if not resolved_path.is_file():
         raise NotFoundError("review artifact not found")
-    return FileResponse(artifact_path)
+    return FileResponse(resolved_path)
 
 
 def _mission_section(result: SampleRunResult) -> str:
