@@ -76,6 +76,15 @@ def test_run_sample_uses_existing_offline_mission_workflow(tmp_path: Path) -> No
     assert "No quantum advantage claim." in report_markdown
 
 
+def test_run_sample_normalizes_sample_id(tmp_path: Path) -> None:
+    result = run_sample(_settings(tmp_path), sample_id="ISS")
+
+    assert result.mission.status.value == "completed"
+    assert result.mission.sample_count == 31
+    assert result.static_report_path.is_file()
+    assert result.static_report_markdown_path.is_file()
+
+
 def test_write_summary_is_bounded_and_reviewer_readable(tmp_path: Path) -> None:
     result = run_sample(_settings(tmp_path))
     stream = StringIO()
@@ -124,6 +133,23 @@ def test_main_runs_explicit_iss_sample(tmp_path: Path, monkeypatch: pytest.Monke
     stream = StringIO()
 
     exit_code = sample_module.main(["--sample", "iss"], stdout=stream)
+
+    output = stream.getvalue()
+    assert exit_code == 0
+    assert "OrbitMind offline sample completed" in output
+    assert "sample_count: 31" in output
+    assert "static_report.json" in output
+    assert "static_report.md" in output
+    assert "not live tracking" in output
+
+
+def test_main_normalizes_explicit_sample_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sample_module, "_sample_settings", lambda: _settings(tmp_path))
+    stream = StringIO()
+
+    exit_code = sample_module.main(["--sample", "ISS"], stdout=stream)
 
     output = stream.getvalue()
     assert exit_code == 0
