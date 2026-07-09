@@ -5,15 +5,16 @@ from __future__ import annotations
 from html import escape
 from pathlib import Path
 from typing import Annotated
+from urllib.parse import parse_qs
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import FileResponse, HTMLResponse
 
 from orbitmind.api.container import AppContainer
 from orbitmind.api.deps import get_container
-from orbitmind.core.errors import NotFoundError, ValidationError
+from orbitmind.core.errors import NotFoundError, OrbitMindError, ValidationError
 from orbitmind.core.ids import is_valid_uuid
-from orbitmind.sample import SampleRunResult, run_sample
+from orbitmind.sample import SampleRunResult, run_custom_tle_sample, run_sample
 from orbitmind.space.models import OrbitalStateSample
 
 router = APIRouter(tags=["review"])
@@ -39,6 +40,16 @@ SAFETY_BOUNDARY_ITEMS = (
     "no quantum advantage claim",
     "not production/public-alpha workflow",
 )
+CUSTOM_TLE_SAFETY_BOUNDARY_ITEMS = (
+    "user-provided offline TLE only",
+    "not live tracking",
+    "no provider fetch",
+    "no CelesTrak fetch",
+    "no command readiness, approval, or certification",
+    "no quantum advantage claim",
+    "not production/public-alpha workflow",
+)
+MAX_CUSTOM_TLE_BODY_BYTES = 2_048
 
 PAGE_CSS = """
     :root {
@@ -114,6 +125,28 @@ PAGE_CSS = """
       padding: 12px 18px;
     }
     .button:hover { background: var(--accent-strong); }
+    label {
+      color: var(--muted);
+      display: grid;
+      font-weight: 700;
+      gap: 6px;
+    }
+    input, textarea {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      color: var(--ink);
+      font: inherit;
+      padding: 10px 12px;
+      width: 100%;
+    }
+    textarea {
+      min-height: 80px;
+      resize: vertical;
+    }
+    .error {
+      border-left: 4px solid #b42318;
+    }
+    .error h2 { color: #8a1f14; }
     .badges {
       display: flex;
       flex-wrap: wrap;
@@ -217,6 +250,13 @@ def reviewer_home() -> HTMLResponse:
         </div>
         {_safety_boundary_panel()}
       </section>
+      <section class="card footer-link">
+        <h2>Offline custom TLE</h2>
+        <p>
+          Paste a small two-line element set and generate the same deterministic evidence bundle.
+        </p>
+        <p><a href="/review/custom-tle">Open the offline custom TLE reviewer</a></p>
+      </section>
 """
     return HTMLResponse(_page("OrbitMind Reviewer Sandbox", body))
 
@@ -243,6 +283,73 @@ def run_reviewer_sample(container: ContainerDep) -> HTMLResponse:
     return HTMLResponse(_page("OrbitMind Reviewer Sandbox Result", body))
 
 
+@router.get("/review/custom-tle", response_class=HTMLResponse)
+def custom_tle_home() -> HTMLResponse:
+    """Return the local offline custom TLE reviewer form."""
+
+    body = f"""
+      <section class="hero">
+        <p class="eyebrow">Offline custom element input</p>
+        <h1>Offline Custom TLE Reviewer</h1>
+        <p>Paste a two-line element set and generate a deterministic offline evidence bundle.</p>
+      </section>
+      <section class="grid">
+        <form method="post" action="/review/custom-tle/run" class="card stack">
+          <h2>Custom TLE input</h2>
+          <label>
+            Satellite label/name, optional, max 80 chars
+            <input name="satellite_label" maxlength="80" autocomplete="off">
+          </label>
+          <label>
+            TLE line 1
+            <textarea name="tle_line1" maxlength="100" required></textarea>
+          </label>
+          <label>
+            TLE line 2
+            <textarea name="tle_line2" maxlength="100" required></textarea>
+          </label>
+          <button class="button" type="submit">Generate offline evidence bundle</button>
+        </form>
+        {_safety_boundary_panel(CUSTOM_TLE_SAFETY_BOUNDARY_ITEMS)}
+      </section>
+      <p class="footer-link"><a href="/review">Back to reviewer sandbox</a></p>
+"""
+    return HTMLResponse(_page("Offline Custom TLE Reviewer", body))
+
+
+@router.post("/review/custom-tle/run", response_class=HTMLResponse)
+async def run_custom_tle_review_sample(request: Request, container: ContainerDep) -> HTMLResponse:
+    """Run one user-pasted offline TLE through the existing deterministic workflow."""
+
+    try:
+        form = await _read_custom_tle_form(request)
+        result = run_custom_tle_sample(
+            settings=container.settings,
+            satellite_label=form["satellite_label"],
+            tle_line1=form["tle_line1"],
+            tle_line2=form["tle_line2"],
+        )
+    except ValueError as exc:
+        return _custom_tle_error_page(str(exc))
+    except OrbitMindError as exc:
+        return _custom_tle_error_page(exc.message, status_code=exc.http_status)
+    body = f"""
+      <section class="hero">
+        <p class="eyebrow">Generated evidence bundle</p>
+        <h1>Offline Custom TLE Reviewer Result</h1>
+        {_status_badges(result)}
+      </section>
+      <section class="grid">
+        {_mission_section(result)}
+        {_hash_section(result)}
+      </section>
+      {_artifact_section(result)}
+      {_safety_boundary_panel(CUSTOM_TLE_SAFETY_BOUNDARY_ITEMS)}
+      <p class="footer-link"><a href="/review/custom-tle">Run another offline custom TLE</a></p>
+"""
+    return HTMLResponse(_page("Offline Custom TLE Reviewer Result", body))
+
+
 @router.get("/review/artifacts/{mission_id}/{filename:path}")
 def get_reviewer_artifact(
     mission_id: str,
@@ -264,6 +371,47 @@ def get_reviewer_artifact(
     if not resolved_path.is_file():
         raise NotFoundError("review artifact not found")
     return FileResponse(resolved_path)
+
+
+async def _read_custom_tle_form(request: Request) -> dict[str, str]:
+    body = await request.body()
+    if len(body) > MAX_CUSTOM_TLE_BODY_BYTES:
+        raise ValueError("custom TLE request body is too large")
+    try:
+        parsed = parse_qs(body.decode("utf-8"), keep_blank_values=True)
+    except UnicodeDecodeError as exc:
+        raise ValueError("custom TLE form must be UTF-8 encoded") from exc
+    return {
+        "satellite_label": _single_form_value(parsed, "satellite_label"),
+        "tle_line1": _single_form_value(parsed, "tle_line1"),
+        "tle_line2": _single_form_value(parsed, "tle_line2"),
+    }
+
+
+def _single_form_value(parsed: dict[str, list[str]], key: str) -> str:
+    values = parsed.get(key)
+    if not values:
+        return ""
+    return values[0]
+
+
+def _custom_tle_error_page(message: str, *, status_code: int = 422) -> HTMLResponse:
+    body = f"""
+      <section class="hero">
+        <p class="eyebrow">Input rejected</p>
+        <h1>Offline Custom TLE Reviewer</h1>
+        <p>The pasted offline TLE could not be accepted for a deterministic reviewer run.</p>
+      </section>
+      <section class="grid">
+        <div class="card error">
+          <h2>Validation error</h2>
+          <p>{escape(message)}</p>
+          <p><a href="/review/custom-tle">Back to custom TLE form</a></p>
+        </div>
+        {_safety_boundary_panel(CUSTOM_TLE_SAFETY_BOUNDARY_ITEMS)}
+      </section>
+"""
+    return HTMLResponse(_page("Offline Custom TLE Reviewer Error", body), status_code=status_code)
 
 
 def _page(title: str, body: str) -> str:
@@ -300,6 +448,8 @@ def _status_badges(result: SampleRunResult) -> str:
 def _mission_section(result: SampleRunResult) -> str:
     mission = result.mission
     source_test_only = mission.source.test_only if mission.source is not None else None
+    source_label = mission.source.source_name if mission.source is not None else "unavailable"
+    source_name = mission.source.name if mission.source is not None else "unavailable"
     first_sample = _format_sample(mission.samples[0] if mission.samples else None)
     last_sample = _format_sample(mission.samples[-1] if mission.samples else None)
     return f"""
@@ -310,6 +460,8 @@ def _mission_section(result: SampleRunResult) -> str:
           <dt>status</dt><dd>{escape(mission.status.value)}</dd>
           <dt>epistemic_status</dt><dd>{escape(mission.epistemic_status.value)}</dd>
           <dt>sample_count</dt><dd>{mission.sample_count}</dd>
+          <dt>source label</dt><dd>{escape(source_label)}</dd>
+          <dt>source name</dt><dd>{escape(source_name)}</dd>
           <dt>source.test_only</dt><dd>{str(source_test_only).lower()}</dd>
           <dt>first_sample</dt><dd>{escape(first_sample)}</dd>
           <dt>last_sample</dt><dd>{escape(last_sample)}</dd>
@@ -479,15 +631,15 @@ def _format_sample(sample: OrbitalStateSample | None) -> str:
     )
 
 
-def _safety_boundary_panel() -> str:
+def _safety_boundary_panel(items: tuple[str, ...] = SAFETY_BOUNDARY_ITEMS) -> str:
     return f"""
       <section class="card safety">
         <h2>Safety boundary</h2>
-        {_safety_boundary_list()}
+        {_safety_boundary_list(items)}
       </section>
 """
 
 
-def _safety_boundary_list() -> str:
-    items = "\n".join(f"<li>{escape(item)}</li>" for item in SAFETY_BOUNDARY_ITEMS)
-    return f"<ul>{items}</ul>"
+def _safety_boundary_list(items: tuple[str, ...]) -> str:
+    rendered_items = "\n".join(f"<li>{escape(item)}</li>" for item in items)
+    return f"<ul>{rendered_items}</ul>"
