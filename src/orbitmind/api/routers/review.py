@@ -306,7 +306,7 @@ def _mission_section(result: SampleRunResult) -> str:
       <section class="card">
         <h2>Mission summary</h2>
         <dl>
-          <dt>mission_id</dt><dd>{escape(mission.mission_id)}</dd>
+          <dt>mission_id</dt><dd>{escape(str(mission.mission_id))}</dd>
           <dt>status</dt><dd>{escape(mission.status.value)}</dd>
           <dt>epistemic_status</dt><dd>{escape(mission.epistemic_status.value)}</dd>
           <dt>sample_count</dt><dd>{mission.sample_count}</dd>
