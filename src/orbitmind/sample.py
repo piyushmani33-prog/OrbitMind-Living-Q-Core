@@ -11,6 +11,7 @@ starting an API server. It is local, deterministic, and sample-data only.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -22,6 +23,7 @@ from orbitmind.api.routers.missions import _build_detail
 from orbitmind.api.schemas import MissionDetailResponse, OrbitPropagationRequest
 from orbitmind.api.static_report_schemas import MissionStaticReportResponse
 from orbitmind.api.visual_manifest_schemas import MissionVisualManifestResponse
+from orbitmind.core.checksums import sha256_file
 from orbitmind.core.config import PROJECT_ROOT, Settings
 from orbitmind.core.errors import OrbitMindError
 from orbitmind.core.logging import configure_logging
@@ -46,6 +48,8 @@ class SampleRunResult:
     mission: MissionDetailResponse
     static_report: MissionStaticReportResponse
     artifacts_root: Path
+    static_report_path: Path
+    static_report_checksum: str
 
     def artifact_path(self, artifact: ArtifactRecord) -> Path:
         """Return the absolute image path for an artifact record."""
@@ -62,6 +66,10 @@ class SampleRunResult:
     def display_sidecar_path(self, artifact: ArtifactRecord) -> Path:
         """Return a local, project-relative sidecar path for CLI display."""
         return _display_path(self.sidecar_path(artifact), self.artifacts_root)
+
+    def display_static_report_path(self) -> Path:
+        """Return a local, project-relative static report path for CLI display."""
+        return _display_path(self.static_report_path, self.artifacts_root)
 
 
 def run_sample(settings: Settings | None = None) -> SampleRunResult:
@@ -90,10 +98,17 @@ def run_sample(settings: Settings | None = None) -> SampleRunResult:
                 source_data=source_repo.get_mission_source_data(mission_id),
             )
             static_report = MissionStaticReportResponse.from_manifest(manifest)
+            static_report_path, static_report_checksum = _write_static_report_json(
+                static_report=static_report,
+                artifacts_root=effective_settings.resolved_artifacts_dir(),
+                mission_id=mission_id,
+            )
         return SampleRunResult(
             mission=detail,
             static_report=static_report,
             artifacts_root=effective_settings.resolved_artifacts_dir(),
+            static_report_path=static_report_path,
+            static_report_checksum=static_report_checksum,
         )
     finally:
         container.database.engine.dispose()
@@ -135,6 +150,8 @@ def write_summary(result: SampleRunResult, stream: TextIO = sys.stdout) -> None:
     print(f"  schema_version: {result.static_report.schema_version}", file=stream)
     print(f"  report_id: {result.static_report.report_id}", file=stream)
     print("  generated_on_demand: true", file=stream)
+    print(f"  local file: {result.display_static_report_path()}", file=stream)
+    print(f"  checksum: {result.static_report_checksum}", file=stream)
     print("", file=stream)
     print("Safety boundary", file=stream)
     print("  bundled stale sample TLE only; not live tracking; no provider fetch", file=stream)
@@ -193,6 +210,23 @@ def _write_sample_point(label: str, sample: OrbitalStateSample | None, stream: T
         f"alt={sample.altitude_km:.3f} km",
         file=stream,
     )
+
+
+def _write_static_report_json(
+    *,
+    static_report: MissionStaticReportResponse,
+    artifacts_root: Path,
+    mission_id: str,
+) -> tuple[Path, str]:
+    report_path = artifacts_root / mission_id / "static_report.json"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    body = json.dumps(
+        static_report.model_dump(mode="json"),
+        indent=2,
+        sort_keys=True,
+    )
+    report_path.write_text(f"{body}\n", encoding="utf-8")
+    return report_path, sha256_file(report_path)
 
 
 def _display_path(path: Path, artifacts_root: Path) -> Path:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from io import StringIO
 from pathlib import Path
 
@@ -48,6 +49,15 @@ def test_run_sample_uses_existing_offline_mission_workflow(tmp_path: Path) -> No
     assert result.static_report.schema_version == "static-report-v1"
     assert result.static_report.scope_id == result.mission.mission_id
     assert result.static_report.mission_summary.artifact_count == 2
+    expected_report_path = tmp_path / "artifacts" / result.mission.mission_id / "static_report.json"
+    assert result.static_report_path == expected_report_path
+    assert result.static_report_path.is_file()
+    assert result.static_report_path.parent == tmp_path / "artifacts" / result.mission.mission_id
+    assert len(result.static_report_checksum) == 64
+
+    report_json = json.loads(result.static_report_path.read_text(encoding="utf-8"))
+    assert report_json["schema_version"] == "static-report-v1"
+    assert report_json["report_id"] == result.static_report.report_id
 
 
 def test_write_summary_is_bounded_and_reviewer_readable(tmp_path: Path) -> None:
@@ -67,6 +77,9 @@ def test_write_summary_is_bounded_and_reviewer_readable(tmp_path: Path) -> None:
     assert "ground_track" in output
     assert "local image: " in output
     assert "local sidecar: " in output
+    assert f"local file: {result.display_static_report_path()}" in output
+    assert f"checksum: {result.static_report_checksum}" in output
+    assert "static_report.json" in output
     assert str(tmp_path.resolve()) not in output
     assert "schema_version: static-report-v1" in output
     assert "not live tracking" in output
