@@ -273,7 +273,7 @@ def _sample_settings() -> Settings:
 
 def _get_sample_definition(sample_id: str) -> OfflineSampleDefinition:
     try:
-        return OFFLINE_SAMPLES[sample_id]
+        return OFFLINE_SAMPLES[sample_id.lower()]
     except KeyError as exc:
         raise ValueError(f"unsupported bundled offline sample: {sample_id}") from exc
 
