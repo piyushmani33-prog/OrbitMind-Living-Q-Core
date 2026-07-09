@@ -14,7 +14,14 @@ from orbitmind.api.container import AppContainer
 from orbitmind.api.deps import get_container
 from orbitmind.core.errors import NotFoundError, OrbitMindError, ValidationError
 from orbitmind.core.ids import is_valid_uuid
-from orbitmind.sample import SampleRunResult, run_custom_tle_sample, run_sample
+from orbitmind.sample import (
+    BundledOfflineCatalogEntry,
+    SampleRunResult,
+    get_bundled_offline_catalog,
+    get_bundled_offline_catalog_entry,
+    run_custom_tle_sample,
+    run_sample,
+)
 from orbitmind.space.models import OrbitalStateSample
 
 router = APIRouter(tags=["review"])
@@ -50,6 +57,18 @@ CUSTOM_TLE_SAFETY_BOUNDARY_ITEMS = (
     "not production/public-alpha workflow",
 )
 MAX_CUSTOM_TLE_BODY_BYTES = 2_048
+CATALOG_SAFETY_BOUNDARY_ITEMS = (
+    "bundled sample/test-only data only",
+    "not live tracking",
+    "no provider fetch",
+    "no CelesTrak fetch",
+    "no covariance available",
+    "no collision probability computed",
+    "no command readiness, approval, or certification",
+    "no quantum advantage claim",
+    "not production/public-alpha workflow",
+)
+MAX_CATALOG_BODY_BYTES = 256
 
 PAGE_CSS = """
     :root {
@@ -250,12 +269,19 @@ def reviewer_home() -> HTMLResponse:
         </div>
         {_safety_boundary_panel()}
       </section>
-      <section class="card footer-link">
-        <h2>Offline custom TLE</h2>
-        <p>
-          Paste a small two-line element set and generate the same deterministic evidence bundle.
-        </p>
-        <p><a href="/review/custom-tle">Open the offline custom TLE reviewer</a></p>
+      <section class="grid footer-link">
+        <div class="card">
+          <h2>Bundled satellite catalog</h2>
+          <p>Choose a reviewed local fixture without entering TLE lines manually.</p>
+          <p><a href="/review/catalog">Open the bundled offline satellite catalog</a></p>
+        </div>
+        <div class="card">
+          <h2>Offline custom TLE</h2>
+          <p>
+            Paste a small two-line element set and generate the same deterministic evidence bundle.
+          </p>
+          <p><a href="/review/custom-tle">Open the offline custom TLE reviewer</a></p>
+        </div>
       </section>
 """
     return HTMLResponse(_page("OrbitMind Reviewer Sandbox", body))
@@ -350,6 +376,76 @@ async def run_custom_tle_review_sample(request: Request, container: ContainerDep
     return HTMLResponse(_page("Offline Custom TLE Reviewer Result", body))
 
 
+@router.get("/review/catalog", response_class=HTMLResponse)
+def catalog_home(container: ContainerDep) -> HTMLResponse:
+    """Return the bounded local catalog of reviewed offline TLE fixtures."""
+
+    try:
+        entries = get_bundled_offline_catalog(container.registry)
+    except OrbitMindError:
+        return _catalog_error_page("bundled offline catalog is unavailable", status_code=503)
+    cards = "\n".join(_catalog_card(entry) for entry in entries)
+    body = f"""
+      <section class="hero">
+        <p class="eyebrow">Verified local fixtures</p>
+        <h1>Bundled Offline Satellite Catalog</h1>
+        <p>
+          Choose a bundled stale sample/test-only TLE and generate a deterministic SGP4
+          evidence bundle.
+        </p>
+      </section>
+      <section class="grid">
+        {cards}
+      </section>
+      <section class="card soft footer-link">
+        <h2>Catalog scope</h2>
+        <p>
+          This catalog currently contains only reviewed local fixtures. Additional fixtures require
+          source and legal review before they are bundled.
+        </p>
+      </section>
+      {_accuracy_limitations_panel()}
+      {_safety_boundary_panel(CATALOG_SAFETY_BOUNDARY_ITEMS)}
+      <p class="footer-link"><a href="/review">Back to reviewer sandbox</a></p>
+"""
+    return HTMLResponse(_page("Bundled Offline Satellite Catalog", body))
+
+
+@router.post("/review/catalog/run", response_class=HTMLResponse)
+async def run_catalog_review_sample(request: Request, container: ContainerDep) -> HTMLResponse:
+    """Run one server-known catalog sample through the existing deterministic workflow."""
+
+    try:
+        sample_id = await _read_catalog_sample_id(request)
+        catalog_entry = get_bundled_offline_catalog_entry(container.registry, sample_id)
+        result = run_sample(settings=container.settings, sample_id=catalog_entry.sample_id)
+    except ValueError as exc:
+        return _catalog_error_page(str(exc))
+    except OrbitMindError as exc:
+        return _catalog_error_page(exc.message, status_code=exc.http_status)
+    body = f"""
+      <section class="hero">
+        <p class="eyebrow">Generated evidence bundle</p>
+        <h1>Bundled Offline Satellite Catalog Result</h1>
+        {_status_badges(result)}
+      </section>
+      <section class="grid">
+        {_catalog_selection_section(catalog_entry)}
+        {_accuracy_limitations_panel()}
+      </section>
+      <section class="grid">
+        {_mission_section(result)}
+        {_hash_section(result)}
+      </section>
+      {_artifact_section(result)}
+      {_safety_boundary_panel(CATALOG_SAFETY_BOUNDARY_ITEMS)}
+      <p class="footer-link">
+        <a href="/review/catalog">Back to bundled offline satellite catalog</a>
+      </p>
+"""
+    return HTMLResponse(_page("Bundled Offline Satellite Catalog Result", body))
+
+
 @router.get("/review/artifacts/{mission_id}/{filename:path}")
 def get_reviewer_artifact(
     mission_id: str,
@@ -388,6 +484,22 @@ async def _read_custom_tle_form(request: Request) -> dict[str, str]:
     }
 
 
+async def _read_catalog_sample_id(request: Request) -> str:
+    body = await request.body()
+    if len(body) > MAX_CATALOG_BODY_BYTES:
+        raise ValueError("catalog request body is too large")
+    try:
+        parsed = parse_qs(body.decode("utf-8"), keep_blank_values=True)
+    except UnicodeDecodeError as exc:
+        raise ValueError("catalog form must be UTF-8 encoded") from exc
+    if set(parsed) != {"sample_id"}:
+        raise ValueError("catalog request must include only one sample selection")
+    values = parsed["sample_id"]
+    if len(values) != 1 or not values[0].strip():
+        raise ValueError("catalog sample selection is required")
+    return values[0]
+
+
 def _single_form_value(parsed: dict[str, list[str]], key: str) -> str:
     values = parsed.get(key)
     if not values:
@@ -412,6 +524,27 @@ def _custom_tle_error_page(message: str, *, status_code: int = 422) -> HTMLRespo
       </section>
 """
     return HTMLResponse(_page("Offline Custom TLE Reviewer Error", body), status_code=status_code)
+
+
+def _catalog_error_page(message: str, *, status_code: int = 422) -> HTMLResponse:
+    body = f"""
+      <section class="hero">
+        <p class="eyebrow">Selection rejected</p>
+        <h1>Bundled Offline Satellite Catalog</h1>
+        <p>The selected local catalog fixture could not be used for a reviewer run.</p>
+      </section>
+      <section class="grid">
+        <div class="card error">
+          <h2>Catalog selection error</h2>
+          <p>{escape(message)}</p>
+          <p><a href="/review/catalog">Back to bundled offline satellite catalog</a></p>
+        </div>
+        {_safety_boundary_panel(CATALOG_SAFETY_BOUNDARY_ITEMS)}
+      </section>
+"""
+    return HTMLResponse(
+        _page("Bundled Offline Satellite Catalog Error", body), status_code=status_code
+    )
 
 
 def _page(title: str, body: str) -> str:
@@ -481,6 +614,68 @@ def _hash_section(result: SampleRunResult) -> str:
           <dt>source_checksum</dt><dd><code>{escape(source_checksum)}</code></dd>
           <dt>inputs_hash</dt><dd><code>{escape(inputs_hash)}</code></dd>
         </dl>
+      </section>
+"""
+
+
+def _catalog_card(entry: BundledOfflineCatalogEntry) -> str:
+    norad_catalog_id = str(entry.norad_catalog_id) if entry.norad_catalog_id is not None else "N/A"
+    epoch = entry.tle_epoch_utc.isoformat().replace("+00:00", "Z")
+    age_observed_at = entry.age_observed_at_utc.isoformat().replace("+00:00", "Z")
+    return f"""
+      <article class="card stack">
+        <div>
+          <p class="eyebrow">{escape(entry.orbit_class)} orbit</p>
+          <h2>{escape(entry.display_name)}</h2>
+        </div>
+        <dl>
+          <dt>sample id</dt><dd><code>{escape(entry.sample_id)}</code></dd>
+          <dt>NORAD catalog id</dt><dd>{escape(norad_catalog_id)}</dd>
+          <dt>orbit class</dt><dd>{escape(entry.orbit_class)}</dd>
+          <dt>TLE epoch</dt><dd>{escape(epoch)}</dd>
+          <dt>TLE age</dt><dd>{entry.tle_age_days} days as of {escape(age_observed_at)}</dd>
+          <dt>source</dt><dd>{escape(entry.source_label)}</dd>
+          <dt>source note</dt><dd>{escape(entry.source_note)}</dd>
+          <dt>accuracy note</dt><dd>{escape(entry.accuracy_note)}</dd>
+        </dl>
+        <form method="post" action="/review/catalog/run">
+          <input type="hidden" name="sample_id" value="{escape(entry.sample_id)}">
+          <button class="button" type="submit">Generate evidence bundle</button>
+        </form>
+      </article>
+"""
+
+
+def _catalog_selection_section(entry: BundledOfflineCatalogEntry) -> str:
+    epoch = entry.tle_epoch_utc.isoformat().replace("+00:00", "Z")
+    return f"""
+      <section class="card">
+        <h2>Catalog selection</h2>
+        <dl>
+          <dt>sample id</dt><dd><code>{escape(entry.sample_id)}</code></dd>
+          <dt>satellite name</dt><dd>{escape(entry.display_name)}</dd>
+          <dt>NORAD catalog id</dt><dd>{entry.norad_catalog_id}</dd>
+          <dt>orbit class</dt><dd>{escape(entry.orbit_class)}</dd>
+          <dt>TLE epoch</dt><dd>{escape(epoch)}</dd>
+          <dt>TLE age</dt><dd>{entry.tle_age_days} days</dd>
+          <dt>source</dt><dd>{escape(entry.source_label)}</dd>
+        </dl>
+      </section>
+"""
+
+
+def _accuracy_limitations_panel() -> str:
+    return """
+      <section class="card safety">
+        <h2>Accuracy / limitations</h2>
+        <ul>
+          <li>This uses bundled offline TLE data.</li>
+          <li>TLE + SGP4 position error can grow over time.</li>
+          <li>No covariance is available.</li>
+          <li>No collision probability is computed.</li>
+          <li>Educational/advisory only; not live tracking.</li>
+          <li>Not command readiness, approval, or certification.</li>
+        </ul>
       </section>
 """
 

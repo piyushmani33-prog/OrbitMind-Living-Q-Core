@@ -68,6 +68,7 @@ class OfflineSampleDefinition:
 
     sample_id: str
     description: str
+    orbit_class: str
     request: dict[str, object]
 
 
@@ -75,6 +76,7 @@ OFFLINE_SAMPLES: dict[str, OfflineSampleDefinition] = {
     "iss": OfflineSampleDefinition(
         sample_id="iss",
         description="Bundled stale ISS sample TLE; test-only; not live tracking",
+        orbit_class="LEO",
         request={
             "satellite_id": "ISS",
             "start_time": "2019-12-09T17:00:00Z",
@@ -83,6 +85,22 @@ OFFLINE_SAMPLES: dict[str, OfflineSampleDefinition] = {
         },
     )
 }
+
+
+@dataclass(frozen=True)
+class BundledOfflineCatalogEntry:
+    """Safe display metadata for one verified bundled offline fixture."""
+
+    sample_id: str
+    display_name: str
+    norad_catalog_id: int | None
+    orbit_class: str
+    tle_epoch_utc: datetime
+    tle_age_days: int
+    age_observed_at_utc: datetime
+    source_label: str
+    source_note: str
+    accuracy_note: str
 
 
 class CustomOfflineTleRegistry(SourceRegistry):
@@ -198,6 +216,62 @@ def run_sample(
         request_payload=sample.request,
         markdown_safety_boundary=_BUNDLED_SAMPLE_MARKDOWN_SAFETY_BOUNDARY,
     )
+
+
+def get_bundled_offline_catalog(
+    registry: SourceRegistry,
+    *,
+    observed_at: datetime | None = None,
+) -> tuple[BundledOfflineCatalogEntry, ...]:
+    """Project verified local fixtures into a bounded reviewer catalog.
+
+    New catalog fixtures require their own source and legal review before they are
+    added to ``OFFLINE_SAMPLES`` and the bundled fixture manifest.
+    """
+
+    reference_time = observed_at or datetime.now(UTC)
+    if reference_time.tzinfo is None:
+        raise ValueError("catalog observation time must be timezone-aware")
+    observed_at_utc = reference_time.astimezone(UTC)
+    entries: list[BundledOfflineCatalogEntry] = []
+    for sample_id in sorted(OFFLINE_SAMPLES):
+        sample = OFFLINE_SAMPLES[sample_id]
+        satellite_id = str(sample.request["satellite_id"])
+        source = registry.get_source_record(satellite_id)
+        tle_line1, _ = registry.get_tle(satellite_id)
+        tle_epoch_utc = _parse_tle_epoch(tle_line1)
+        tle_age_days = max(0, (observed_at_utc - tle_epoch_utc).days)
+        entries.append(
+            BundledOfflineCatalogEntry(
+                sample_id=sample.sample_id,
+                display_name=source.name,
+                norad_catalog_id=source.norad_cat_id,
+                orbit_class=sample.orbit_class,
+                tle_epoch_utc=tle_epoch_utc,
+                tle_age_days=tle_age_days,
+                age_observed_at_utc=observed_at_utc,
+                source_label="bundled sample/test-only",
+                source_note=source.data_use_note,
+                accuracy_note=(
+                    "Bundled stale sample/test-only data; deterministic SGP4 propagation "
+                    "is educational/advisory only."
+                ),
+            )
+        )
+    return tuple(entries)
+
+
+def get_bundled_offline_catalog_entry(
+    registry: SourceRegistry,
+    sample_id: str,
+) -> BundledOfflineCatalogEntry:
+    """Return one selected bundled catalog entry without accepting external inputs."""
+
+    normalized_sample_id = sample_id.strip().lower()
+    for entry in get_bundled_offline_catalog(registry):
+        if entry.sample_id == normalized_sample_id:
+            return entry
+    raise ValueError("selected bundled offline catalog sample is not available")
 
 
 def run_custom_tle_sample(

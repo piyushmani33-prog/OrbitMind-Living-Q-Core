@@ -7,6 +7,7 @@ import re
 import pytest
 from fastapi.testclient import TestClient
 
+from orbitmind.api.routers import review
 from orbitmind.core.config import Settings
 
 _ISS_TLE_LINE_1 = "1 25544U 98067A   19343.69339541  .00001764  00000-0  38792-4 0  9991"
@@ -28,6 +29,73 @@ def test_review_home_page_contains_bounded_sandbox_copy(client: TestClient) -> N
     assert "not production/public-alpha workflow" in body
     assert "no provider fetch" in body
     assert "no quantum advantage claim" in body
+
+
+def test_catalog_page_contains_bounded_fixture_metadata(client: TestClient) -> None:
+    response = client.get("/review/catalog")
+
+    assert response.status_code == 200
+    body = response.text
+    assert "Bundled Offline Satellite Catalog" in body
+    assert "ISS (ZARYA)" in body
+    assert "sample id" in body
+    assert "NORAD catalog id" in body
+    assert "25544" in body
+    assert "orbit class" in body
+    assert "LEO" in body
+    assert "TLE epoch" in body
+    assert "TLE age" in body
+    assert "Generate evidence bundle" in body
+    assert "not live tracking" in body
+    assert "no covariance available" in body
+    assert "no collision probability computed" in body
+    assert "not production/public-alpha workflow" in body
+
+
+def test_catalog_run_returns_evidence_bundle_and_accuracy_limitations(
+    client: TestClient,
+    settings: Settings,
+) -> None:
+    response = client.post("/review/catalog/run", data={"sample_id": "iss"})
+
+    assert response.status_code == 200
+    body = response.text
+    assert "Bundled Offline Satellite Catalog Result" in body
+    assert "Catalog selection" in body
+    assert "ISS (ZARYA)" in body
+    assert "mission_id" in body
+    assert "completed" in body
+    assert "deterministic-calculation" in body
+    assert "ground_track.png" in body
+    assert "altitude_vs_time.png" in body
+    assert "static_report.md" in body
+    assert "static_report.json" in body
+    assert "Accuracy / limitations" in body
+    assert "No covariance is available." in body
+    assert "No collision probability is computed." in body
+    assert "not live tracking" in body
+    assert str(settings.resolved_artifacts_dir()) not in body
+
+
+def test_catalog_unknown_sample_is_rejected_without_running_mission(
+    client: TestClient,
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_run_sample(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("unknown catalog sample must not run a mission")
+
+    monkeypatch.setattr(review, "run_sample", fail_run_sample)
+
+    response = client.post("/review/catalog/run", data={"sample_id": "unknown"})
+
+    assert response.status_code == 422
+    body = response.text
+    assert "Bundled Offline Satellite Catalog Error" in body
+    assert "selected bundled offline catalog sample is not available" in body
+    assert "Traceback" not in body
+    assert "completed" not in body
+    assert str(settings.resolved_artifacts_dir()) not in body
 
 
 def test_custom_tle_page_contains_bounded_offline_form(client: TestClient) -> None:
