@@ -170,6 +170,15 @@ mission workflow. It prints a concise mission summary, the generated
 mission static report JSON and Markdown files/checksums. It is not live tracking
 and performs no provider fetch.
 
+## Browser reviewer sandbox
+
+After starting the local API with the `uvicorn` command from
+[Local execution](#local-execution), open
+`http://127.0.0.1:8000/review` for a private browser-accessible reviewer page. It
+runs the same bundled offline ISS sample and shows the generated evidence bundle.
+It is not production deployment, not public alpha, not live tracking, and performs
+no provider fetch.
+
 ## Verify the backend
 
 The offline quality gates (no network, no PostgreSQL required):
