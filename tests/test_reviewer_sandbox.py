@@ -15,9 +15,11 @@ def test_review_home_page_contains_bounded_sandbox_copy(client: TestClient) -> N
     assert response.status_code == 200
     body = response.text
     assert "OrbitMind Reviewer Sandbox" in body
+    assert "Evidence-backed offline orbital sample" in body
     assert "Run bundled ISS sample" in body
     assert "available sample id" in body.lower()
     assert "iss" in body
+    assert "bundled stale sample/test-only data" in body
     assert "not live tracking" in body
     assert "not production/public-alpha workflow" in body
     assert "no provider fetch" in body
@@ -33,9 +35,16 @@ def test_review_run_returns_evidence_bundle_and_safety_boundary(
     assert response.status_code == 200
     body = response.text
     assert "OrbitMind Reviewer Sandbox Result" in body
+    assert "Generated evidence bundle" in body
+    assert "Mission summary" in body
+    assert "Evidence / hashes" in body
+    assert "Visual artifacts" in body
+    assert "Reports" in body
+    assert "Artifact checksum table" in body
     assert "mission_id" in body
-    assert "status</dt><dd>completed" in body
+    assert "completed" in body
     assert "deterministic-calculation" in body
+    assert "test-only" in body
     assert "sample_count</dt><dd>31" in body
     assert "source.test_only</dt><dd>true" in body
     assert "source_checksum" in body
@@ -46,8 +55,10 @@ def test_review_run_returns_evidence_bundle_and_safety_boundary(
     assert "altitude_vs_time.json" in body
     assert "ground_track.png" in body
     assert "ground_track.json" in body
+    assert '<img src="/review/artifacts/' in body
     assert "static_report.json" in body
     assert "static_report.md" in body
+    assert "Safety boundary" in body
     assert "no quantum advantage claim" in body
     assert "not live tracking" in body
     assert str(settings.resolved_artifacts_dir()) not in body
