@@ -232,7 +232,8 @@ def main(argv: Sequence[str] | None = None, stdout: TextIO = sys.stdout) -> int:
     if args.list_samples:
         write_sample_list(stdout)
         return 0
-    if args.sample not in OFFLINE_SAMPLES:
+    sample_id = args.sample.lower()
+    if sample_id not in OFFLINE_SAMPLES:
         print(
             "OrbitMind sample failed: unknown_sample: "
             f"unsupported bundled offline sample '{args.sample}'. "
@@ -243,7 +244,7 @@ def main(argv: Sequence[str] | None = None, stdout: TextIO = sys.stdout) -> int:
     settings = _sample_settings()
     configure_logging(level=settings.log_level, json_output=settings.log_json)
     try:
-        write_summary(run_sample(settings, sample_id=args.sample), stdout)
+        write_summary(run_sample(settings, sample_id=sample_id), stdout)
     except OrbitMindError as exc:
         print(f"OrbitMind sample failed: {exc.code}: {exc.message}", file=sys.stderr)
         return 1
