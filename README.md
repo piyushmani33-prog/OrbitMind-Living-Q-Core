@@ -14,6 +14,8 @@
 
 ```bash
 python -m orbitmind.sample
+python -m orbitmind.sample --list-samples
+python -m orbitmind.sample --sample iss
 ```
 
 It runs the bundled offline ISS sample and writes a checksum-backed artifact
@@ -158,6 +160,8 @@ To run the bundled deterministic ISS sample without starting the API server:
 
 ```bash
 python -m orbitmind.sample
+python -m orbitmind.sample --list-samples
+python -m orbitmind.sample --sample iss
 ```
 
 The runner uses local SQLite, bundled sample/test-only TLE data, and the existing
