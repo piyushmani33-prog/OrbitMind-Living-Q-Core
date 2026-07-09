@@ -33,11 +33,29 @@ from orbitmind.space.models import OrbitalStateSample
 from orbitmind.visualization.models import ArtifactRecord
 
 SAMPLE_DATABASE_PATH = PROJECT_ROOT / "data" / "orbitmind_sample.db"
-SAMPLE_REQUEST: dict[str, object] = {
-    "satellite_id": "ISS",
-    "start_time": "2019-12-09T17:00:00Z",
-    "end_time": "2019-12-09T18:00:00Z",
-    "step_seconds": 120,
+DEFAULT_SAMPLE_ID = "iss"
+
+
+@dataclass(frozen=True)
+class OfflineSampleDefinition:
+    """Bundled offline sample metadata and request payload."""
+
+    sample_id: str
+    description: str
+    request: dict[str, object]
+
+
+OFFLINE_SAMPLES: dict[str, OfflineSampleDefinition] = {
+    "iss": OfflineSampleDefinition(
+        sample_id="iss",
+        description="Bundled stale ISS sample TLE; test-only; not live tracking",
+        request={
+            "satellite_id": "ISS",
+            "start_time": "2019-12-09T17:00:00Z",
+            "end_time": "2019-12-09T18:00:00Z",
+            "step_seconds": 120,
+        },
+    )
 }
 
 
@@ -78,14 +96,19 @@ class SampleRunResult:
         return _display_path(self.static_report_markdown_path, self.artifacts_root)
 
 
-def run_sample(settings: Settings | None = None) -> SampleRunResult:
+def run_sample(
+    settings: Settings | None = None,
+    *,
+    sample_id: str = DEFAULT_SAMPLE_ID,
+) -> SampleRunResult:
     """Run the bundled deterministic ISS sample mission without an API server."""
 
+    sample = _get_sample_definition(sample_id)
     effective_settings = settings or _sample_settings()
     container = AppContainer(settings=effective_settings)
     try:
         container.init_storage()
-        payload = OrbitPropagationRequest.model_validate(SAMPLE_REQUEST)
+        payload = OrbitPropagationRequest.model_validate(sample.request)
         mission_id = container.orchestrator.run_orbit_mission(
             raw_request=payload.model_dump(mode="json"),
             request=payload.to_domain(),
@@ -180,17 +203,47 @@ def write_summary(result: SampleRunResult, stream: TextIO = sys.stdout) -> None:
     print("  no quantum advantage claim", file=stream)
 
 
+def write_sample_list(stream: TextIO = sys.stdout) -> None:
+    """Write the bundled offline samples available to the CLI."""
+
+    print("Available offline samples:", file=stream)
+    for sample_id in sorted(OFFLINE_SAMPLES):
+        sample = OFFLINE_SAMPLES[sample_id]
+        print(f"  {sample.sample_id:<6} {sample.description}", file=stream)
+
+
 def main(argv: Sequence[str] | None = None, stdout: TextIO = sys.stdout) -> int:
     """CLI entrypoint for ``python -m orbitmind.sample``."""
 
     parser = argparse.ArgumentParser(
         description="Run OrbitMind's bundled offline ISS sample mission without starting the API."
     )
-    parser.parse_args(argv)
+    parser.add_argument(
+        "--list-samples",
+        action="store_true",
+        help="List bundled offline sample IDs and exit.",
+    )
+    parser.add_argument(
+        "--sample",
+        default=DEFAULT_SAMPLE_ID,
+        help="Bundled offline sample ID to run. Currently supported: iss.",
+    )
+    args = parser.parse_args(argv)
+    if args.list_samples:
+        write_sample_list(stdout)
+        return 0
+    if args.sample not in OFFLINE_SAMPLES:
+        print(
+            "OrbitMind sample failed: unknown_sample: "
+            f"unsupported bundled offline sample '{args.sample}'. "
+            "Run with --list-samples to see available samples.",
+            file=sys.stderr,
+        )
+        return 2
     settings = _sample_settings()
     configure_logging(level=settings.log_level, json_output=settings.log_json)
     try:
-        write_summary(run_sample(settings), stdout)
+        write_summary(run_sample(settings, sample_id=args.sample), stdout)
     except OrbitMindError as exc:
         print(f"OrbitMind sample failed: {exc.code}: {exc.message}", file=sys.stderr)
         return 1
@@ -216,6 +269,13 @@ def _sample_settings() -> Settings:
         jpl_cad_enabled=False,
         quantum_enabled=False,
     )
+
+
+def _get_sample_definition(sample_id: str) -> OfflineSampleDefinition:
+    try:
+        return OFFLINE_SAMPLES[sample_id]
+    except KeyError as exc:
+        raise ValueError(f"unsupported bundled offline sample: {sample_id}") from exc
 
 
 def _write_sample_point(label: str, sample: OrbitalStateSample | None, stream: TextIO) -> None:

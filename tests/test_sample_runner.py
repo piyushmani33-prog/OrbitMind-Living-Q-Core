@@ -119,6 +119,64 @@ def test_main_runs_sample_without_api_server(
     assert "OrbitMind offline sample completed" in stream.getvalue()
 
 
+def test_main_runs_explicit_iss_sample(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sample_module, "_sample_settings", lambda: _settings(tmp_path))
+    stream = StringIO()
+
+    exit_code = sample_module.main(["--sample", "iss"], stdout=stream)
+
+    output = stream.getvalue()
+    assert exit_code == 0
+    assert "OrbitMind offline sample completed" in output
+    assert "sample_count: 31" in output
+    assert "static_report.json" in output
+    assert "static_report.md" in output
+    assert "not live tracking" in output
+
+
+def test_main_lists_samples_without_running_mission(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_run_sample(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("list-samples must not run a mission")
+
+    monkeypatch.setattr(sample_module, "run_sample", fail_run_sample)
+    stream = StringIO()
+
+    exit_code = sample_module.main(["--list-samples"], stdout=stream)
+
+    output = stream.getvalue()
+    assert exit_code == 0
+    assert "Available offline samples:" in output
+    assert "iss" in output
+    assert "Bundled stale ISS sample TLE" in output
+    assert "OrbitMind offline sample completed" not in output
+
+
+def test_main_rejects_unknown_sample_without_traceback(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def fail_settings() -> Settings:
+        raise AssertionError("unknown sample must not initialize settings")
+
+    def fail_run_sample(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("unknown sample must not run a mission")
+
+    monkeypatch.setattr(sample_module, "_sample_settings", fail_settings)
+    monkeypatch.setattr(sample_module, "run_sample", fail_run_sample)
+
+    exit_code = sample_module.main(["--sample", "unknown"])
+
+    captured = capsys.readouterr()
+    assert exit_code != 0
+    assert "unknown_sample" in captured.err
+    assert "unsupported bundled offline sample 'unknown'" in captured.err
+    assert "--list-samples" in captured.err
+    assert "Traceback" not in captured.err
+    assert "OrbitMind offline sample completed" not in captured.out
+
+
 def test_main_reports_unexpected_failures_without_traceback(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
