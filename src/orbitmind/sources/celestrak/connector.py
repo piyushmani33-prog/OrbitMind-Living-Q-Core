@@ -19,7 +19,13 @@ from orbitmind.core.timeutils import utcnow
 from orbitmind.persistence.source_repository import SourceRepository
 from orbitmind.sources.cache import KeyedLock, SourceCacheStore, cache_key_for
 from orbitmind.sources.celestrak.models import CelestrakGpRecord
-from orbitmind.sources.errors import NetworkDisabledError, SourceError, SourceSchemaError
+from orbitmind.sources.errors import (
+    NetworkDisabledError,
+    ObjectNotFoundError,
+    SourceError,
+    SourceIntegrityError,
+    SourceSchemaError,
+)
 from orbitmind.sources.freshness import assess_external_freshness
 from orbitmind.sources.http_client import SafeHttpFetcher
 from orbitmind.sources.models import (
@@ -137,6 +143,8 @@ class CelestrakConnector:
         suppressed: bool = False,
     ) -> ElementFetchResult:
         body = self._store.read_body(cached.body_path)
+        if sha256_bytes(body) != cached.checksum:
+            raise SourceIntegrityError("cached CelesTrak payload checksum mismatch")
         record = self._normalize(
             body,
             satellite_id,
@@ -254,10 +262,24 @@ class CelestrakConnector:
             data = json.loads(body)
         except (json.JSONDecodeError, UnicodeDecodeError) as exc:
             raise SourceSchemaError(f"response was not valid JSON: {exc}") from exc
-        if not isinstance(data, list) or not data:
-            raise SourceSchemaError("expected a non-empty JSON array of GP records")
+        if not isinstance(data, list):
+            raise SourceSchemaError("expected a JSON array of GP records")
+        if not data:
+            raise ObjectNotFoundError("CelesTrak returned no GP record for the requested NORAD ID")
+        if len(data) != 1:
+            raise SourceSchemaError(
+                "CelesTrak returned multiple GP records for one requested NORAD ID"
+            )
         try:
             raw = CelestrakGpRecord.model_validate(data[0])
+            requested_norad_id = int(satellite_id)
+        except (TypeError, ValueError) as exc:
+            raise SourceSchemaError(f"GP record failed validation: {exc}") from exc
+        if raw.norad_cat_id != requested_norad_id:
+            raise SourceSchemaError(
+                "CelesTrak GP record identifier did not match the requested NORAD ID"
+            )
+        try:
             omm = raw.to_omm_fields()
             line1, line2 = omm_fields_to_tle(omm)
             epoch = parse_omm_epoch(omm)

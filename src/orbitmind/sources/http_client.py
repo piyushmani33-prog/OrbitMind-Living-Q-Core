@@ -107,7 +107,9 @@ class SafeHttpFetcher:
                 raise SourceUnavailableError(f"unexpected status {response.status_code}")
 
             content_type = response.headers.get("content-type", "").split(";")[0].strip()
-            if content_type and content_type not in self._policy.allowed_content_types:
+            if not content_type:
+                raise DisallowedRequestError("source response missing content-type")
+            if content_type not in self._policy.allowed_content_types:
                 raise DisallowedRequestError(f"disallowed content-type: {content_type}")
 
             chunks: list[bytes] = []
@@ -121,7 +123,7 @@ class SafeHttpFetcher:
             return HttpFetchResult(
                 url=str(response.url),
                 status_code=response.status_code,
-                content_type=content_type or "application/json",
+                content_type=content_type,
                 body=b"".join(chunks),
             )
 

@@ -98,6 +98,32 @@ def test_source_failure_no_silent_fallback(celestrak_client_factory: ClientFacto
         assert client.get("/api/v1/missions").json()["items"][0]["status"] == "failed"
 
 
+def test_empty_provider_result_is_not_silently_replaced_with_sample(
+    celestrak_client_factory: ClientFactory,
+) -> None:
+    with celestrak_client_factory(make_transport(records=[])) as client:
+        response = client.post(ENDPOINT, json=_CELESTRAK_BODY)
+        assert response.status_code == 404
+        assert response.json()["code"] == "object_not_found"
+        mission = client.get("/api/v1/missions").json()["items"][0]
+        assert mission["status"] == "failed"
+
+
+def test_mismatched_provider_identity_persists_no_source_data(
+    celestrak_client_factory: ClientFactory,
+) -> None:
+    record = build_celestrak_omm()
+    record["NORAD_CAT_ID"] = 12345
+    with celestrak_client_factory(make_transport(records=[record])) as client:
+        response = client.post(ENDPOINT, json=_CELESTRAK_BODY)
+        assert response.status_code == 502
+        assert response.json()["code"] == "source_schema_error"
+        mission = client.get("/api/v1/missions").json()["items"][0]
+        detail = client.get(f"/api/v1/missions/{mission['mission_id']}").json()
+        assert detail["status"] == "failed"
+        assert detail["source_data"] is None
+
+
 def test_explicit_sample_fallback_is_unambiguous(
     celestrak_client_factory: ClientFactory,
 ) -> None:

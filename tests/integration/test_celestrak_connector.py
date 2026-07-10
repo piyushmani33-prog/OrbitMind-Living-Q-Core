@@ -6,12 +6,15 @@ import httpx
 import pytest
 from tests.conftest import build_celestrak_omm, make_transport
 
+from orbitmind.core.config import Settings
 from orbitmind.persistence.database import Database
 from orbitmind.persistence.source_repository import SqlAlchemySourceRepository
 from orbitmind.sources.cache import SourceCacheStore
 from orbitmind.sources.celestrak.connector import CelestrakConnector
 from orbitmind.sources.errors import (
     DisallowedRequestError,
+    ObjectNotFoundError,
+    SourceIntegrityError,
     SourceSchemaError,
     SourceUnavailableError,
 )
@@ -120,7 +123,26 @@ def test_empty_array_rejected(
     celestrak_db: Database, celestrak_store: SourceCacheStore, celestrak_catalog: SourceCatalog
 ) -> None:
     transport = make_transport(records=[])
-    with pytest.raises(SourceSchemaError):
+    with pytest.raises(ObjectNotFoundError, match="no GP record"):
+        _run(celestrak_db, _connector(celestrak_catalog, celestrak_store, transport))
+
+
+def test_multiple_records_rejected(
+    celestrak_db: Database, celestrak_store: SourceCacheStore, celestrak_catalog: SourceCatalog
+) -> None:
+    record = build_celestrak_omm()
+    transport = make_transport(records=[record, record])
+    with pytest.raises(SourceSchemaError, match="multiple GP records"):
+        _run(celestrak_db, _connector(celestrak_catalog, celestrak_store, transport))
+
+
+def test_returned_norad_id_must_match_request(
+    celestrak_db: Database, celestrak_store: SourceCacheStore, celestrak_catalog: SourceCatalog
+) -> None:
+    record = build_celestrak_omm()
+    record["NORAD_CAT_ID"] = 12345
+    transport = make_transport(records=[record])
+    with pytest.raises(SourceSchemaError, match="did not match"):
         _run(celestrak_db, _connector(celestrak_catalog, celestrak_store, transport))
 
 
@@ -138,6 +160,28 @@ def test_oversized_response_rejected(
     transport = make_transport(records=[build_celestrak_omm()])
     connector = _connector(celestrak_catalog, celestrak_store, transport, max_response_bytes=10)
     with pytest.raises(DisallowedRequestError):
+        _run(celestrak_db, connector)
+
+
+def test_tampered_cached_payload_fails_integrity_check(
+    celestrak_db: Database,
+    celestrak_store: SourceCacheStore,
+    celestrak_catalog: SourceCatalog,
+    celestrak_settings: Settings,
+) -> None:
+    connector = _connector(
+        celestrak_catalog, celestrak_store, make_transport(records=[build_celestrak_omm()])
+    )
+    _run(celestrak_db, connector)
+
+    with celestrak_db.session() as session:
+        repo = SqlAlchemySourceRepository(session)
+        cached = connector.read_cache("25544", repo)
+    assert cached is not None
+    cache_file = celestrak_settings.resolved_cache_dir() / cached.body_path
+    cache_file.write_bytes(b'[{"NORAD_CAT_ID": 25544, "tampered": true}]')
+
+    with pytest.raises(SourceIntegrityError, match="checksum mismatch"):
         _run(celestrak_db, connector)
 
 
