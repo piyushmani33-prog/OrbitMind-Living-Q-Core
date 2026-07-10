@@ -100,6 +100,11 @@ class Settings(BaseSettings):
     # Embeddings/vector search are DISABLED by default (null provider; ADR-0022).
     memory_embeddings_enabled: bool = False
 
+    # --- Governed research learning (U4.0A) ---
+    # This is an activation contract only. No open-source/network research adapter is
+    # wired in this slice, so setting it true cannot start a fetch by itself.
+    open_research_enabled: bool = False
+
     # Controlled cache directory for raw source payloads (metadata lives in the DB).
     cache_dir: Path = PROJECT_ROOT / "cache"
 

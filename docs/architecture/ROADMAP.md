@@ -149,6 +149,13 @@ phase, and never auto-promoted.**
 Research question → evidence search → model selection → simulation → hypothesis →
 benchmark → reviewer gate → scientific-memory update.
 
+**Governed foundation implemented (U4.0A):** immutable research input, evidence, gap,
+claim, learning, and user-result contracts plus a deterministic local-fixture service and
+injected persistence/source ports. This is not Research Autopilot: no production
+persistence, migration, API, network adapter, scheduler, agent, LLM, self-modification,
+or quantum execution is authorized. See
+[GOVERNED_RESEARCH_LEARNING_LOOP.md](GOVERNED_RESEARCH_LEARNING_LOOP.md).
+
 ## Phase 8 — Cloud hardening
 PostgreSQL, object storage, managed identity, secrets manager, OpenTelemetry,
 metrics/alerts, backups, disaster recovery, tenant isolation, cost controls.

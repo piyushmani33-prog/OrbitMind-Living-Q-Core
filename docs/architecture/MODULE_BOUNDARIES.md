@@ -26,7 +26,7 @@ created merely for appearance.
 | `knowledge` | **(doc-only, Phase 3)** | concepts/claims/evidence graph | — |
 | `memory` | **(doc-only)** | mission/scientific/procedural memory | — |
 | `simulation` | **(doc-only)** | safe scientific/orbital simulation | — |
-| `research` | **(doc-only, Phase 7)** | hypotheses/experiments/reviewer gates | — |
+| `research` | U4.0A offline foundation | typed inputs, evidence, gaps, derived claims, structured learning, and safe user projection; no API, network, or durable adapter | governance, core |
 | `tool_forge` | **(doc-only, Phase 6)** | generated-tool lifecycle (untrusted) | — |
 | `approvals` | **(modeled, governance)** | human review/approval queues | governance |
 
