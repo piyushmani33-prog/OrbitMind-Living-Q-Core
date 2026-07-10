@@ -57,6 +57,15 @@ def test_wrong_content_type_rejected(celestrak_catalog: SourceCatalog) -> None:
         fetcher.get(URL, {})
 
 
+def test_missing_content_type_rejected(celestrak_catalog: SourceCatalog) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"[]")
+
+    fetcher = SafeHttpFetcher(_policy(celestrak_catalog), transport=httpx.MockTransport(handler))
+    with pytest.raises(DisallowedRequestError, match="content-type"):
+        fetcher.get(URL, {})
+
+
 def test_oversized_response_rejected(celestrak_catalog: SourceCatalog) -> None:
     policy = _policy(celestrak_catalog, max_response_bytes=10)
     transport = make_transport(raw_body=b'[{"x": "much larger than ten bytes"}]')

@@ -32,6 +32,8 @@ def test_policy_endpoint_exposes_no_paths(celestrak_client_factory: ClientFactor
         policy = client.get("/api/v1/sources/celestrak/policy").json()
         assert policy["allowed_hostnames"] == ["celestrak.org"]
         assert policy["https_only"] is True
+        assert "CelesTrak" in policy["attribution_text"]
+        assert "USSPACECOM / 18 SDS" in policy["attribution_text"]
         assert policy["license"]["requires_review"] is True
         assert policy["license"]["commercial_use_confirmed"] is False
 
@@ -49,10 +51,19 @@ def test_refresh_then_cache_listing(celestrak_client_factory: ClientFactory) -> 
             "/api/v1/sources/celestrak/refresh", params={"satellite_id": "25544"}
         ).json()
         assert refreshed["outcome"] == "fetched"
-        cache = client.get("/api/v1/sources/celestrak/cache").json()
+        cache_response = client.get("/api/v1/sources/celestrak/cache")
+        cache = cache_response.json()
         assert len(cache["entries"]) == 1
-        # The internal filesystem path is never exposed.
-        assert "body_path" not in cache["entries"][0]
+        entry = cache["entries"][0]
+        assert not {
+            "body",
+            "raw_body",
+            "body_path",
+            "tle_line1",
+            "tle_line2",
+        } & set(entry)
+        assert "OBJECT_NAME" not in cache_response.text
+        assert "MEAN_MOTION" not in cache_response.text
 
 
 def test_refresh_respects_min_interval(celestrak_client_factory: ClientFactory) -> None:
@@ -73,13 +84,21 @@ def test_refresh_invalid_satellite_id_rejected(celestrak_client_factory: ClientF
         assert response.status_code == 422  # must be a NORAD number
 
 
-def test_refresh_disabled_when_network_off(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("network_enabled", "celestrak_enabled"),
+    [(False, True), (True, False)],
+)
+def test_refresh_disabled_when_network_or_source_off(
+    tmp_path: Path, network_enabled: bool, celestrak_enabled: bool
+) -> None:
     settings = Settings(
-        database_url=f"sqlite:///{(tmp_path / 's.db').as_posix()}",
+        database_url=(
+            f"sqlite:///{(tmp_path / f's-{network_enabled}-{celestrak_enabled}.db').as_posix()}"
+        ),
         artifacts_dir=tmp_path / "artifacts",
-        cache_dir=tmp_path / "cache",
-        network_enabled=False,
-        celestrak_enabled=True,
+        cache_dir=tmp_path / f"cache-{network_enabled}-{celestrak_enabled}",
+        network_enabled=network_enabled,
+        celestrak_enabled=celestrak_enabled,
         env="test",
     )
     container = AppContainer(

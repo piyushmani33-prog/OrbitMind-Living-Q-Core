@@ -20,7 +20,8 @@ network-enabled flag, and policy version.
 **false**), and a reference URL.
 
 ## CelesTrak rights posture (as recorded)
-- **Attribution:** "Orbital data courtesy of CelesTrak (https://celestrak.org)."
+- **Attribution:** "Orbital data courtesy of CelesTrak
+  (https://celestrak.org); source data attributed to USSPACECOM / 18 SDS."
 - **License/usage:** marked **REQUIRES REVIEW**. The exact licensing,
   redistribution, and commercial-use terms are **not confirmed** in this repository
   and must be reviewed against the official CelesTrak terms before any

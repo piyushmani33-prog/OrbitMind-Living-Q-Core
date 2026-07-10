@@ -33,6 +33,13 @@ class SourceSchemaError(SourceError):
     http_status = 502
 
 
+class SourceIntegrityError(SourceError):
+    """Cached or fetched source bytes failed an integrity check."""
+
+    code = "source_integrity_error"
+    http_status = 502
+
+
 class DisallowedRequestError(SourceError):
     """The request violated transport policy (host/scheme/method/size)."""
 

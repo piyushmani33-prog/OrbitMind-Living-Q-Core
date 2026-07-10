@@ -17,10 +17,11 @@ GP-data documentation, **as cited by the reference documents** (both
 | **Query pattern** | `gp.php?CATNR=<n>&FORMAT=json` (single object); also `GROUP=`, `NAME=`, `INTDES=`. | Single-object `CATNR=<norad>&FORMAT=json`. | ✅ matches |
 | **Update guidance / cadence** | CelesTrak checks for new GP only **every 2 hours**; "no reason to poll more often." | Cache TTL 7200s; **minimum refresh floored at 7200s** (`CELESTRAK_OFFICIAL_MIN_REFRESH_SECONDS`) regardless of config. | ✅ matches (corrected — was 3600s) |
 | **Minimum polling interval** | ≥ 2 hours. | Policy floors `min_refresh_seconds = max(config, 7200)`. | ✅ no shorter than official |
-| **Response behavior** | JSON array of OMM objects; HTTPS; `application/json`. | Content-type validated; non-200 → unavailable; redirects rejected; size-capped; empty/missing array → schema error (no false "data"). | ✅ matches |
+| **Response behavior** | JSON array of OMM objects; HTTPS; `application/json`. | Content-type is required and validated; non-200 → unavailable; redirects rejected; size-capped; zero records → `object_not_found`; multiple records → fail closed. | ✅ matches |
 | **Catalogue numbers (5-digit / expanded / Alpha-5)** | NORAD numbers are migrating beyond 5 digits; Alpha-5 (alphanumeric 5-char) encodes > 99,999 in TLE line 1. | `CATNR` accepts `^\d{1,9}$` (covers expanded **numeric** ids). **Alpha-5 alphanumeric designators are not yet accepted** (a documented limitation; `sgp4.alpha5` exists for a future enhancement). | ⚠️ partial — numeric only |
-| **Schema assumptions** | OMM/GP JSON object set. | First array element validated; unknown keys ignored; core elements required; normalization failure → `SourceSchemaError`. | ✅ documented |
-| **Attribution** | Attribution to CelesTrak expected. | Policy records attribution "Orbital data courtesy of CelesTrak (https://celestrak.org)." | ✅ recorded |
+| **Schema assumptions** | OMM/GP JSON object set. | Exactly one object is required; its `NORAD_CAT_ID` must match the requested identifier before OMM-to-TLE normalization. Unknown keys are ignored; core elements are required. | ✅ documented |
+| **Cache integrity** | Cached provider data must remain attributable to the fetched response. | Cached bytes are re-hashed and compared with persisted SHA-256 metadata before normalization; mismatch fails closed. | ✅ enforced |
+| **Attribution** | Attribution to CelesTrak and the underlying source is expected. | Policy records CelesTrak plus USSPACECOM / 18 SDS attribution while retaining `requires_review=true`. | ✅ recorded |
 
 ## Outcome
 - **Technical endpoint/format/cadence verification:** supported → **R-012a closed

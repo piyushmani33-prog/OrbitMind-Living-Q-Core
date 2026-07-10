@@ -35,12 +35,15 @@ def _celestrak_definition(settings: Settings) -> SourceDefinition:
 
     license_record = SourceLicenseRecord(
         license_name="CelesTrak usage terms (see celestrak.org) — REQUIRES REVIEW",
-        attribution_text="Orbital data courtesy of CelesTrak (https://celestrak.org).",
+        attribution_text=(
+            "Orbital data courtesy of CelesTrak (https://celestrak.org); source data "
+            "attributed to USSPACECOM / 18 SDS."
+        ),
         usage_note=(
-            "Attribution to CelesTrak is required. The exact licensing/redistribution "
-            "and commercial-use terms are NOT confirmed in this repository and MUST be "
-            "reviewed against the official CelesTrak terms before any redistribution or "
-            "commercial use. No commercial rights are claimed here."
+            "Attribution to CelesTrak and USSPACECOM / 18 SDS is recorded. The exact "
+            "licensing/redistribution and commercial-use terms are NOT confirmed in this "
+            "repository and MUST be reviewed against the official CelesTrak terms before "
+            "any redistribution or commercial use. No commercial rights are claimed here."
         ),
         requires_review=True,
         commercial_use_confirmed=False,
@@ -72,7 +75,7 @@ def _celestrak_definition(settings: Settings) -> SourceDefinition:
         schema_version="omm-1",
         failure_behavior="fail-safe-no-fallback",
         network_enabled=effective_network,
-        policy_version="1",
+        policy_version="2",
     )
     return SourceDefinition(
         source_id=CELESTRAK_SOURCE_ID,
