@@ -29,6 +29,14 @@ from orbitmind.core.config import PROJECT_ROOT, Settings
 from orbitmind.core.errors import NotFoundError, OrbitMindError
 from orbitmind.core.logging import configure_logging
 from orbitmind.governance.provenance import EvidenceReference
+from orbitmind.observation_geometry.models import (
+    GeodeticPosition,
+    GeometryComputationRequest,
+    GeometryComputationResult,
+    GroundObservationSite,
+    PinnedOrbitElementSet,
+)
+from orbitmind.observation_geometry.service import compute_observation_geometry
 from orbitmind.orchestration.orchestrator import PrimeOrchestrator
 from orbitmind.orchestration.source_resolver import SourceResolver
 from orbitmind.persistence.repositories import SqlAlchemyMissionRepository
@@ -46,6 +54,8 @@ DEFAULT_SAMPLE_ID = "iss"
 CUSTOM_TLE_SATELLITE_ID = "CUSTOM_TLE"
 MAX_CUSTOM_TLE_LABEL_LENGTH = 80
 MAX_CUSTOM_TLE_LINE_LENGTH = 100
+OBSERVE_STEP_SECONDS = 120
+MAX_OBSERVE_WINDOW_HOURS = 24
 
 _BUNDLED_SAMPLE_MARKDOWN_SAFETY_BOUNDARY = (
     "Bundled stale sample TLE only; not live tracking.",
@@ -101,6 +111,19 @@ class BundledOfflineCatalogEntry:
     source_label: str
     source_note: str
     accuracy_note: str
+
+
+@dataclass(frozen=True)
+class BundledObservationRun:
+    """One bounded observer-relative run over a reviewed bundled TLE fixture."""
+
+    sample_id: str
+    source: OrbitalSourceRecord
+    observer: GeodeticPosition
+    start: datetime
+    end: datetime
+    mission_result: SampleRunResult
+    geometry: GeometryComputationResult
 
 
 class CustomOfflineTleRegistry(SourceRegistry):
@@ -272,6 +295,101 @@ def get_bundled_offline_catalog_entry(
         if entry.sample_id == normalized_sample_id:
             return entry
     raise ValueError("selected bundled offline catalog sample is not available")
+
+
+def resolve_bundled_observation_sample(
+    registry: SourceRegistry,
+    satellite_identifier: str,
+) -> OfflineSampleDefinition:
+    """Resolve a friendly name, bundled ID, or NORAD ID to one local fixture only."""
+
+    normalized_identifier = _normalize_bundled_identifier(satellite_identifier)
+    if not normalized_identifier:
+        raise ValueError("satellite identifier is required")
+    for sample_id in sorted(OFFLINE_SAMPLES):
+        sample = OFFLINE_SAMPLES[sample_id]
+        satellite_id = str(sample.request["satellite_id"])
+        source = registry.get_source_record(satellite_id)
+        aliases = {
+            sample.sample_id,
+            satellite_id,
+            source.name,
+            str(source.norad_cat_id) if source.norad_cat_id is not None else "",
+        }
+        if normalized_identifier in {_normalize_bundled_identifier(alias) for alias in aliases}:
+            return sample
+    raise ValueError("bundled offline satellite was not found")
+
+
+def run_bundled_observation(
+    settings: Settings | None = None,
+    *,
+    sample_id: str,
+    observer_latitude_deg: float,
+    observer_longitude_deg: float,
+    observer_altitude_km: float,
+    time_window_hours: int,
+) -> BundledObservationRun:
+    """Run a bounded observer-relative report anchored to the fixture TLE epoch."""
+
+    if time_window_hours < 1 or time_window_hours > MAX_OBSERVE_WINDOW_HOURS:
+        raise ValueError("observation time window must be between 1 and 24 hours")
+    sample = _get_sample_definition(sample_id)
+    registry = SourceRegistry()
+    satellite_id = str(sample.request["satellite_id"])
+    source = registry.get_source_record(satellite_id)
+    tle_line1, tle_line2 = registry.get_tle(satellite_id)
+    elements = PinnedOrbitElementSet(
+        source=source,
+        tle_line1=tle_line1,
+        tle_line2=tle_line2,
+    )
+    if elements.orbit_epoch is None:  # pragma: no cover - validated TLE always carries an epoch.
+        raise RuntimeError("bundled TLE epoch was not available")
+    start = elements.orbit_epoch
+    observer = GeodeticPosition(
+        latitude_deg=observer_latitude_deg,
+        longitude_deg=observer_longitude_deg,
+        altitude_km=observer_altitude_km,
+    )
+    end = start + timedelta(hours=time_window_hours)
+    request_payload = {
+        **sample.request,
+        "start_time": start.isoformat(),
+        "end_time": end.isoformat(),
+        "step_seconds": OBSERVE_STEP_SECONDS,
+        "observer_latitude": observer.latitude_deg,
+        "observer_longitude": observer.longitude_deg,
+        "observer_altitude_km": observer.altitude_km,
+    }
+    effective_settings = settings or _sample_settings()
+    mission_result = _run_offline_mission(
+        settings=effective_settings,
+        request_payload=request_payload,
+        registry=registry,
+        markdown_safety_boundary=_BUNDLED_SAMPLE_MARKDOWN_SAFETY_BOUNDARY,
+    )
+    geometry_request = GeometryComputationRequest(
+        elements=elements,
+        site=GroundObservationSite(
+            site_id="review-observer",
+            name="Review observer",
+            position=observer,
+        ),
+        start=start,
+        end=end,
+        step_seconds=OBSERVE_STEP_SECONDS,
+        minimum_elevation_deg=0.0,
+    )
+    return BundledObservationRun(
+        sample_id=sample.sample_id,
+        source=source,
+        observer=observer,
+        start=start,
+        end=end,
+        mission_result=mission_result,
+        geometry=compute_observation_geometry(geometry_request),
+    )
 
 
 def run_custom_tle_sample(
@@ -497,6 +615,10 @@ def _get_sample_definition(sample_id: str) -> OfflineSampleDefinition:
         return OFFLINE_SAMPLES[sample_id.lower()]
     except KeyError as exc:
         raise ValueError(f"unsupported bundled offline sample: {sample_id}") from exc
+
+
+def _normalize_bundled_identifier(value: str) -> str:
+    return "".join(character for character in value.casefold() if character.isalnum())
 
 
 def _use_source_registry(container: AppContainer, registry: SourceRegistry) -> None:
