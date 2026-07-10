@@ -556,7 +556,10 @@ class GovernedResearchLearningService:
         gaps: tuple[ResearchGap, ...],
         now: datetime,
     ) -> ResearchLearningRecord:
-        if claim.verifier_status in (ClaimVerifierStatus.INSUFFICIENT_EVIDENCE, ClaimVerifierStatus.REJECTED):
+        if claim.verifier_status in (
+            ClaimVerifierStatus.INSUFFICIENT_EVIDENCE,
+            ClaimVerifierStatus.REJECTED,
+        ):
             status = ResearchLearningStatus.INSUFFICIENT_EVIDENCE
         elif gaps:
             status = ResearchLearningStatus.PARTIAL
