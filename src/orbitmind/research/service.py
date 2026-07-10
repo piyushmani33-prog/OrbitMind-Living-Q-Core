@@ -372,7 +372,7 @@ class GovernedResearchLearningService:
                 )
             )
             return
-        if document.declared_checksum != actual_checksum:
+        if document.declared_checksum is not None and document.declared_checksum != actual_checksum:
             inputs.append(
                 self._input_record(
                     document, input_id, now, actual_checksum, ResearchInputStatus.REJECTED
