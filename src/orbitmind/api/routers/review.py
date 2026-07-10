@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import math
+import re
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from html import escape
 from pathlib import Path
 from typing import Annotated
@@ -14,11 +18,16 @@ from orbitmind.api.container import AppContainer
 from orbitmind.api.deps import get_container
 from orbitmind.core.errors import NotFoundError, OrbitMindError, ValidationError
 from orbitmind.core.ids import is_valid_uuid
+from orbitmind.observation_geometry.models import ComputedVisibilityInterval
 from orbitmind.sample import (
+    MAX_OBSERVE_WINDOW_HOURS,
+    BundledObservationRun,
     BundledOfflineCatalogEntry,
     SampleRunResult,
     get_bundled_offline_catalog,
     get_bundled_offline_catalog_entry,
+    resolve_bundled_observation_sample,
+    run_bundled_observation,
     run_custom_tle_sample,
     run_sample,
 )
@@ -69,6 +78,33 @@ CATALOG_SAFETY_BOUNDARY_ITEMS = (
     "not production/public-alpha workflow",
 )
 MAX_CATALOG_BODY_BYTES = 256
+MAX_OBSERVE_BODY_BYTES = 1_024
+_POSITIVE_INTEGER_RE = re.compile(r"^[1-9][0-9]*$")
+
+OBSERVE_SAFETY_BOUNDARY_ITEMS = (
+    "bundled offline sample/test-only data only",
+    "no provider fetch",
+    "no CelesTrak fetch",
+    "not live certified tracking",
+    "not collision warning",
+    "no maneuver recommendation",
+    "no command readiness, approval, or certification",
+    "orbital data freshness and uncertainty are shown",
+    "no probability of collision computed",
+    "not production/public-alpha workflow",
+)
+
+
+@dataclass(frozen=True)
+class ObserveForm:
+    """Bounded server-rendered observer request parsed from a local HTML form."""
+
+    satellite_identifier: str
+    observer_latitude_deg: float
+    observer_longitude_deg: float
+    observer_altitude_km: float
+    time_window_hours: int
+
 
 PAGE_CSS = """
     :root {
@@ -271,6 +307,13 @@ def reviewer_home() -> HTMLResponse:
       </section>
       <section class="grid footer-link">
         <div class="card">
+          <h2>OrbitMind Observe</h2>
+          <p>
+            Use a reviewed bundled fixture to calculate bounded observer-relative pass candidates.
+          </p>
+          <p><a href="/observe">Open OrbitMind Observe</a></p>
+        </div>
+        <div class="card">
           <h2>Bundled satellite catalog</h2>
           <p>Choose a reviewed local fixture without entering TLE lines manually.</p>
           <p><a href="/review/catalog">Open the bundled offline satellite catalog</a></p>
@@ -374,6 +417,120 @@ async def run_custom_tle_review_sample(request: Request, container: ContainerDep
       <p class="footer-link"><a href="/review/custom-tle">Run another offline custom TLE</a></p>
 """
     return HTMLResponse(_page("Offline Custom TLE Reviewer Result", body))
+
+
+@router.get("/observe", response_class=HTMLResponse)
+def observe_home() -> HTMLResponse:
+    """Return the bounded, bundled-fixture observer pass-planning form."""
+
+    body = f"""
+      <section class="hero">
+        <p class="eyebrow">Bounded observer-relative geometry</p>
+        <h1>OrbitMind Observe</h1>
+        <p>
+          Find a reviewed bundled satellite fixture by name or NORAD ID and calculate
+          deterministic above-horizon pass candidates from one ground location. The window is
+          anchored to the selected fixture TLE epoch for reproducibility, not current tracking.
+        </p>
+      </section>
+      <section class="grid">
+        <form method="post" action="/observe/run" class="card stack">
+          <h2>Observer request</h2>
+          <label>
+            Satellite name or NORAD ID
+            <input
+              name="satellite_identifier"
+              value="ISS"
+              maxlength="80"
+              autocomplete="off"
+              required
+            >
+          </label>
+          <p>
+            Bundled aliases currently available: <code>ISS</code>, <code>ISS (ZARYA)</code>,
+            and <code>25544</code>.
+          </p>
+          <label>
+            Observer latitude (degrees)
+            <input name="observer_latitude" type="number" min="-90" max="90" step="0.0001" required>
+          </label>
+          <label>
+            Observer longitude (degrees)
+            <input
+              name="observer_longitude"
+              type="number"
+              min="-180"
+              max="180"
+              step="0.0001"
+              required
+            >
+          </label>
+          <label>
+            Observer altitude (metres, optional; default 0)
+            <input name="observer_altitude_m" type="number" min="-500" max="9000" step="1">
+          </label>
+          <label>
+            Time window from fixture TLE epoch (hours, maximum {MAX_OBSERVE_WINDOW_HOURS})
+            <input
+              name="time_window_hours"
+              type="number"
+              min="1"
+              max="{MAX_OBSERVE_WINDOW_HOURS}"
+              step="1"
+              value="{MAX_OBSERVE_WINDOW_HOURS}"
+              required
+            >
+          </label>
+          <button class="button" type="submit">Generate observation report</button>
+        </form>
+        {_observe_limitations_panel()}
+      </section>
+      {_safety_boundary_panel(OBSERVE_SAFETY_BOUNDARY_ITEMS)}
+      <p class="footer-link"><a href="/review">Back to reviewer sandbox</a></p>
+"""
+    return HTMLResponse(_page("OrbitMind Observe", body))
+
+
+@router.post("/observe/run", response_class=HTMLResponse)
+async def run_observe(request: Request, container: ContainerDep) -> HTMLResponse:
+    """Calculate bounded pass candidates from a reviewed local fixture only."""
+
+    try:
+        form = await _read_observe_form(request)
+        sample = resolve_bundled_observation_sample(container.registry, form.satellite_identifier)
+        observation = run_bundled_observation(
+            settings=container.settings,
+            sample_id=sample.sample_id,
+            observer_latitude_deg=form.observer_latitude_deg,
+            observer_longitude_deg=form.observer_longitude_deg,
+            observer_altitude_km=form.observer_altitude_km,
+            time_window_hours=form.time_window_hours,
+        )
+    except ValueError as exc:
+        return _observe_error_page(str(exc))
+    except OrbitMindError as exc:
+        return _observe_error_page(exc.message, status_code=exc.http_status)
+    body = f"""
+      <section class="hero">
+        <p class="eyebrow">Bundled offline observation report</p>
+        <h1>OrbitMind Observe Result</h1>
+        {_status_badges(observation.mission_result)}
+      </section>
+      <section class="grid">
+        {_observe_source_section(observation)}
+        {_observe_observer_section(observation)}
+      </section>
+      {_observe_pass_windows_section(observation)}
+      <section class="grid">
+        {_mission_section(observation.mission_result)}
+        {_hash_section(observation.mission_result)}
+      </section>
+      {_artifact_section(observation.mission_result)}
+      {_observe_limitations_panel()}
+      {_safety_boundary_panel(OBSERVE_SAFETY_BOUNDARY_ITEMS)}
+      <p class="footer-link"><a href="/observe">Run another bounded observation report</a></p>
+"""
+    return HTMLResponse(_page("OrbitMind Observe Result", body))
 
 
 @router.get("/review/catalog", response_class=HTMLResponse)
@@ -484,6 +641,57 @@ async def _read_custom_tle_form(request: Request) -> dict[str, str]:
     }
 
 
+async def _read_observe_form(request: Request) -> ObserveForm:
+    body = await request.body()
+    if len(body) > MAX_OBSERVE_BODY_BYTES:
+        raise ValueError("observe request body is too large")
+    try:
+        parsed = parse_qs(body.decode("utf-8"), keep_blank_values=True)
+    except UnicodeDecodeError as exc:
+        raise ValueError("observe form must be UTF-8 encoded") from exc
+    allowed_keys = {
+        "satellite_identifier",
+        "observer_latitude",
+        "observer_longitude",
+        "observer_altitude_m",
+        "time_window_hours",
+    }
+    if not set(parsed).issubset(allowed_keys):
+        raise ValueError("observe form contains unsupported fields")
+    satellite_identifier = _normalize_observe_identifier(
+        _required_single_form_value(parsed, "satellite_identifier")
+    )
+    latitude = _parse_bounded_observe_float(
+        _required_single_form_value(parsed, "observer_latitude"),
+        field_name="observer latitude",
+        lower=-90.0,
+        upper=90.0,
+    )
+    longitude = _parse_bounded_observe_float(
+        _required_single_form_value(parsed, "observer_longitude"),
+        field_name="observer longitude",
+        lower=-180.0,
+        upper=180.0,
+    )
+    altitude_m = _parse_bounded_observe_float(
+        _optional_single_form_value(parsed, "observer_altitude_m"),
+        field_name="observer altitude",
+        lower=-500.0,
+        upper=9_000.0,
+        default=0.0,
+    )
+    time_window_hours = _parse_observe_time_window(
+        _required_single_form_value(parsed, "time_window_hours")
+    )
+    return ObserveForm(
+        satellite_identifier=satellite_identifier,
+        observer_latitude_deg=latitude,
+        observer_longitude_deg=longitude,
+        observer_altitude_km=altitude_m / 1_000.0,
+        time_window_hours=time_window_hours,
+    )
+
+
 async def _read_catalog_sample_id(request: Request) -> str:
     body = await request.body()
     if len(body) > MAX_CATALOG_BODY_BYTES:
@@ -498,6 +706,62 @@ async def _read_catalog_sample_id(request: Request) -> str:
     if len(values) != 1 or not values[0].strip():
         raise ValueError("catalog sample selection is required")
     return values[0]
+
+
+def _required_single_form_value(parsed: dict[str, list[str]], key: str) -> str:
+    values = parsed.get(key)
+    if values is None or len(values) != 1 or not values[0].strip():
+        raise ValueError(f"{key.replace('_', ' ')} is required")
+    return values[0]
+
+
+def _optional_single_form_value(parsed: dict[str, list[str]], key: str) -> str:
+    values = parsed.get(key)
+    if values is None:
+        return ""
+    if len(values) != 1:
+        raise ValueError(f"{key.replace('_', ' ')} must be provided once")
+    return values[0]
+
+
+def _normalize_observe_identifier(value: str) -> str:
+    identifier = value.strip()
+    if not identifier or len(identifier) > 80:
+        raise ValueError("satellite identifier must be non-empty and 80 characters or fewer")
+    if "<" in identifier or ">" in identifier:
+        raise ValueError("satellite identifier contains unsupported markup characters")
+    return identifier
+
+
+def _parse_bounded_observe_float(
+    value: str,
+    *,
+    field_name: str,
+    lower: float,
+    upper: float,
+    default: float | None = None,
+) -> float:
+    if not value.strip():
+        if default is not None:
+            return default
+        raise ValueError(f"{field_name} is required")
+    try:
+        parsed = float(value)
+    except ValueError as exc:
+        raise ValueError(f"{field_name} must be a finite number") from exc
+    if not math.isfinite(parsed) or parsed < lower or parsed > upper:
+        raise ValueError(f"{field_name} must be between {lower:g} and {upper:g}")
+    return parsed
+
+
+def _parse_observe_time_window(value: str) -> int:
+    normalized = value.strip()
+    if not _POSITIVE_INTEGER_RE.fullmatch(normalized):
+        raise ValueError("time window must be a whole number of hours")
+    hours = int(normalized)
+    if hours > MAX_OBSERVE_WINDOW_HOURS:
+        raise ValueError("time window must not exceed 24 hours")
+    return hours
 
 
 def _single_form_value(parsed: dict[str, list[str]], key: str) -> str:
@@ -524,6 +788,26 @@ def _custom_tle_error_page(message: str, *, status_code: int = 422) -> HTMLRespo
       </section>
 """
     return HTMLResponse(_page("Offline Custom TLE Reviewer Error", body), status_code=status_code)
+
+
+def _observe_error_page(message: str, *, status_code: int = 422) -> HTMLResponse:
+    body = f"""
+      <section class="hero">
+        <p class="eyebrow">Observer request rejected</p>
+        <h1>OrbitMind Observe</h1>
+        <p>The bounded offline observation request could not be accepted.</p>
+      </section>
+      <section class="grid">
+        <div class="card error">
+          <h2>Validation error</h2>
+          <p>{escape(message)}</p>
+          <p><a href="/observe">Back to OrbitMind Observe</a></p>
+        </div>
+        {_observe_limitations_panel()}
+      </section>
+      {_safety_boundary_panel(OBSERVE_SAFETY_BOUNDARY_ITEMS)}
+"""
+    return HTMLResponse(_page("OrbitMind Observe Error", body), status_code=status_code)
 
 
 def _catalog_error_page(message: str, *, status_code: int = 422) -> HTMLResponse:
@@ -616,6 +900,127 @@ def _hash_section(result: SampleRunResult) -> str:
         </dl>
       </section>
 """
+
+
+def _observe_source_section(observation: BundledObservationRun) -> str:
+    tle_epoch = _source_epoch_utc(observation.source.epoch_utc)
+    tle_age_days = max(0, (datetime.now(UTC) - tle_epoch).days)
+    norad_catalog_id = (
+        str(observation.source.norad_cat_id)
+        if observation.source.norad_cat_id is not None
+        else "unavailable"
+    )
+    return f"""
+      <section class="card">
+        <h2>Orbital data source</h2>
+        <dl>
+          <dt>satellite name</dt><dd>{escape(observation.source.name)}</dd>
+          <dt>NORAD ID</dt><dd>{escape(norad_catalog_id)}</dd>
+          <dt>source used</dt><dd>bundled offline catalog fixture</dd>
+          <dt>source label</dt><dd>bundled sample/test-only</dd>
+          <dt>source timestamp</dt><dd>fixture epoch; no fetched_at for bundled data</dd>
+          <dt>TLE epoch</dt><dd>{escape(_format_timestamp(tle_epoch))}</dd>
+          <dt>data age</dt><dd>{tle_age_days} days</dd>
+          <dt>source checksum</dt><dd><code>{escape(observation.source.checksum)}</code></dd>
+          <dt>observation input checksum</dt>
+          <dd><code>{escape(observation.geometry.request_checksum)}</code></dd>
+        </dl>
+      </section>
+"""
+
+
+def _observe_observer_section(observation: BundledObservationRun) -> str:
+    return f"""
+      <section class="card">
+        <h2>Observer and model</h2>
+        <dl>
+          <dt>observer latitude</dt><dd>{observation.observer.latitude_deg:.6f} deg</dd>
+          <dt>observer longitude</dt><dd>{observation.observer.longitude_deg:.6f} deg</dd>
+          <dt>observer altitude</dt><dd>{observation.observer.altitude_km * 1_000.0:.1f} m</dd>
+          <dt>time window</dt>
+          <dd>
+            {escape(_format_timestamp(observation.start))} to
+            {escape(_format_timestamp(observation.end))}
+          </dd>
+          <dt>propagation model</dt><dd>SGP4</dd>
+          <dt>look-angle method</dt><dd>bounded topocentric azimuth/elevation geometry</dd>
+          <dt>sampled horizon threshold</dt><dd>0 degrees elevation</dd>
+          <dt>geometry status</dt><dd>{observation.geometry.failed_sample_count} failed samples</dd>
+        </dl>
+      </section>
+"""
+
+
+def _observe_pass_windows_section(observation: BundledObservationRun) -> str:
+    visible_intervals = observation.geometry.intervals
+    visible_rows = "\n".join(_observe_pass_row(interval) for interval in visible_intervals[:20])
+    if not visible_rows:
+        visible_rows = (
+            '<tr><td colspan="7">No sampled above-horizon pass candidate was found in this '
+            "bounded window.</td></tr>"
+        )
+    additional_note = ""
+    if len(visible_intervals) > 20:
+        additional_note = (
+            f"<p>Showing the first 20 of {len(visible_intervals)} bounded pass candidates.</p>"
+        )
+    return f"""
+      <section class="card">
+        <h2>Next sampled pass windows</h2>
+        <p>
+          Above-horizon geometric candidates only. These do not assess optical visibility,
+          weather, terrain, sensor constraints, or operational access.
+        </p>
+        <table>
+          <thead>
+            <tr>
+              <th>Rise time</th><th>Rise azimuth</th><th>Peak time</th>
+              <th>Max elevation</th><th>Set time</th><th>Set azimuth</th><th>Boundary</th>
+            </tr>
+          </thead>
+          <tbody>{visible_rows}</tbody>
+        </table>
+        {additional_note}
+      </section>
+"""
+
+
+def _observe_pass_row(interval: ComputedVisibilityInterval) -> str:
+    return (
+        "<tr>"
+        f"<td>{escape(_format_timestamp(interval.rise_time))}</td>"
+        f"<td>{interval.rise_azimuth_deg:.2f} deg</td>"
+        f"<td>{escape(_format_timestamp(interval.peak_time))}</td>"
+        f"<td>{interval.peak_elevation_deg:.2f} deg</td>"
+        f"<td>{escape(_format_timestamp(interval.set_time))}</td>"
+        f"<td>{interval.set_azimuth_deg:.2f} deg</td>"
+        f"<td>{escape(interval.refinement_status.value)}</td>"
+        "</tr>"
+    )
+
+
+def _observe_limitations_panel() -> str:
+    return """
+      <section class="card safety">
+        <h2>Observation limitations</h2>
+        <ul>
+          <li>TLE/SGP4 can have kilometre-scale uncertainty, especially for stale elements.</li>
+          <li>No covariance is available.</li>
+          <li>No probability of collision is computed.</li>
+          <li>Not live certified tracking and not an operational safety assessment.</li>
+          <li>Not suitable for maneuver decisions or guidance.</li>
+          <li>Optical visibility is not assessed in this phase.</li>
+        </ul>
+      </section>
+"""
+
+
+def _source_epoch_utc(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(UTC)
+
+
+def _format_timestamp(value: datetime) -> str:
+    return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
 
 def _catalog_card(entry: BundledOfflineCatalogEntry) -> str:
