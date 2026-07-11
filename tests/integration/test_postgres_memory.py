@@ -112,7 +112,7 @@ def test_connection_and_dialect(pg_container: AppContainer) -> None:
 
 def test_migrations_at_head_and_memory_tables_exist(pg_container: AppContainer) -> None:
     head = _exec(pg_container, "SELECT version_num FROM alembic_version")[0][0]
-    assert head == "m8b9c0d1e2f3"  # current Alembic head (geometry-derived eligibility)
+    assert head == "n9c0d1e2f3g4"  # current Alembic head (durable research memory)
     present = {
         r[0]
         for r in _exec(

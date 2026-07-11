@@ -21,10 +21,12 @@ class ResearchMemoryRepository(Protocol):
     """Persistence port; durable implementations must save each cycle atomically."""
 
     def find_evidence(
-        self, *, source_identifier: str, checksum: str
+        self, *, owner_id: str, source_identifier: str, checksum: str
     ) -> ResearchEvidence | None: ...
 
-    def save_cycle(self, cycle: ResearchCycleRecord) -> None: ...
+    def save_cycle(self, *, owner_id: str, cycle: ResearchCycleRecord) -> ResearchCycleRecord: ...
+
+    def get_cycle(self, *, owner_id: str, cycle_id: str) -> ResearchCycleRecord | None: ...
 
 
 class ResearchSourceAdapter(Protocol):

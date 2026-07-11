@@ -149,11 +149,13 @@ phase, and never auto-promoted.**
 Research question → evidence search → model selection → simulation → hypothesis →
 benchmark → reviewer gate → scientific-memory update.
 
-**Governed foundation implemented (U4.0A):** immutable research input, evidence, gap,
-claim, learning, and user-result contracts plus a deterministic local-fixture service and
-injected persistence/source ports. This is not Research Autopilot: no production
-persistence, migration, API, network adapter, scheduler, agent, LLM, self-modification,
-or quantum execution is authorized. See
+**Governed foundation and durable structured memory implemented (U4.0A-U4.0B):**
+immutable research input, evidence, gap, claim, learning, and user-result contracts plus
+a deterministic local-fixture service and owner-scoped atomic PostgreSQL persistence.
+Alembic revision `n9c0d1e2f3g4` adds the structured-memory schema. Raw evidence storage,
+retention/deletion execution, authorization integration, open-source adapters, scheduling,
+agents, LLM behavior, automatic research, self-modification, and quantum execution remain
+deferred. This is not Research Autopilot. See
 [GOVERNED_RESEARCH_LEARNING_LOOP.md](GOVERNED_RESEARCH_LEARNING_LOOP.md).
 
 ## Phase 8 — Cloud hardening

@@ -14,7 +14,8 @@ import orbitmind.persistence.memory_models
 import orbitmind.persistence.models
 import orbitmind.persistence.observation_geometry_models
 import orbitmind.persistence.observation_planning_models
-import orbitmind.persistence.optimization_models  # noqa: F401 - register optimization tables
+import orbitmind.persistence.optimization_models
+import orbitmind.persistence.research_models  # noqa: F401 - register research-memory tables
 from orbitmind.core.config import get_settings
 from orbitmind.persistence.database import Base
 

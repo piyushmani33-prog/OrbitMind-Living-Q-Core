@@ -11,10 +11,15 @@ from sqlalchemy import create_engine, inspect, text
 
 import orbitmind.persistence.observation_geometry_models as _observation_geometry_models
 import orbitmind.persistence.observation_planning_models as _observation_planning_models
+import orbitmind.persistence.research_models as _research_models
 from orbitmind.persistence.database import Base
 
 pytestmark = pytest.mark.integration
-REGISTERED_MODEL_MODULES = (_observation_geometry_models, _observation_planning_models)
+REGISTERED_MODEL_MODULES = (
+    _observation_geometry_models,
+    _observation_planning_models,
+    _research_models,
+)
 
 PHASE1_REVISION = "b38aa92661c2"
 PHASE2_REVISION = "080f934b44d1"
@@ -76,10 +81,28 @@ PHASE4B_PROVENANCE_LINK_HEAD = "k6e7f8a9b0c2"
 
 PHASE4C_OBSERVATION_GEOMETRY_HEAD = "l7a8b9c0d1e2"
 PHASE4C_GEOMETRY_DERIVED_ELIGIBILITY_HEAD = "m8b9c0d1e2f3"
+U4_0B_RESEARCH_MEMORY_HEAD = "n9c0d1e2f3g4"
 
 PHASE4C_OBSERVATION_GEOMETRY_TABLES = {
     "observation_geometry_requests",
     "observation_geometry_runs",
+}
+
+U4_0B_RESEARCH_MEMORY_TABLES = {
+    "research_cycles",
+    "research_inputs",
+    "research_evidence",
+    "research_input_duplicates",
+    "research_cycle_evidence",
+    "research_gaps",
+    "research_claims",
+    "research_claim_evidence",
+    "research_claim_gaps",
+    "research_learning_records",
+    "research_learning_support",
+    "research_learning_conflicts",
+    "research_learning_claims",
+    "research_learning_gaps",
 }
 
 
@@ -101,6 +124,7 @@ def test_alembic_upgrade_head_builds_schema(tmp_path: Path) -> None:
     assert tables >= PHASE4B_PROVENANCE_ELIGIBILITY_TABLES
     assert tables >= PHASE4B_PROVENANCE_LINK_TABLES
     assert tables >= PHASE4C_OBSERVATION_GEOMETRY_TABLES
+    assert tables >= U4_0B_RESEARCH_MEMORY_TABLES
     # Migration schema matches the ORM metadata (parity check).
     assert set(Base.metadata.tables) >= (
         EXPECTED_TABLES
@@ -110,6 +134,7 @@ def test_alembic_upgrade_head_builds_schema(tmp_path: Path) -> None:
         | PHASE4B_PROVENANCE_ELIGIBILITY_TABLES
         | PHASE4B_PROVENANCE_LINK_TABLES
         | PHASE4C_OBSERVATION_GEOMETRY_TABLES
+        | U4_0B_RESEARCH_MEMORY_TABLES
     )
 
 
@@ -370,6 +395,42 @@ def test_geometry_derived_eligibility_check_migration_downgrades_to_previous_hea
     window_checks = _check_sql_by_name(inspector, "observation_eligibility_windows")
     engine.dispose()
     assert "derived_from_geometry" in window_checks["ck_oew_declaration_mode"]
+
+
+def test_research_memory_migration_downgrades_and_reupgrades(tmp_path: Path) -> None:
+    db_url = f"sqlite:///{(tmp_path / 'u4-research-memory.db').as_posix()}"
+    cfg = Config("alembic.ini")
+    cfg.set_main_option("sqlalchemy.url", db_url)
+
+    command.upgrade(cfg, U4_0B_RESEARCH_MEMORY_HEAD)
+    engine = create_engine(db_url)
+    inspector = inspect(engine)
+    tables = set(inspector.get_table_names())
+    evidence_uniques = {
+        constraint["name"] for constraint in inspector.get_unique_constraints("research_evidence")
+    }
+    claim_evidence_fks = {
+        constraint["name"] for constraint in inspector.get_foreign_keys("research_claim_evidence")
+    }
+    cycle_indexes = {index["name"] for index in inspector.get_indexes("research_cycles")}
+    engine.dispose()
+
+    assert tables >= U4_0B_RESEARCH_MEMORY_TABLES
+    assert "uq_research_evidence_identity" in evidence_uniques
+    assert "fk_research_claim_evidence_evidence" in claim_evidence_fks
+    assert "ix_research_cycles_owner_created" in cycle_indexes
+
+    command.downgrade(cfg, PHASE4C_GEOMETRY_DERIVED_ELIGIBILITY_HEAD)
+    engine = create_engine(db_url)
+    downgraded = set(inspect(engine).get_table_names())
+    engine.dispose()
+    assert downgraded.isdisjoint(U4_0B_RESEARCH_MEMORY_TABLES)
+    assert downgraded >= PHASE4C_OBSERVATION_GEOMETRY_TABLES
+
+    command.upgrade(cfg, U4_0B_RESEARCH_MEMORY_HEAD)
+    engine = create_engine(db_url)
+    assert set(inspect(engine).get_table_names()) >= U4_0B_RESEARCH_MEMORY_TABLES
+    engine.dispose()
 
 
 def _check_sql_by_name(inspector: object, table_name: str) -> dict[str, str]:
