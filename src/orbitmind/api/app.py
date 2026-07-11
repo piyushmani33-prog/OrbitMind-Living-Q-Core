@@ -32,6 +32,7 @@ from orbitmind.api.routers.space_objects import router as space_objects_router
 from orbitmind.api.routers.static_reports import router as static_reports_router
 from orbitmind.api.routers.system import system_router, v1_system_router
 from orbitmind.api.routers.visual_manifests import router as visual_manifests_router
+from orbitmind.api.routers.workbench import router as workbench_router
 from orbitmind.core.logging import configure_logging
 
 API_DESCRIPTION = (
@@ -76,6 +77,7 @@ def create_app(container: AppContainer | None = None) -> FastAPI:
     app.include_router(map_orbit_contexts_router)
     app.include_router(product_summaries_router)
     app.include_router(review_router)
+    app.include_router(workbench_router)
     return app
 
 

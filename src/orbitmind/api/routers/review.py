@@ -307,6 +307,11 @@ def reviewer_home() -> HTMLResponse:
       </section>
       <section class="grid footer-link">
         <div class="card">
+          <h2>Mission Workbench</h2>
+          <p>Calculate deterministic offline pass and contact windows for one observer.</p>
+          <p><a href="/workbench">Open Mission Workbench</a></p>
+        </div>
+        <div class="card">
           <h2>OrbitMind Observe</h2>
           <p>
             Use a reviewed bundled fixture to calculate bounded observer-relative pass candidates.

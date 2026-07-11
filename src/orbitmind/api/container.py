@@ -13,6 +13,7 @@ import httpx
 
 from orbitmind.core.config import Settings, get_settings
 from orbitmind.memory.service import MemoryService
+from orbitmind.mission_windows.service import MissionWindowService
 from orbitmind.observability.service import ObservabilityService
 from orbitmind.optimization.receipts import (
     EvidenceReceiptSigner,
@@ -150,6 +151,7 @@ class AppContainer:
             visualization=VisualizationService(self.settings.resolved_artifacts_dir()),
             resolver=self.resolver,
         )
+        self.mission_window_service = MissionWindowService()
 
         # --- Phase 3A: JPL small-body connectors + service ---
         sbdb = SbdbConnector(
