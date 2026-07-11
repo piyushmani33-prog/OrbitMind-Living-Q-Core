@@ -1,0 +1,35 @@
+{
+  "fixture_id": "iss-equator-2019-12-09-reference-v1",
+  "source_fixture": "data/samples/iss_zarya.tle",
+  "source_fixture_sha256": "e20e7db3f19c0ebb5c2d2a10a425fa8440b61452773f35b4ba19c47184576214",
+  "reference_provenance": {
+    "generated_on": "2026-07-11",
+    "propagator": "python-sgp4 2.26",
+    "method": "One-off independent scalar reference calculation using the bundled Vallado TLE, IAU-1982 GMST rotation, WGS84 observer ECEF, and ENU look angles. The calculation did not import OrbitMind observation_geometry or mission_windows code.",
+    "search": "One-second independent scan; rise/set bisection and peak ternary refinement to 0.001 seconds."
+  },
+  "observer": {
+    "latitude_deg": 0.0,
+    "longitude_deg": 0.0,
+    "altitude_metres": 0.0
+  },
+  "request": {
+    "start_time": "2019-12-09T19:40:00Z",
+    "end_time": "2019-12-09T20:30:00Z",
+    "minimum_elevation_deg": 0.0
+  },
+  "expected_window": {
+    "rise_time": "2019-12-09T19:57:16.539550Z",
+    "peak_time": "2019-12-09T20:02:08.963247Z",
+    "set_time": "2019-12-09T20:07:02.503417Z",
+    "rise_azimuth_deg": 349.865713759,
+    "peak_azimuth_deg": 54.274196594,
+    "set_azimuth_deg": 118.348170976,
+    "maximum_elevation_deg": 17.186019691
+  },
+  "tolerances": {
+    "event_time_seconds": 0.1,
+    "azimuth_deg": 0.01,
+    "maximum_elevation_deg": 0.001
+  }
+}

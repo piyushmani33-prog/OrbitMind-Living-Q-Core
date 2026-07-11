@@ -91,6 +91,11 @@ only, without live tracking, operational access, taskability, command readiness,
 signed receipt claims, or quantum authority. See
 [OBSERVATION_STUDY_API_FLOW.md](../development/OBSERVATION_STUDY_API_FLOW.md).
 
+**U4.1A offline mission-window engine:** a calculation-only typed application service adds
+bounded, refined Earth-observer geometric windows over the existing pinned SGP4 and WGS84
+look-angle path. It adds no API, UI, persistence, live provider behavior, optical-visibility
+claim, or operational authority. See [MISSION_WINDOW_ENGINE.md](MISSION_WINDOW_ENGINE.md).
+
 ### Further optimization (planned / deferred)
 Larger instances / additional solvers, still classical-baseline-first and bounded.
 

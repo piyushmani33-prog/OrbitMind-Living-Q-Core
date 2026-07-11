@@ -11,7 +11,10 @@ from orbitmind.observation_geometry.models import (
     GroundObservationSite,
     PinnedOrbitElementSet,
 )
-from orbitmind.observation_geometry.service import compute_observation_geometry
+from orbitmind.observation_geometry.service import (
+    ObservationGeometryEvaluator,
+    compute_observation_geometry,
+)
 from orbitmind.observation_geometry.verification import (
     verify_geometry_result,
     verify_sgp4_reference_vector,
@@ -26,6 +29,7 @@ __all__ = [
     "GeometrySampleStatus",
     "GeometryVerificationResult",
     "GroundObservationSite",
+    "ObservationGeometryEvaluator",
     "PinnedOrbitElementSet",
     "compute_observation_geometry",
     "verify_geometry_result",
