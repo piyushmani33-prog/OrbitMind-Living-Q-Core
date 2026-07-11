@@ -7,8 +7,10 @@ silently discarded (SR-08).
 
 from __future__ import annotations
 
-from datetime import timedelta
+from dataclasses import dataclass
+from datetime import datetime, timedelta
 from importlib.metadata import PackageNotFoundError, version
+from typing import Literal, cast
 
 from sgp4.api import SGP4_ERRORS, Satrec, jday
 
@@ -24,7 +26,55 @@ from orbitmind.space.models import (
     Vector3,
 )
 
-COMPUTATION_VERSION = "orbitmind-sgp4-wgs72-1.0"
+COMPUTATION_VERSION: Literal["orbitmind-sgp4-wgs72-1.0"] = "orbitmind-sgp4-wgs72-1.0"
+
+
+@dataclass(frozen=True)
+class Sgp4StateVector:
+    """One pinned SGP4 outcome in TEME, with UTC used for the Julian-date input."""
+
+    timestamp: datetime
+    julian_date_utc_as_ut1: float
+    error_code: int
+    position_km: tuple[float, float, float] | None
+    velocity_kmps: tuple[float, float, float] | None
+
+
+def propagate_sgp4_state(satrec: Satrec, timestamp: datetime) -> Sgp4StateVector:
+    """Evaluate one UTC instant through the shared python-sgp4/WGS72 path."""
+
+    timestamp_utc = ensure_utc(timestamp)
+    seconds = timestamp_utc.second + timestamp_utc.microsecond / 1_000_000.0
+    jd, fr = jday(
+        timestamp_utc.year,
+        timestamp_utc.month,
+        timestamp_utc.day,
+        timestamp_utc.hour,
+        timestamp_utc.minute,
+        seconds,
+    )
+    error_code, position, velocity = satrec.sgp4(jd, fr)
+    if error_code != 0:
+        return Sgp4StateVector(
+            timestamp=timestamp_utc,
+            julian_date_utc_as_ut1=float(jd + fr),
+            error_code=int(error_code),
+            position_km=None,
+            velocity_kmps=None,
+        )
+    return Sgp4StateVector(
+        timestamp=timestamp_utc,
+        julian_date_utc_as_ut1=float(jd + fr),
+        error_code=0,
+        position_km=cast(
+            tuple[float, float, float],
+            tuple(float(component) for component in position),
+        ),
+        velocity_kmps=cast(
+            tuple[float, float, float],
+            tuple(float(component) for component in velocity),
+        ),
+    )
 
 
 def _pkg_version(name: str) -> str:
@@ -60,26 +110,36 @@ class PropagationService:
 
         for i in range(request.expected_sample_count()):
             t = start + timedelta(seconds=i * request.step_seconds)
-            seconds = t.second + t.microsecond / 1_000_000.0
-            jd, fr = jday(t.year, t.month, t.day, t.hour, t.minute, seconds)
-            error_code, r, v = satrec.sgp4(jd, fr)
+            state = propagate_sgp4_state(satrec, t)
 
-            if error_code != 0:
+            if state.error_code != 0 or state.position_km is None or state.velocity_kmps is None:
                 samples.append(
                     OrbitalStateSample(
                         timestamp=t,
                         status=SampleStatus.ERROR,
-                        error=SGP4_ERRORS.get(error_code, f"sgp4 error {error_code}"),
+                        error=SGP4_ERRORS.get(
+                            state.error_code,
+                            f"sgp4 error {state.error_code}",
+                        ),
                     )
                 )
                 continue
 
-            lat, lon, alt = teme_to_geodetic((r[0], r[1], r[2]), jd + fr)
+            position = state.position_km
+            velocity = state.velocity_kmps
+            lat, lon, alt = teme_to_geodetic(
+                position,
+                state.julian_date_utc_as_ut1,
+            )
             samples.append(
                 OrbitalStateSample(
                     timestamp=t,
-                    position_km=Vector3(x=r[0], y=r[1], z=r[2]),
-                    velocity_kmps=Vector3(x=v[0], y=v[1], z=v[2]),
+                    position_km=Vector3(x=position[0], y=position[1], z=position[2]),
+                    velocity_kmps=Vector3(
+                        x=velocity[0],
+                        y=velocity[1],
+                        z=velocity[2],
+                    ),
                     latitude_deg=lat,
                     longitude_deg=lon,
                     altitude_km=alt,

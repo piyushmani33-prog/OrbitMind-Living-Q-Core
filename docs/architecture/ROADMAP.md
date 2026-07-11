@@ -102,6 +102,11 @@ window results precede a collapsed method/evidence disclosure. It adds no networ
 calculation persistence, live-tracking claim, or operational authority. See
 [OFFLINE_MISSION_WORKBENCH.md](../product/OFFLINE_MISSION_WORKBENCH.md).
 
+**U4.2B1 offline trajectory-replay projection:** immutable typed geodetic samples,
+endpoint-inclusive bounded sampling, deterministic references, optional observer geometry, and
+dateline-safe track segments are implemented without API, rendering, JavaScript, persistence, or
+network behavior. See [TRAJECTORY_REPLAY_PROJECTION.md](TRAJECTORY_REPLAY_PROJECTION.md).
+
 ### Further optimization (planned / deferred)
 Larger instances / additional solvers, still classical-baseline-first and bounded.
 
