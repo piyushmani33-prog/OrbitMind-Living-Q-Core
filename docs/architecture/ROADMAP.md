@@ -107,6 +107,13 @@ endpoint-inclusive bounded sampling, deterministic references, optional observer
 dateline-safe track segments are implemented without API, rendering, JavaScript, persistence, or
 network behavior. See [TRAJECTORY_REPLAY_PROJECTION.md](TRAJECTORY_REPLAY_PROJECTION.md).
 
+**U4.2B2 animated SVG trajectory replay UI:** the Mission Workbench can render a server-generated
+offline trajectory replay with schematic SVG ground track, dateline-safe polylines, playback
+controls, compact script-safe display JSON, and visible limitations. Browser JavaScript only
+selects supplied samples and updates display state; it performs no orbital, frame, geodetic, event,
+network, or persistence work. See
+[ANIMATED_TRAJECTORY_REPLAY.md](../product/ANIMATED_TRAJECTORY_REPLAY.md).
+
 ### Further optimization (planned / deferred)
 Larger instances / additional solvers, still classical-baseline-first and bounded.
 

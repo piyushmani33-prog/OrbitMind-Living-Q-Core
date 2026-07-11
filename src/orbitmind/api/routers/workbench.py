@@ -16,6 +16,13 @@ from pydantic import ValidationError as PydanticValidationError
 
 from orbitmind.api.container import AppContainer
 from orbitmind.api.deps import get_container
+from orbitmind.api.presentation.trajectory_replay import (
+    SVG_HEIGHT,
+    SVG_WIDTH,
+    ReplayDisplayProjection,
+    build_replay_display_projection,
+    escape_attr,
+)
 from orbitmind.api.routers.review import PAGE_CSS
 from orbitmind.core.errors import OrbitMindError
 from orbitmind.mission_windows.models import (
@@ -24,13 +31,20 @@ from orbitmind.mission_windows.models import (
     MissionWindowResult,
     ObserverLocation,
 )
-from orbitmind.observation_geometry.models import PinnedOrbitElementSet
+from orbitmind.observation_geometry.models import GeodeticPosition, PinnedOrbitElementSet
 from orbitmind.sample import (
     BundledOfflineCatalogEntry,
     get_bundled_offline_catalog,
     get_bundled_offline_catalog_entry,
     resolve_bundled_observation_sample,
     resolve_custom_offline_tle,
+)
+from orbitmind.trajectory_replay.models import (
+    MAX_REPLAY_SAMPLES,
+    PINNED_MODEL_STATEMENT,
+    PREDICTED_REPLAY_LIMITATION,
+    TrajectoryReplayRequest,
+    TrajectoryReplayResult,
 )
 
 router = APIRouter(tags=["workbench"])
@@ -39,6 +53,7 @@ ContainerDep = Annotated[AppContainer, Depends(get_container)]
 
 MAX_WORKBENCH_BODY_BYTES = 4_096
 WORKBENCH_COARSE_STEP_SECONDS = 60
+MAX_REPLAY_HTML_BYTES = 1_000_000
 _WORKBENCH_SOURCE_MODES = frozenset({"catalog", "custom"})
 _WORKBENCH_FORM_FIELDS = frozenset(
     {
@@ -56,6 +71,9 @@ _WORKBENCH_FORM_FIELDS = frozenset(
     }
 )
 _SAFE_WORKBENCH_LABEL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 .:_()&+-]*$")
+_UNSAFE_WORKBENCH_LABEL = re.compile(
+    r"(?i)(?:\bauthorization\s*:\s*bearer\b|\bbearer\s+[A-Za-z0-9._-]{6,}|\bcookie\s*:)"
+)
 _COMPASS_LABELS = ("N", "NE", "E", "SE", "S", "SW", "W", "NW")
 NO_WINDOW_MESSAGE = "No qualifying geometric window was found in the requested interval."
 EARTH_ORIENTATION_LIMITATION = (
@@ -162,12 +180,80 @@ WORKBENCH_CSS = (
     details[open] summary { margin-bottom: 18px; }
     .limitations { margin: 12px 0 0; padding-left: 20px; }
     .limitations li + li { margin-top: 7px; }
+    .secondary-button {
+      background: var(--panel);
+      border: 1px solid var(--accent);
+      color: var(--accent);
+    }
+    .replay-panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      display: grid;
+      gap: 18px;
+      padding: 22px;
+    }
+    .replay-svg-wrap {
+      background: linear-gradient(180deg, #eef7fb 0%, #f8fbfc 100%);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .replay-svg { display: block; height: auto; width: 100%; }
+    .graticule { stroke: #b7ccd5; stroke-width: 1; }
+    .guide-strong { stroke: #6f8994; stroke-width: 1.5; }
+    .track-line {
+      fill: none;
+      stroke: var(--accent);
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      stroke-width: 2.4;
+    }
+    .satellite-marker { fill: var(--good-ink); stroke: #ffffff; stroke-width: 3; }
+    .observer-marker { fill: var(--warn-ink); stroke: #ffffff; stroke-width: 3; }
+    .replay-controls {
+      align-items: end;
+      display: grid;
+      grid-template-columns: auto auto 1fr auto auto;
+      gap: 12px;
+    }
+    .compact-button {
+      min-height: 42px;
+      padding: 9px 13px;
+    }
+    .timeline-field { display: grid; gap: 6px; min-width: 180px; }
+    .timeline-field input { accent-color: var(--accent); }
+    .readout-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 12px;
+    }
+    .replay-error {
+      background: #fff1f0;
+      border: 1px solid #e3a29d;
+      border-radius: 8px;
+      color: #7a231d;
+      display: none;
+      padding: 12px 14px;
+    }
+    .noscript-note {
+      background: var(--panel-soft);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      color: var(--muted);
+      padding: 12px 14px;
+    }
+    .js-disabled .requires-js { opacity: 0.72; }
     @media (max-width: 700px) {
       main { width: min(100% - 20px, 1120px); padding: 20px 0 36px; }
       .hero, .card, .next-window { padding: 18px; }
       h1 { font-size: 1.72rem; }
       dl { grid-template-columns: 1fr; gap: 4px; }
       dd + dt { margin-top: 10px; }
+      .replay-panel { padding: 16px; }
+      .replay-controls { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .timeline-field { grid-column: 1 / -1; }
+      .replay-controls select { grid-column: 1 / -1; }
     }
 """
 )
@@ -291,6 +377,67 @@ async def run_mission_workbench(request: Request, container: ContainerDep) -> HT
     )
 
 
+@router.post("/workbench/replay", response_class=HTMLResponse)
+async def replay_mission_workbench(request: Request, container: ContainerDep) -> HTMLResponse:
+    """Render a display-only animated replay over server-generated trajectory samples."""
+
+    try:
+        form = await _parse_workbench_form(request)
+    except WorkbenchBodyTooLarge as exc:
+        return _workbench_error(str(exc), status_code=413)
+    except WorkbenchFormError as exc:
+        return _workbench_error(str(exc), status_code=422)
+
+    try:
+        source = _resolve_workbench_source(form, container)
+    except (OrbitMindError, PydanticValidationError, ValueError):
+        return _workbench_error(
+            "The selected offline orbital source could not be validated.",
+            status_code=422,
+        )
+
+    try:
+        replay_request = TrajectoryReplayRequest(
+            orbital_source=source.elements,
+            trajectory_reference=source.stable_identity,
+            observer=_replay_observer(form),
+            start_time=form.start_time_utc,
+            end_time=form.start_time_utc + timedelta(hours=form.duration_hours),
+            sample_interval_seconds=_replay_sample_interval_seconds(form.duration_hours),
+            maximum_samples=MAX_REPLAY_SAMPLES,
+        )
+    except (PydanticValidationError, ValueError):
+        return _workbench_error(
+            "The trajectory replay request is outside the supported scientific bounds.",
+            status_code=422,
+        )
+
+    try:
+        result = container.trajectory_replay_service.calculate(replay_request)
+        projection = build_replay_display_projection(result)
+    except (OrbitMindError, PydanticValidationError, ValueError):
+        return _workbench_error(
+            "The trajectory replay calculation could not complete safely.",
+            status_code=422,
+        )
+    except Exception:  # pragma: no cover - final bounded browser failure boundary.
+        return _workbench_error(
+            "The trajectory replay calculation could not complete safely.",
+            status_code=500,
+        )
+
+    page = _workbench_page(
+        "OrbitMind Trajectory Replay",
+        _replay_page(source=source, result=result, projection=projection),
+    )
+    if len(page.encode("utf-8")) > MAX_REPLAY_HTML_BYTES:
+        return _workbench_error(
+            "The trajectory replay response exceeds the supported display size.",
+            status_code=413,
+        )
+    return HTMLResponse(page)
+
+
 def _workbench_form(catalog: tuple[BundledOfflineCatalogEntry, ...]) -> str:
     options = "".join(
         f'<option value="{escape(entry.sample_id, quote=True)}">'
@@ -369,6 +516,8 @@ def _workbench_form(catalog: tuple[BundledOfflineCatalogEntry, ...]) -> str:
         </fieldset>
         <div class="action-row">
           <button class="button" type="submit">Calculate Mission Windows</button>
+          <button class="button secondary-button" type="submit"
+            formaction="/workbench/replay">Replay Predicted Trajectory</button>
           <span class="helper">Geometric windows only; optical visibility is not assessed.</span>
         </div>
       </form>
@@ -408,7 +557,10 @@ async def _parse_workbench_form(request: Request) -> WorkbenchForm:
         raise WorkbenchFormError("Choose exactly one offline source mode.")
 
     custom_label = custom_label_raw or None
-    if custom_label is not None and _SAFE_WORKBENCH_LABEL.fullmatch(custom_label) is None:
+    if custom_label is not None and (
+        _SAFE_WORKBENCH_LABEL.fullmatch(custom_label) is None
+        or _UNSAFE_WORKBENCH_LABEL.search(custom_label) is not None
+    ):
         raise WorkbenchFormError("The custom label contains unsupported characters.")
 
     latitude = _finite_form_float(parsed, "observer_latitude_deg")
@@ -519,6 +671,441 @@ def _resolve_workbench_source(
         stable_identity=f"custom-tle:{checksum}",
         source_mode_label="User-provided offline TLE",
     )
+
+
+def _replay_observer(form: WorkbenchForm) -> GeodeticPosition:
+    return GeodeticPosition(
+        latitude_deg=form.observer_latitude_deg,
+        longitude_deg=form.observer_longitude_deg,
+        altitude_km=form.observer_altitude_metres / 1000.0,
+    )
+
+
+def _replay_sample_interval_seconds(duration_hours: float) -> int:
+    if duration_hours <= 6.0:
+        return 15
+    if duration_hours <= 12.0:
+        return 30
+    return 60
+
+
+def _replay_page(
+    *,
+    source: ResolvedWorkbenchSource,
+    result: TrajectoryReplayResult,
+    projection: ReplayDisplayProjection,
+) -> str:
+    return f"""
+      <section class="hero result-lead">
+        <div>
+          <p class="eyebrow">Offline predicted trajectory replay</p>
+          <h1>{escape(source.display_label)}</h1>
+          <p>{escape(PREDICTED_REPLAY_LIMITATION)}</p>
+          <p>{escape(PINNED_MODEL_STATEMENT)}</p>
+        </div>
+        <div class="badges">
+          <span class="badge">Offline orbital source</span>
+          <span class="badge">Predicted trajectory</span>
+          <span class="badge warn">Not live tracking</span>
+        </div>
+      </section>
+      {_replay_svg_panel(result, projection)}
+      <section class="grid section-gap">
+        {_replay_source_summary(source, result)}
+        {_replay_accuracy_card(result)}
+      </section>
+      {_replay_method_and_evidence(source, result)}
+      <script id="trajectory-replay-data" type="application/json">{projection.payload_json}</script>
+      <script>{_replay_controller_script()}</script>
+      <p class="footer-link"><a href="/workbench">Calculate another mission window</a> ·
+      <a href="/review">Reviewer sandbox</a></p>
+    """
+
+
+def _replay_svg_panel(result: TrajectoryReplayResult, projection: ReplayDisplayProjection) -> str:
+    polylines = "\n".join(
+        f'          <polyline class="track-line" points="{escape_attr(points)}"></polyline>'
+        for points in projection.polyline_points
+    )
+    observer_label = (
+        f"Observer at {result.observer.latitude_deg:.4f} degrees latitude and "
+        f"{result.observer.longitude_deg:.4f} degrees longitude"
+        if result.observer is not None
+        else "Observer"
+    )
+    first = result.samples[0]
+    return f"""
+      <section class="replay-panel section-gap" aria-labelledby="replay-heading">
+        <div>
+          <p class="eyebrow">Predicted ground track</p>
+          <h2 id="replay-heading">Trajectory replay</h2>
+          <p class="helper">Schematic equirectangular display. Playback speed changes only the
+          visualization; scientific timestamps and samples are unchanged.</p>
+        </div>
+        <div class="replay-svg-wrap">
+          <svg class="replay-svg" viewBox="0 0 {SVG_WIDTH} {SVG_HEIGHT}" role="img"
+            aria-labelledby="trajectory-title trajectory-description">
+            <title id="trajectory-title">Predicted trajectory ground track</title>
+            <desc id="trajectory-description">Server-generated predicted trajectory samples
+            shown on a schematic latitude and longitude grid. This is not live tracking.</desc>
+            {_svg_graticule()}
+{polylines}
+            <circle id="observer-marker" class="observer-marker"
+              cx="{projection.observer_x:.3f}" cy="{projection.observer_y:.3f}" r="7">
+              <title>{escape(observer_label)}</title>
+            </circle>
+            <circle id="satellite-marker" class="satellite-marker"
+              cx="{_sample_x(projection, first.sequence):.3f}"
+              cy="{_sample_y(projection, first.sequence):.3f}" r="8">
+              <title>Selected predicted sample</title>
+            </circle>
+          </svg>
+        </div>
+        {_replay_controls(result)}
+        <p id="trajectory-replay-error" class="replay-error" role="status">Replay controls are
+        unavailable because the embedded display payload was not accepted.</p>
+        <noscript><p class="noscript-note">The trajectory and scientific summary are available,
+        but playback controls require local JavaScript.</p></noscript>
+        {_replay_readout(result)}
+      </section>
+    """
+
+
+def _svg_graticule() -> str:
+    vertical = "\n".join(
+        f'            <line class="graticule" x1="{((lon + 180) / 360) * SVG_WIDTH:.2f}" '
+        f'y1="0" x2="{((lon + 180) / 360) * SVG_WIDTH:.2f}" y2="{SVG_HEIGHT}"></line>'
+        for lon in range(-120, 181, 60)
+    )
+    horizontal = "\n".join(
+        f'            <line class="graticule" x1="0" y1="{((90 - lat) / 180) * SVG_HEIGHT:.2f}" '
+        f'x2="{SVG_WIDTH}" y2="{((90 - lat) / 180) * SVG_HEIGHT:.2f}"></line>'
+        for lat in range(-60, 61, 30)
+    )
+    return f"""
+            <rect x="0" y="0" width="{SVG_WIDTH}" height="{SVG_HEIGHT}" fill="#f8fbfc"></rect>
+            {vertical}
+            {horizontal}
+            <line class="guide-strong" x1="500" y1="0" x2="500" y2="{SVG_HEIGHT}"></line>
+            <line class="guide-strong" x1="0" y1="250" x2="{SVG_WIDTH}" y2="250"></line>
+            <line class="guide-strong" x1="0" y1="0" x2="0" y2="{SVG_HEIGHT}"></line>
+            <line class="guide-strong" x1="{SVG_WIDTH}" y1="0" x2="{SVG_WIDTH}"
+              y2="{SVG_HEIGHT}"></line>
+    """
+
+
+def _replay_controls(result: TrajectoryReplayResult) -> str:
+    last = result.sample_count - 1
+    return f"""
+        <div class="replay-controls requires-js">
+          <button id="replay-play" class="button compact-button" type="button"
+            aria-pressed="false">Play</button>
+          <button id="replay-prev" class="button secondary-button compact-button"
+            type="button">Previous</button>
+          <label class="timeline-field">Timeline
+            <input id="replay-slider" type="range" min="0" max="{last}" value="0" step="1"
+              aria-valuemin="1" aria-valuemax="{result.sample_count}" aria-valuenow="1"
+              aria-valuetext="Sample 1 of {result.sample_count}">
+          </label>
+          <button id="replay-next" class="button secondary-button compact-button"
+            type="button">Next</button>
+          <label>Visualization speed
+            <select id="replay-speed">
+              <option value="0.5">0.5x</option>
+              <option value="1" selected>1x</option>
+              <option value="2">2x</option>
+              <option value="4">4x</option>
+            </select>
+          </label>
+        </div>
+    """
+
+
+def _replay_readout(result: TrajectoryReplayResult) -> str:
+    first = result.samples[0]
+    observer_values = ""
+    if first.observer_azimuth_deg is not None:
+        if first.observer_elevation_deg is None or first.observer_slant_range_km is None:
+            raise ValueError("observer replay sample is incomplete")
+        observer_values = (
+            f"{_metric('Azimuth', _format_direction(first.observer_azimuth_deg))}"
+            f"{_metric('Elevation', f'{first.observer_elevation_deg:.2f}°')}"
+            f"{_metric('Range', f'{first.observer_slant_range_km:.2f} km')}"
+        )
+    return f"""
+        <div class="readout-grid" aria-live="polite" aria-atomic="true">
+          {_metric("Sample", f"1 of {result.sample_count}")}
+          {_metric("UTC timestamp", _format_display_utc(first.timestamp))}
+          {_metric("Geodetic latitude", f"{first.latitude_deg:.4f}°")}
+          {_metric("Canonical longitude", f"{first.longitude_deg:.4f}°")}
+          {_metric("WGS84 altitude", f"{first.altitude_km:.3f} km")}
+          {observer_values}
+        </div>
+    """
+
+
+def _replay_source_summary(
+    source: ResolvedWorkbenchSource,
+    result: TrajectoryReplayResult,
+) -> str:
+    if result.observer is None:
+        raise ValueError("trajectory replay result is missing observer values")
+    return f"""
+      <section class="card">
+        <h2>Source and interval</h2>
+        <dl>
+          <dt>Object</dt><dd>{escape(result.source_identity.object_label)}</dd>
+          <dt>Stable source identity</dt><dd><code>{escape(source.stable_identity)}</code></dd>
+          <dt>Source mode</dt><dd>{escape(source.source_mode_label)}</dd>
+          <dt>NORAD catalog ID</dt>
+          <dd>{_optional_number(result.source_identity.norad_catalog_id)}</dd>
+          <dt>Source epoch</dt><dd>{_format_utc(result.source_identity.source_epoch)}</dd>
+          <dt>Source age at replay start</dt><dd>{_format_replay_source_age(result)}</dd>
+          <dt>Replay start</dt><dd>{_format_utc(result.request_start)}</dd>
+          <dt>Replay end</dt><dd>{_format_utc(result.request_end)}</dd>
+          <dt>Selected sampling interval</dt><dd>{result.sample_interval_seconds} seconds</dd>
+          <dt>Samples</dt><dd>{result.sample_count}</dd>
+          <dt>Track segments</dt><dd>{len(result.track_segments)}</dd>
+          <dt>Observer latitude</dt><dd>{result.observer.latitude_deg:.8f}°</dd>
+          <dt>Observer longitude</dt><dd>{result.observer.longitude_deg:.8f}°</dd>
+          <dt>Observer altitude</dt><dd>{result.observer.altitude_km:.6f} km</dd>
+        </dl>
+      </section>
+    """
+
+
+def _replay_accuracy_card(result: TrajectoryReplayResult) -> str:
+    end_offset = _format_offset(abs(result.source_end_offset_seconds))
+    return f"""
+      <section class="card soft">
+        <h2>Accuracy and limitations</h2>
+        <dl>
+          <dt>Prediction offset at end</dt><dd>{end_offset}</dd>
+          <dt>Propagator</dt>
+          <dd><code>{escape(result.source_identity.propagator_identifier)}</code></dd>
+          <dt>Frame/geodetic model</dt>
+          <dd><code>{escape(result.source_identity.frame_model_identifier)}</code></dd>
+          <dt>Observer geometry</dt>
+          <dd><code>{escape(result.source_identity.observer_geometry_identifier)}</code></dd>
+          <dt>Payload size</dt><dd>Bounded compact display JSON</dd>
+        </dl>
+        <ul class="limitations">
+          <li>{escape(PREDICTED_REPLAY_LIMITATION)}</li>
+          <li>{escape(PINNED_MODEL_STATEMENT)}</li>
+          <li>Source age affects prediction usefulness.</li>
+          <li>UTC is used as a UT1 approximation; no external Earth-orientation or polar-motion
+          corrections are applied.</li>
+          <li>WGS84 ellipsoid altitude is shown; this is not a guaranteed true current state.</li>
+          <li>No universal position-error guarantee is provided.</li>
+          <li>No optical visibility, collision, maneuver, command, safety, or certification
+          authority is provided.</li>
+        </ul>
+      </section>
+    """
+
+
+def _replay_method_and_evidence(
+    source: ResolvedWorkbenchSource,
+    result: TrajectoryReplayResult,
+) -> str:
+    if result.observer is None:
+        raise ValueError("trajectory replay result is missing observer values")
+    limitations = "".join(f"<li>{escape(item)}</li>" for item in result.limitations)
+    return f"""
+      <details class="section-gap">
+        <summary>Method and evidence</summary>
+        <div class="grid">
+          <div>
+            <h3>Deterministic replay references</h3>
+            <dl>
+              <dt>Input reference</dt><dd><code>{escape(result.input_reference)}</code></dd>
+              <dt>Result reference</dt><dd><code>{escape(result.result_reference)}</code></dd>
+              <dt>Source checksum</dt>
+              <dd><code>{escape(result.source_identity.source_checksum)}</code></dd>
+              <dt>Element checksum</dt>
+              <dd><code>{escape(source.elements.element_checksum)}</code></dd>
+              <dt>Source reference</dt>
+              <dd><code>{escape(result.source_identity.trajectory_reference)}</code></dd>
+              <dt>Schema</dt><dd><code>{escape(result.schema_version)}</code></dd>
+              <dt>Engine</dt><dd><code>{escape(result.engine_version)}</code></dd>
+              <dt>Propagator</dt>
+              <dd><code>{escape(result.source_identity.propagator_identifier)}</code></dd>
+              <dt>Frame/geodetic</dt>
+              <dd><code>{escape(result.source_identity.frame_model_identifier)}</code></dd>
+              <dt>Observer geometry</dt>
+              <dd><code>{escape(result.source_identity.observer_geometry_identifier)}</code></dd>
+            </dl>
+          </div>
+          <div>
+            <h3>Exact request</h3>
+            <dl>
+              <dt>Start</dt><dd>{_format_utc(result.request_start)}</dd>
+              <dt>End</dt><dd>{_format_utc(result.request_end)}</dd>
+              <dt>Sampling interval</dt><dd>{result.sample_interval_seconds} seconds</dd>
+              <dt>Maximum sample bound</dt><dd>{result.maximum_samples}</dd>
+              <dt>Observer latitude</dt><dd>{result.observer.latitude_deg:.8f}°</dd>
+              <dt>Observer longitude</dt><dd>{result.observer.longitude_deg:.8f}°</dd>
+              <dt>Observer altitude</dt><dd>{result.observer.altitude_km:.6f} km</dd>
+            </dl>
+          </div>
+        </div>
+        <h3 class="section-gap">Full limitation set</h3>
+        <ul class="limitations">{limitations}</ul>
+      </details>
+    """
+
+
+def _replay_controller_script() -> str:
+    return """
+(function () {
+  "use strict";
+  const dataNode = document.getElementById("trajectory-replay-data");
+  const marker = document.getElementById("satellite-marker");
+  const slider = document.getElementById("replay-slider");
+  const playButton = document.getElementById("replay-play");
+  const previousButton = document.getElementById("replay-prev");
+  const nextButton = document.getElementById("replay-next");
+  const speedSelect = document.getElementById("replay-speed");
+  const errorBox = document.getElementById("trajectory-replay-error");
+  const values = Array.from(document.querySelectorAll(".readout-grid .metric-value"));
+  let payload;
+  let sampleIndex = 0;
+  let playing = false;
+  let startedAt = 0;
+  const baseMs = 30000;
+
+  function fail() {
+    playing = false;
+    playButton.disabled = true;
+    previousButton.disabled = true;
+    nextButton.disabled = true;
+    slider.disabled = true;
+    speedSelect.disabled = true;
+    errorBox.style.display = "block";
+  }
+
+  function isGoodSample(sample, index) {
+    return sample && sample.sequence === index && Number.isFinite(sample.x) &&
+      Number.isFinite(sample.y) && typeof sample.timestamp_utc === "string" &&
+      Number.isFinite(sample.latitude_deg) && Number.isFinite(sample.longitude_deg) &&
+      Number.isFinite(sample.altitude_km);
+  }
+
+  function setValue(index, value) {
+    if (values[index]) {
+      values[index].textContent = value;
+    }
+  }
+
+  function show(index) {
+    const sample = payload.samples[index];
+    if (!isGoodSample(sample, index)) {
+      fail();
+      return;
+    }
+    sampleIndex = index;
+    marker.setAttribute("cx", String(sample.x));
+    marker.setAttribute("cy", String(sample.y));
+    slider.value = String(index);
+    slider.setAttribute("aria-valuenow", String(index + 1));
+    slider.setAttribute("aria-valuetext", "Sample " + String(index + 1) +
+      " of " + String(payload.sample_count));
+    setValue(0, String(index + 1) + " of " + String(payload.sample_count));
+    setValue(1, sample.timestamp_utc.replace("T", " ").replace("Z", " UTC"));
+    setValue(2, sample.latitude_deg.toFixed(4) + "°");
+    setValue(3, sample.longitude_deg.toFixed(4) + "°");
+    setValue(4, sample.altitude_km.toFixed(3) + " km");
+    if (Object.prototype.hasOwnProperty.call(sample, "azimuth_deg")) {
+      setValue(5, sample.azimuth_deg.toFixed(2) + "°");
+      setValue(6, sample.elevation_deg.toFixed(2) + "°");
+      setValue(7, sample.range_km.toFixed(2) + " km");
+    }
+  }
+
+  function setPlaying(next) {
+    playing = next;
+    playButton.textContent = playing ? "Pause" : "Play";
+    playButton.setAttribute("aria-pressed", playing ? "true" : "false");
+    if (playing) {
+      startedAt = performance.now() - (sampleIndex / Math.max(payload.sample_count - 1, 1)) *
+        baseMs / Number(speedSelect.value);
+      requestAnimationFrame(tick);
+    }
+  }
+
+  function tick(now) {
+    if (!playing) {
+      return;
+    }
+    const speed = Number(speedSelect.value);
+    const progress = Math.min((now - startedAt) / (baseMs / speed), 1);
+    const nextIndex = Math.round(progress * (payload.sample_count - 1));
+    show(nextIndex);
+    if (progress >= 1) {
+      setPlaying(false);
+      return;
+    }
+    requestAnimationFrame(tick);
+  }
+
+  try {
+    payload = JSON.parse(dataNode.textContent);
+    if (!payload || payload.schema_version !== "trajectory-replay-display-v1" ||
+        !Array.isArray(payload.samples) || payload.samples.length !== payload.sample_count ||
+        payload.sample_count < 2) {
+      fail();
+      return;
+    }
+    for (let index = 0; index < payload.samples.length; index += 1) {
+      if (!isGoodSample(payload.samples[index], index)) {
+        fail();
+        return;
+      }
+    }
+  } catch {
+    fail();
+    return;
+  }
+
+  playButton.addEventListener("click", function () {
+    if (!playing && sampleIndex === payload.sample_count - 1) {
+      show(0);
+    }
+    setPlaying(!playing);
+  });
+  previousButton.addEventListener("click", function () {
+    setPlaying(false);
+    show(Math.max(sampleIndex - 1, 0));
+  });
+  nextButton.addEventListener("click", function () {
+    setPlaying(false);
+    show(Math.min(sampleIndex + 1, payload.sample_count - 1));
+  });
+  slider.addEventListener("input", function () {
+    setPlaying(false);
+    show(Number(slider.value));
+  });
+  speedSelect.addEventListener("change", function () {
+    if (playing) {
+      setPlaying(false);
+    }
+  });
+  if (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    setPlaying(false);
+  }
+  show(0);
+}());
+"""
+
+
+def _sample_x(projection: ReplayDisplayProjection, sequence: int) -> float:
+    first_segment = projection.polyline_points[0].split()[sequence]
+    return float(first_segment.split(",", maxsplit=1)[0])
+
+
+def _sample_y(projection: ReplayDisplayProjection, sequence: int) -> float:
+    first_segment = projection.polyline_points[0].split()[sequence]
+    return float(first_segment.split(",", maxsplit=1)[1])
 
 
 def _result_page(*, source: ResolvedWorkbenchSource, result: MissionWindowResult) -> str:
@@ -771,6 +1358,12 @@ def _format_source_age(result: MissionWindowResult) -> str:
     offset = result.prediction_start_offset_seconds
     if offset is None:
         return "Unavailable"
+    relation = "after" if offset >= 0 else "before"
+    return f"{_format_offset(abs(offset))} {relation} source epoch"
+
+
+def _format_replay_source_age(result: TrajectoryReplayResult) -> str:
+    offset = result.source_start_offset_seconds
     relation = "after" if offset >= 0 else "before"
     return f"{_format_offset(abs(offset))} {relation} source epoch"
 
