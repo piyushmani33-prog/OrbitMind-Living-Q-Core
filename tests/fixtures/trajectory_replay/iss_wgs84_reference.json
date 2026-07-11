@@ -1,0 +1,60 @@
+{
+  "fixture_id": "iss-wgs84-trajectory-replay-reference-v1",
+  "source_fixture": "data/samples/iss_zarya.tle",
+  "source_fixture_sha256": "e20e7db3f19c0ebb5c2d2a10a425fa8440b61452773f35b4ba19c47184576214",
+  "element_checksum": "e3e61a89496e20c45b1ca1a2c133c2e32b912149f3368bec7fb984bca1ba15af",
+  "norad_catalog_id": 25544,
+  "source_epoch": "2019-12-09T16:38:29.363424Z",
+  "request": {
+    "start_time": "2019-12-09T16:38:29.363424Z",
+    "end_time": "2019-12-09T17:28:29.363424Z",
+    "sample_interval_seconds": 30
+  },
+  "reference_provenance": {
+    "generated_on": "2026-07-11",
+    "propagator": "python-sgp4 2.26 / WGS72",
+    "method": "One-off independent scalar calculation using python-sgp4, independently written IAU-1982 GMST and TEME-to-PEF rotation, and a closed-form Bowring WGS84 geodetic solution. The script did not import OrbitMind.",
+    "interpretation": "This fixture checks implementation agreement for a pinned model and element set; it is not proof of absolute orbital truth or current position."
+  },
+  "samples": [
+    {
+      "timestamp": "2019-12-09T16:38:29.363424Z",
+      "latitude_deg": 49.869405075816,
+      "longitude_deg": -5.545564619107,
+      "altitude_km": 421.661146115798
+    },
+    {
+      "timestamp": "2019-12-09T16:48:29.363424Z",
+      "latitude_deg": 28.849343891506,
+      "longitude_deg": 35.210923294297,
+      "altitude_km": 420.625965492531
+    },
+    {
+      "timestamp": "2019-12-09T16:58:29.363424Z",
+      "latitude_deg": -0.778255533444,
+      "longitude_deg": 58.972333683306,
+      "altitude_km": 422.092961997923
+    },
+    {
+      "timestamp": "2019-12-09T17:27:59.363424Z",
+      "latitude_deg": -45.395187207328,
+      "longitude_deg": 177.935497281248,
+      "altitude_km": 430.990788705991
+    },
+    {
+      "timestamp": "2019-12-09T17:28:29.363424Z",
+      "latitude_deg": -44.455115250519,
+      "longitude_deg": -179.808224743333,
+      "altitude_km": 430.437224971554
+    }
+  ],
+  "dateline_pair": {
+    "left_timestamp": "2019-12-09T17:27:59.363424Z",
+    "right_timestamp": "2019-12-09T17:28:29.363424Z"
+  },
+  "tolerances": {
+    "latitude_deg": 0.000002,
+    "longitude_deg": 0.000002,
+    "altitude_km": 0.00001
+  }
+}

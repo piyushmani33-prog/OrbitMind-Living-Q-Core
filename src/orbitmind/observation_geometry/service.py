@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import cast
 
 from sgp4.api import Satrec, jday
 
@@ -27,6 +26,7 @@ from orbitmind.observation_geometry.models import (
     VisibilityRefinementStatus,
     source_identity_checksum,
 )
+from orbitmind.space.propagation import propagate_sgp4_state
 
 
 @dataclass
@@ -139,20 +139,8 @@ def _sgp4_position_km(
     satrec: Satrec,
     timestamp: datetime,
 ) -> tuple[int, tuple[float, float, float] | None]:
-    timestamp = ensure_utc(timestamp)
-    seconds = timestamp.second + timestamp.microsecond / 1_000_000.0
-    jd, fr = jday(
-        timestamp.year,
-        timestamp.month,
-        timestamp.day,
-        timestamp.hour,
-        timestamp.minute,
-        seconds,
-    )
-    error_code, position, _velocity = satrec.sgp4(jd, fr)
-    if error_code != 0:
-        return (int(error_code), None)
-    return (0, cast(tuple[float, float, float], tuple(float(component) for component in position)))
+    state = propagate_sgp4_state(satrec, timestamp)
+    return (state.error_code, state.position_km)
 
 
 def _visibility_intervals(
