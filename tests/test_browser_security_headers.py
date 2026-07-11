@@ -12,8 +12,10 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
+from starlette.responses import Response
 
-from orbitmind.api.app import CONTENT_SECURITY_POLICY
+from orbitmind.api.app import CONTENT_SECURITY_POLICY, create_app
+from orbitmind.api.container import AppContainer
 from orbitmind.api.presentation.trajectory_replay import script_safe_json
 from orbitmind.api.routers import workbench
 from orbitmind.sources.registry import SourceRegistry
@@ -260,6 +262,67 @@ def test_replay_controller_javascript_boundary(client: TestClient) -> None:
     )
     for token in forbidden_tokens:
         assert token not in script
+
+
+def test_replay_controller_guards_required_dom_before_registering_listeners(
+    client: TestClient,
+) -> None:
+    script = client.get("/assets/trajectory-replay.js").text
+    guard_start = script.index("  if (\n    !dataNode")
+    guard_end = script.index("\n  let payload;", guard_start)
+    guard = script[guard_start:guard_end]
+
+    for element in (
+        "dataNode",
+        "marker",
+        "slider",
+        "playButton",
+        "previousButton",
+        "nextButton",
+        "speedSelect",
+        "errorBox",
+    ):
+        assert f"!{element}" in guard
+    assert "return;" in guard
+    assert guard_start > script.index('document.getElementById("trajectory-replay-error")')
+    assert guard_end < script.index("function fail()")
+    for listener in (
+        'playButton.addEventListener("click"',
+        'previousButton.addEventListener("click"',
+        'nextButton.addEventListener("click"',
+        'slider.addEventListener("input"',
+        'speedSelect.addEventListener("change"',
+    ):
+        assert script.index(listener) > guard_end
+
+    replay = client.post("/workbench/replay", data=_catalog_form())
+    assert replay.status_code == 200
+    assert 'id="replay-play"' in replay.text
+    assert 'id="replay-slider"' in replay.text
+    assert 'id="replay-speed"' in replay.text
+
+
+def test_html_content_type_with_surrounding_whitespace_receives_security_headers(
+    container: AppContainer,
+) -> None:
+    app = create_app(container)
+
+    def spaced_html() -> Response:
+        return Response(
+            content="<p>spaced HTML media type</p>",
+            headers={"content-type": "  Text/HTML  ; charset=utf-8"},
+        )
+
+    app.add_api_route("/_test/spaced-html", spaced_html, methods=["GET"])
+    with TestClient(app) as test_client:
+        response = test_client.get("/_test/spaced-html")
+
+    assert response.status_code == 200
+    assert response.headers["content-security-policy"] == CONTENT_SECURITY_POLICY
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.headers["referrer-policy"] == "no-referrer"
+    assert response.headers["x-frame-options"] == "DENY"
+    assert "geolocation=()" in response.headers["permissions-policy"]
 
 
 def test_json_and_file_responses_do_not_receive_html_csp(client: TestClient) -> None:

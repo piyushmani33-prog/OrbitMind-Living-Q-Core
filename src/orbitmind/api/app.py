@@ -92,7 +92,9 @@ def create_app(container: AppContainer | None = None) -> FastAPI:
         call_next: Callable[[Request], Awaitable[Response]],
     ) -> Response:
         response = await call_next(request)
-        content_type = response.headers.get("content-type", "").split(";", maxsplit=1)[0].lower()
+        content_type = (
+            response.headers.get("content-type", "").split(";", maxsplit=1)[0].strip().lower()
+        )
         if content_type == "text/html":
             for name, value in SECURITY_HEADERS.items():
                 response.headers.setdefault(name, value)

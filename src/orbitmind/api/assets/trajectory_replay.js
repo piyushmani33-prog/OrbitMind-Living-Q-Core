@@ -10,6 +10,13 @@
   const speedSelect = document.getElementById("replay-speed");
   const errorBox = document.getElementById("trajectory-replay-error");
   const values = Array.from(document.querySelectorAll(".readout-grid .metric-value"));
+  if (
+    !dataNode || !marker || !slider || !playButton || !previousButton ||
+    !nextButton || !speedSelect || !errorBox
+  ) {
+    return;
+  }
+
   let payload;
   let sampleIndex = 0;
   let playing = false;
