@@ -189,6 +189,14 @@ class CustomOfflineTleRegistry(SourceRegistry):
 
 
 @dataclass(frozen=True)
+class ResolvedCustomOfflineTle:
+    """Validated request-local custom TLE input ready for offline calculations."""
+
+    elements: PinnedOrbitElementSet
+    registry: CustomOfflineTleRegistry
+
+
+@dataclass(frozen=True)
 class SampleRunResult:
     """Result bundle returned by the offline sample runner."""
 
@@ -401,6 +409,37 @@ def run_custom_tle_sample(
 ) -> SampleRunResult:
     """Run a deterministic local reviewer mission from one pasted offline TLE."""
 
+    resolved = resolve_custom_offline_tle(
+        satellite_label=satellite_label,
+        tle_line1=tle_line1,
+        tle_line2=tle_line2,
+    )
+    epoch_utc = resolved.elements.orbit_epoch
+    if epoch_utc is None:  # pragma: no cover - validated TLEs always carry an epoch.
+        raise RuntimeError("custom TLE epoch was not available")
+    request_payload = {
+        "satellite_id": CUSTOM_TLE_SATELLITE_ID,
+        "start_time": epoch_utc.isoformat(),
+        "end_time": (epoch_utc + timedelta(hours=1)).isoformat(),
+        "step_seconds": 120,
+    }
+    effective_settings = settings or _sample_settings()
+    return _run_offline_mission(
+        settings=effective_settings,
+        request_payload=request_payload,
+        registry=resolved.registry,
+        markdown_safety_boundary=_CUSTOM_TLE_MARKDOWN_SAFETY_BOUNDARY,
+    )
+
+
+def resolve_custom_offline_tle(
+    *,
+    satellite_label: str | None,
+    tle_line1: str,
+    tle_line2: str,
+) -> ResolvedCustomOfflineTle:
+    """Validate custom TLE text without persisting it or creating global state."""
+
     label = _normalize_custom_tle_label(satellite_label)
     line1 = _normalize_custom_tle_line(tle_line1, field_name="TLE line 1")
     line2 = _normalize_custom_tle_line(tle_line2, field_name="TLE line 2")
@@ -416,19 +455,15 @@ def run_custom_tle_sample(
         tle_line2=line2,
         epoch_utc=epoch_utc,
     )
-    request_payload = {
-        "satellite_id": CUSTOM_TLE_SATELLITE_ID,
-        "start_time": epoch_utc.isoformat(),
-        "end_time": (epoch_utc + timedelta(hours=1)).isoformat(),
-        "step_seconds": 120,
-    }
-    effective_settings = settings or _sample_settings()
-    return _run_offline_mission(
-        settings=effective_settings,
-        request_payload=request_payload,
-        registry=registry,
-        markdown_safety_boundary=_CUSTOM_TLE_MARKDOWN_SAFETY_BOUNDARY,
-    )
+    try:
+        elements = PinnedOrbitElementSet(
+            source=registry.get_source_record(CUSTOM_TLE_SATELLITE_ID),
+            tle_line1=line1,
+            tle_line2=line2,
+        )
+    except ValueError as exc:
+        raise ValueError("TLE lines must form a valid pinned orbital element set") from exc
+    return ResolvedCustomOfflineTle(elements=elements, registry=registry)
 
 
 def _run_offline_mission(

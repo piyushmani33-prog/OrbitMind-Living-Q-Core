@@ -96,6 +96,12 @@ bounded, refined Earth-observer geometric windows over the existing pinned SGP4 
 look-angle path. It adds no API, UI, persistence, live provider behavior, optical-visibility
 claim, or operational authority. See [MISSION_WINDOW_ENGINE.md](MISSION_WINDOW_ENGINE.md).
 
+**U4.2A offline Mission Workbench:** a server-rendered browser surface uses the verified
+mission-window service with the bounded offline catalog or transient custom TLE input. Useful
+window results precede a collapsed method/evidence disclosure. It adds no network access,
+calculation persistence, live-tracking claim, or operational authority. See
+[OFFLINE_MISSION_WORKBENCH.md](../product/OFFLINE_MISSION_WORKBENCH.md).
+
 ### Further optimization (planned / deferred)
 Larger instances / additional solvers, still classical-baseline-first and bounded.
 
