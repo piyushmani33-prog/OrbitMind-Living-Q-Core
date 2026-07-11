@@ -114,6 +114,13 @@ selects supplied samples and updates display state; it performs no orbital, fram
 network, or persistence work. See
 [ANIMATED_TRAJECTORY_REPLAY.md](../product/ANIMATED_TRAJECTORY_REPLAY.md).
 
+**U4.2C1 CSP and replay script isolation:** replay executable JavaScript is isolated into a
+packaged same-origin asset served by an explicit allowlisted route. HTML pages now receive a
+restrictive CSP and browser-security headers; inline CSS remains temporarily allowed through
+`style-src 'unsafe-inline'`. CSP hardening is not production readiness: authentication, CSRF,
+rate limiting, HTTPS termination, and deployment controls remain deferred. See
+[BROWSER_SECURITY_BASELINE.md](../security/BROWSER_SECURITY_BASELINE.md).
+
 ### Further optimization (planned / deferred)
 Larger instances / additional solvers, still classical-baseline-first and bounded.
 
