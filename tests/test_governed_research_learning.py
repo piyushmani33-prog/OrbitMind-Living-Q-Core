@@ -14,6 +14,13 @@ from orbitmind.core.config import Settings
 from orbitmind.core.errors import ValidationError
 from orbitmind.governance.epistemic import EpistemicStatus
 from orbitmind.research.models import (
+    MAX_RESEARCH_CLAIM_LIMITATION_CHARS,
+    MAX_RESEARCH_CLAIM_LIMITATIONS,
+    MAX_RESEARCH_METADATA_ITEMS,
+    MAX_RESEARCH_METADATA_KEY_CHARS,
+    MAX_RESEARCH_METADATA_VALUE_CHARS,
+    MAX_RESEARCH_USAGE_RESTRICTION_CHARS,
+    MAX_RESEARCH_USAGE_RESTRICTIONS,
     ClaimVerifierStatus,
     ConfidenceLabel,
     DerivedResearchClaim,
@@ -25,15 +32,19 @@ from orbitmind.research.models import (
     ResearchDocumentAvailability,
     ResearchEvidence,
     ResearchEvidenceType,
+    ResearchGap,
     ResearchGapType,
     ResearchInputStatus,
     ResearchLearningStatus,
     ResearchMetadataItem,
     ResearchRequest,
 )
+from orbitmind.research.persistence_safety import ResearchPersistenceSafetyError
+from orbitmind.research.ports import ResearchClaimVerifier
 from orbitmind.research.service import GovernedResearchLearningService
 
 NOW = datetime(2026, 7, 10, 12, 0, tzinfo=UTC)
+OWNER_ID = "research-owner-a"
 REQUEST = ResearchRequest(
     topic="offline communication planning fixture",
     question="What is the predicted next communication window?",
@@ -46,11 +57,12 @@ OBSERVER_CONTENT = "Fixture observer coordinates for the bounded example."
 
 
 class SequentialIds:
-    def __init__(self) -> None:
+    def __init__(self, prefix: str = "research-id") -> None:
+        self._prefix = prefix
         self._values = itertools.count(1)
 
     def __call__(self) -> str:
-        return f"research-id-{next(self._values):04d}"
+        return f"{self._prefix}-{next(self._values):04d}"
 
 
 class RecordingResearchRepository:
@@ -58,17 +70,25 @@ class RecordingResearchRepository:
 
     def __init__(self) -> None:
         self.cycles: list[ResearchCycleRecord] = []
-        self.evidence: dict[tuple[str, str], ResearchEvidence] = {}
+        self.evidence: dict[tuple[str, str, str], ResearchEvidence] = {}
 
-    def find_evidence(self, *, source_identifier: str, checksum: str) -> ResearchEvidence | None:
-        return self.evidence.get((source_identifier, checksum))
+    def find_evidence(
+        self, *, owner_id: str, source_identifier: str, checksum: str
+    ) -> ResearchEvidence | None:
+        return self.evidence.get((owner_id, source_identifier, checksum))
 
-    def save_cycle(self, cycle: ResearchCycleRecord) -> None:
+    def save_cycle(self, *, owner_id: str, cycle: ResearchCycleRecord) -> ResearchCycleRecord:
         for item in cycle.new_evidence:
-            self.evidence[(item.source_identifier, item.checksum)] = item
+            self.evidence[(owner_id, item.source_identifier, item.checksum)] = item
         known_ids = {item.evidence_id for item in self.evidence.values()}
         assert set(cycle.referenced_evidence_ids).issubset(known_ids)
         self.cycles.append(cycle)
+        return cycle
+
+    def get_cycle(self, *, owner_id: str, cycle_id: str) -> ResearchCycleRecord | None:
+        if owner_id != OWNER_ID:
+            return None
+        return next((cycle for cycle in self.cycles if cycle.cycle_id == cycle_id), None)
 
     @property
     def saved_cycle(self) -> ResearchCycleRecord:
@@ -85,6 +105,18 @@ class RecordingFixtureAdapter:
         self.called = True
         assert request == REQUEST
         return self.documents
+
+
+class RejectingVerifier:
+    def verify(
+        self,
+        *,
+        claim: DerivedResearchClaim,
+        evidence: tuple[ResearchEvidence, ...],
+        gaps: tuple[ResearchGap, ...],
+    ) -> DerivedResearchClaim:
+        del evidence, gaps
+        return claim.model_copy(update={"verifier_status": ClaimVerifierStatus.REJECTED})
 
 
 def _metadata(**values: str) -> tuple[ResearchMetadataItem, ...]:
@@ -165,11 +197,14 @@ def _service(
     *,
     source_adapter: RecordingFixtureAdapter | None = None,
     activation: OpenResearchActivation | None = None,
+    verifier: ResearchClaimVerifier | None = None,
 ) -> GovernedResearchLearningService:
     return GovernedResearchLearningService(
         repository=repository,
+        owner_id=OWNER_ID,
         source_adapter=source_adapter,
         activation=activation,
+        verifier=verifier,
         id_factory=SequentialIds(),
         clock=lambda: NOW,
     )
@@ -412,3 +447,167 @@ def test_document_count_is_bounded_before_any_cycle_is_saved() -> None:
     with pytest.raises(ValidationError, match="at most 16"):
         _service(repository).run_cycle(REQUEST, documents)
     assert repository.cycles == []
+
+
+def test_research_metadata_count_and_item_lengths_are_bounded() -> None:
+    too_many = tuple(
+        ResearchMetadataItem(key=f"key-{index}", value="value")
+        for index in range(MAX_RESEARCH_METADATA_ITEMS + 1)
+    )
+    with pytest.raises(PydanticValidationError):
+        NormalizedResearchDocument(
+            **{
+                **_observer_document().model_dump(),
+                "metadata": too_many,
+            }
+        )
+
+    with pytest.raises(PydanticValidationError):
+        ResearchMetadataItem(key="k" * (MAX_RESEARCH_METADATA_KEY_CHARS + 1), value="value")
+    with pytest.raises(PydanticValidationError):
+        ResearchMetadataItem(key="key", value="v" * (MAX_RESEARCH_METADATA_VALUE_CHARS + 1))
+
+
+def test_usage_restriction_count_and_string_length_are_bounded() -> None:
+    with pytest.raises(PydanticValidationError):
+        NormalizedResearchDocument(
+            source_identifier="bounded-source",
+            content="bounded fixture",
+            usage_restrictions=tuple(
+                f"restriction-{index}" for index in range(MAX_RESEARCH_USAGE_RESTRICTIONS + 1)
+            ),
+        )
+    with pytest.raises(PydanticValidationError):
+        NormalizedResearchDocument(
+            source_identifier="bounded-source",
+            content="bounded fixture",
+            usage_restrictions=("r" * (MAX_RESEARCH_USAGE_RESTRICTION_CHARS + 1),),
+        )
+
+
+def test_claim_limitations_are_required_and_bounded() -> None:
+    base = {
+        "claim_id": "bounded-claim",
+        "claim_type": ResearchClaimType.COMMUNICATION_WINDOW,
+        "statement": "A bounded hypothesis.",
+        "epistemic_status": EpistemicStatus.HYPOTHESIS,
+        "confidence_label": ConfidenceLabel.INDETERMINATE,
+        "evidence_ids": (),
+        "created_at": NOW,
+    }
+    with pytest.raises(PydanticValidationError):
+        DerivedResearchClaim(**base, limitations=())
+    with pytest.raises(PydanticValidationError):
+        DerivedResearchClaim(
+            **base,
+            limitations=tuple(
+                f"limitation-{index}" for index in range(MAX_RESEARCH_CLAIM_LIMITATIONS + 1)
+            ),
+        )
+    with pytest.raises(PydanticValidationError):
+        DerivedResearchClaim(
+            **base,
+            limitations=("x" * (MAX_RESEARCH_CLAIM_LIMITATION_CHARS + 1),),
+        )
+
+
+@pytest.mark.parametrize(
+    "sensitive_value",
+    (
+        r"C:\private\research.txt",
+        "D:/secrets/token.txt",
+        r"\\server\share\secret.txt",
+        "/tmp/provider-response.json",
+        "file:///home/user/private.txt",
+        "https://user:password@example.com/data",
+        "postgresql://user:password@localhost/db",
+        "Authorization: Bearer abc123",
+        "Bearer abc123",
+        "Cookie: session=abc123",
+        "-----BEGIN PRIVATE KEY-----",
+        "ghp_abcdefghijklmnopqrstuvwxyz1234567890",
+        "github_pat_abcdefghijklmnopqrstuvwxyz_1234567890",
+        "sk-abcdefghijklmnopqrstuvwxyz123456",
+        "AKIAABCDEFGHIJKLMNOP",
+        "AIzaabcdefghijklmnopqrstuvwxyz123456",
+        "xoxb-1234567890-abcdefghij",
+        "password=hunter2",
+        "api_key=fixture-key",
+        "access_token=fixture-token",
+        "client_secret=fixture-secret",
+    ),
+)
+def test_sensitive_structured_values_are_rejected_without_echo(
+    sensitive_value: str,
+) -> None:
+    with pytest.raises(ResearchPersistenceSafetyError) as exc_info:
+        ResearchMetadataItem(key="note", value=sensitive_value)
+
+    assert exc_info.value.code == "research_persistence_policy"
+    assert sensitive_value not in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    "sensitive_key",
+    (
+        "password",
+        "PASSWD",
+        "secret",
+        "api_key",
+        "API-KEY",
+        "access token",
+        "refresh_token",
+        "Authorization",
+        "cookie",
+        "private-key",
+        "client_secret",
+        "credential",
+        "credentials",
+    ),
+)
+def test_sensitive_metadata_keys_are_rejected_without_echo(sensitive_key: str) -> None:
+    with pytest.raises(ResearchPersistenceSafetyError) as exc_info:
+        ResearchMetadataItem(key=sensitive_key, value="bounded value")
+
+    assert sensitive_key not in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    "safe_value",
+    (
+        "https://celestrak.org/NORAD/elements/gp.php?CATNR=25544",
+        "source:celestrak:25544",
+        "research-cycle:abc123",
+        "urn:orbitmind:evidence:123",
+        "token budget for deterministic processing",
+        "secret-sharing protocol reference",
+        "credential model review",
+        "private orbit determination method",
+    ),
+)
+def test_safe_structured_research_values_remain_accepted(safe_value: str) -> None:
+    assert ResearchMetadataItem(key="note", value=safe_value).value == safe_value
+
+
+def test_service_path_rejects_bypassed_sensitive_document_before_save() -> None:
+    repository = RecordingResearchRepository()
+    sensitive_path = r"C:\private\research-source.txt"
+    unsafe_document = _observer_document().model_copy(update={"source_identifier": sensitive_path})
+
+    with pytest.raises(ResearchPersistenceSafetyError) as exc_info:
+        _service(repository).run_cycle(REQUEST, (_trajectory_document(), unsafe_document))
+
+    assert sensitive_path not in str(exc_info.value)
+    assert repository.cycles == []
+
+
+def test_rejected_verifier_status_maps_to_insufficient_evidence_learning() -> None:
+    repository = RecordingResearchRepository()
+    _service(repository, verifier=RejectingVerifier()).run_cycle(
+        REQUEST,
+        (_trajectory_document(), _observer_document()),
+    )
+
+    assert repository.saved_cycle.claim.verifier_status is ClaimVerifierStatus.REJECTED
+    assert repository.saved_cycle.learning.status is ResearchLearningStatus.INSUFFICIENT_EVIDENCE
+    assert repository.saved_cycle.status is ResearchLearningStatus.INSUFFICIENT_EVIDENCE

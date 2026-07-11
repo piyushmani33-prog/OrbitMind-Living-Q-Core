@@ -18,7 +18,7 @@ For who may run this checklist and how feedback must be reported, see
 ## Preconditions
 - Start from a clean git working tree.
 - Use the existing `.venv`.
-- Expected Alembic head: `m8b9c0d1e2f3`.
+- Expected Alembic head: `n9c0d1e2f3g4`.
 - Do not paste secrets, database URLs with real credentials, tokens, or private
   paths into logs or reports.
 - The default smoke is local-only and offline.
@@ -185,7 +185,7 @@ Stop the smoke flow and investigate if any of these occur:
 - Tracked files are dirty before smoke.
 - Tracked files are dirty after smoke, unless the only changes are expected
   ignored local DB/log/artifact files.
-- Alembic head is not `m8b9c0d1e2f3`.
+- Alembic head is not `n9c0d1e2f3g4`.
 - Alembic upgrade fails.
 - `GET /health` fails.
 - Health reports the database is not connected.

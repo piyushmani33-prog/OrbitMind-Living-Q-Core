@@ -2,9 +2,10 @@
 
 ## Purpose
 
-U4.0A establishes a small offline foundation for traceable research handling. It does
-not implement Research Autopilot, autonomous agents, internet research, model training,
-or durable research persistence.
+U4.0A establishes a small offline foundation for traceable research handling. U4.0B
+adds durable, owner-scoped storage for its bounded structured records. Neither slice
+implements Research Autopilot, autonomous agents, internet research, model training,
+or a raw evidence-content vault.
 
 The governing rule is:
 
@@ -13,8 +14,9 @@ The governing rule is:
 > result, while the detailed record remains available through an audited repository
 > boundary.
 
-The implementation lives in `src/orbitmind/research/`. It has no FastAPI route and is
-not wired into `AppContainer` in this slice.
+The domain and application service live in `src/orbitmind/research/`. The U4.0B rows
+and repository adapter live in `src/orbitmind/persistence/`. They have no FastAPI route
+and are not wired into `AppContainer` in this slice.
 
 ## Input Lifecycle
 
@@ -57,9 +59,9 @@ Evidence and claims are different records:
 - Conflicting accepted evidence remains present as separate records. It is not silently
   overwritten or reduced to the first value.
 
-This foundation complements, rather than replaces, the durable scientific-memory
-claims/evidence model. A later persistence design must define how research-cycle records
-link to version-pinned memory citations without duplicating or weakening them.
+This foundation complements, rather than replaces, the scientific-memory claims and
+evidence model. A later integration design must define how research-cycle records link
+to version-pinned memory citations without duplicating or weakening them.
 
 ## Research Gaps
 
@@ -74,8 +76,8 @@ blocks the bounded claim requirements.
 
 ## Structured Learning
 
-Learning in U4.0A means writing a structured `ResearchLearningRecord` through a typed
-repository port. It records:
+Learning means writing a structured `ResearchLearningRecord` through a typed repository
+port. It records:
 
 - supporting and contradicted evidence IDs;
 - resulting claim IDs;
@@ -83,11 +85,50 @@ repository port. It records:
 - topic, cycle identity, timestamp, and status.
 
 It does not modify model weights, source policy, scientific rules, permissions, runtime
-configuration, or production code. There is no production repository implementation in
-this slice. The only repository adapter is test-local and therefore not durable memory.
+configuration, or production code. U4.0B supplies a SQLAlchemy repository for durable
+structured memory; it does not make the resulting interpretation authoritative.
 
-Durable research memory requires a separately reviewed persistence design and migration.
-Until then, OrbitMind must not claim permanent research learning.
+## Durable Structured Memory
+
+U4.0B persists one complete `ResearchCycleRecord` graph in a single database
+transaction. The cycle, inputs, accepted evidence metadata, gaps, claim, learning
+record, and their ordered associations either all commit or all roll back. Lower-level
+repository helpers flush but never commit independently. A failure after partial
+flushes therefore leaves no durable partial cycle.
+
+Every row and association is owner-scoped. Composite foreign keys include `owner_id`,
+and reads require both owner and record identity. Evidence deduplication uses exactly:
+
+`owner_id + source_identifier + content checksum`
+
+The same identity for the same owner reuses one durable evidence row through a
+cycle-to-evidence association. Changed content from the same source, the same content
+from a different source, and all evidence belonging to different owners remain
+separate. Conflicting evidence is preserved as distinct evidence and linked to the
+learning record; it is never overwritten by a later value.
+
+The following survive process restart:
+
+- cycle lifecycle, opaque request/result references, and status;
+- input handling outcomes and duplicate-evidence references;
+- bounded evidence metadata, checksums, provenance references, and usage restrictions;
+- gaps, claims, verifier outcomes, limitations, and structured learning links.
+
+This is durable structured research memory, not a raw evidence vault. The database has
+no column for `NormalizedResearchDocument.content` or raw provider bodies. A shared
+domain policy rejects high-confidence credentials, secret material, credential-bearing
+URLs, and absolute filesystem paths from every persisted structured text channel; the
+repository repeats the complete aggregate audit before opening its transaction. Original
+source bytes and text therefore remain unavailable after the transient input is gone. A
+checksum can authenticate a recovered copy, but cannot reconstruct missing source
+content. Provenance authentication likewise does not imply that OrbitMind retained the
+source itself or can replay it without an authorized recovered copy. A future evidence
+vault requires separate retention, encryption, access-control, deletion, and rights
+review.
+
+Durability does not activate research. `ORBITMIND_OPEN_RESEARCH_ENABLED` remains false
+by default and inert; there is still no scheduler, source adapter wiring, agent, LLM,
+or self-modification behavior.
 
 ## User Projection
 
@@ -144,7 +185,9 @@ Retention is policy, not indefinite storage. A durable implementation must defin
 - audit records for retention and deletion outcomes;
 - treatment of evidence still referenced by claims or learning records.
 
-U4.0A implements none of these storage operations because it has no durable repository.
+U4.0B stores retention classifications but does not implement retention execution,
+deletion, legal hold, or raw-content storage. Those operations require a separately
+reviewed policy and implementation.
 
 ## Restricted Self-Modification
 
@@ -177,7 +220,7 @@ guess.
 
 ## Deferred Work
 
-The following remain deferred: production persistence and migration, API routes,
-authorization, source adapters, network research, scheduler, multi-agent discussion,
-LLM claim generation, model training, automated code changes, Workbench integration,
-live providers, deployment, and quantum-assisted research.
+The following remain deferred: raw evidence vault, retention/deletion operations, API
+routes, authentication and authorization integration, source adapters, network research,
+scheduler, multi-agent discussion, LLM claim generation, model training, automated code
+changes, Workbench integration, live providers, deployment, and quantum-assisted research.

@@ -28,7 +28,7 @@ provider data, or additional sample missions.
 
 - Project dependencies are installed in the local `.venv`.
 - The working tree is clean or contains only the reviewed handoff changes.
-- Alembic head is expected to be `m8b9c0d1e2f3`.
+- Alembic head is expected to be `n9c0d1e2f3g4`.
 - No secrets, DB URLs, credentials, or stack traces should be pasted into public
   feedback.
 

@@ -211,6 +211,7 @@ class GovernedResearchLearningService:
         self,
         *,
         repository: ResearchMemoryRepository,
+        owner_id: str,
         claim_generator: ResearchClaimGenerator | None = None,
         verifier: ResearchClaimVerifier | None = None,
         result_projector: UserResearchResultProjector | None = None,
@@ -219,7 +220,12 @@ class GovernedResearchLearningService:
         id_factory: IdFactory = new_id,
         clock: Clock = utcnow,
     ) -> None:
+        if not owner_id or owner_id.strip() != owner_id or len(owner_id) > 120:
+            raise ValidationError(
+                "owner_id must be non-empty, unpadded, and at most 120 characters"
+            )
         self._repository = repository
+        self._owner_id = owner_id
         self._claim_generator = claim_generator or DeterministicFixtureClaimGenerator()
         self._verifier = verifier or DeterministicResearchClaimVerifier()
         self._result_projector = result_projector or ConciseUserResearchResultProjector()
@@ -300,7 +306,11 @@ class GovernedResearchLearningService:
         cycle = ResearchCycleRecord(
             cycle_id=cycle_id,
             request_checksum=request_checksum,
+            request_reference=f"research-request:{request_checksum}",
             created_at=now,
+            completed_at=now,
+            status=learning.status,
+            result_reference=f"research-cycle:{cycle_id}",
             inputs=tuple(inputs),
             new_evidence=tuple(new_evidence),
             referenced_evidence_ids=claim.evidence_ids,
@@ -308,12 +318,12 @@ class GovernedResearchLearningService:
             claim=claim,
             learning=learning,
         )
-        self._repository.save_cycle(cycle)
+        persisted_cycle = self._repository.save_cycle(owner_id=self._owner_id, cycle=cycle)
         return self._result_projector.project(
-            cycle_id=cycle_id,
+            cycle_id=persisted_cycle.cycle_id,
             request=request,
-            claim=claim,
-            gaps=ordered_gaps,
+            claim=persisted_cycle.claim,
+            gaps=persisted_cycle.gaps,
         )
 
     def run_source_cycle(self, request: ResearchRequest) -> UserResearchResult:
@@ -416,6 +426,7 @@ class GovernedResearchLearningService:
         existing = accepted_evidence.get(evidence_identity)
         if existing is None:
             existing = self._repository.find_evidence(
+                owner_id=self._owner_id,
                 source_identifier=document.source_identifier,
                 checksum=actual_checksum,
             )
@@ -427,11 +438,7 @@ class GovernedResearchLearningService:
                     now,
                     actual_checksum,
                     ResearchInputStatus.DUPLICATE,
-                    extra_metadata=(
-                        ResearchMetadataItem(
-                            key="duplicate_of_evidence_id", value=existing.evidence_id
-                        ),
-                    ),
+                    duplicate_evidence_id=existing.evidence_id,
                 )
             )
             accepted_evidence.setdefault(evidence_identity, existing)
@@ -509,7 +516,7 @@ class GovernedResearchLearningService:
         checksum: str | None,
         status: ResearchInputStatus,
         *,
-        extra_metadata: tuple[ResearchMetadataItem, ...] = (),
+        duplicate_evidence_id: str | None = None,
     ) -> ResearchInput:
         return ResearchInput(
             input_id=input_id,
@@ -523,7 +530,8 @@ class GovernedResearchLearningService:
             retention_class=document.retention_class,
             handling_status=status,
             mission_id=document.mission_id,
-            metadata=_ordered_metadata((*document.metadata, *extra_metadata)),
+            duplicate_evidence_id=duplicate_evidence_id,
+            metadata=_ordered_metadata(document.metadata),
         )
 
     def _gap(
