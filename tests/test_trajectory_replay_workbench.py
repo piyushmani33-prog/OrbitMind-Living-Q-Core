@@ -6,6 +6,7 @@ import html
 import json
 import re
 from collections.abc import Mapping
+from importlib import resources
 from itertools import pairwise
 from pathlib import Path
 from typing import Any
@@ -60,7 +61,7 @@ def _custom_form(**updates: str) -> dict[str, str]:
 
 def _payload(body: str) -> dict[str, Any]:
     match = re.search(
-        r'<script id="trajectory-replay-data" type="application/json">(.*?)</script>',
+        r'<template id="trajectory-replay-data">(.*?)</template>',
         body,
         re.S,
     )
@@ -68,10 +69,10 @@ def _payload(body: str) -> dict[str, Any]:
     return json.loads(html.unescape(match.group(1)))
 
 
-def _controller_script(body: str) -> str:
-    scripts = re.findall(r"<script(?: [^>]*)?>(.*?)</script>", body, re.S)
-    assert len(scripts) == 2
-    return scripts[1]
+def _controller_script(client: TestClient) -> str:
+    response = client.get("/assets/trajectory-replay.js")
+    assert response.status_code == 200
+    return response.text
 
 
 def _row_counts(container: AppContainer) -> dict[str, int]:
@@ -108,7 +109,64 @@ def test_replay_is_server_rendered_html_and_no_json_api_is_added(client: TestCli
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/html")
+    assert response.headers["content-security-policy"] == (
+        "default-src 'none'; "
+        "script-src 'self'; "
+        "style-src 'unsafe-inline'; "
+        "img-src 'self' data:; "
+        "font-src 'none'; "
+        "connect-src 'none'; "
+        "object-src 'none'; "
+        "base-uri 'none'; "
+        "frame-ancestors 'none'; "
+        "form-action 'self'; "
+        "worker-src 'none'; "
+        "media-src 'none'; "
+        "manifest-src 'none'"
+    )
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.headers["x-frame-options"] == "DENY"
+    assert response.headers["referrer-policy"] == "no-referrer"
+    assert "geolocation=()" in response.headers["permissions-policy"]
     assert client.get("/workbench/replay").status_code == 405
+
+
+def test_replay_controller_asset_is_explicit_same_origin_and_packaged(
+    client: TestClient,
+) -> None:
+    asset = client.get("/assets/trajectory-replay.js")
+    missing = client.get("/assets/unknown.js")
+    packaged = resources.files("orbitmind.api.assets").joinpath("trajectory_replay.js")
+
+    assert asset.status_code == 200
+    assert asset.headers["content-type"] == "application/javascript; charset=utf-8"
+    assert asset.headers["x-content-type-options"] == "nosniff"
+    assert "content-security-policy" not in asset.headers
+    assert "sourceMappingURL" not in asset.text
+    assert "fetch" not in asset.text
+    assert "XMLHttpRequest" not in asset.text
+    assert "WebSocket" not in asset.text
+    assert missing.status_code == 404
+    assert packaged.is_file()
+    assert packaged.read_text(encoding="utf-8") == asset.text
+
+
+def test_replay_controller_asset_missing_fails_without_path_or_traceback(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def missing_package(_package: str) -> object:
+        raise FileNotFoundError("C:/private/assets/trajectory_replay.js")
+
+    monkeypatch.setattr(workbench.resources, "files", missing_package)
+
+    response = client.get("/assets/trajectory-replay.js")
+
+    assert response.status_code == 500
+    assert response.text == "Replay controller asset unavailable."
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert "private" not in response.text
+    assert "Traceback" not in response.text
 
 
 def test_valid_offline_catalog_replay_renders_svg_payload_controls_and_evidence(
@@ -144,7 +202,11 @@ def test_valid_offline_catalog_replay_renders_svg_payload_controls_and_evidence(
     assert "Input reference" in body
     assert "Result reference" in body
     assert "playback controls require local JavaScript" in body.replace("\n", " ")
-    assert "prefers-reduced-motion" in body
+    assert "prefers-reduced-motion" in _controller_script(client)
+    assert '<template id="trajectory-replay-data">' in body
+    assert '<script src="/assets/trajectory-replay.js" defer></script>' in body
+    assert "<script>" not in body
+    assert 'type="application/json"' not in body
     assert payload["schema_version"] == "trajectory-replay-display-v1"
     assert payload["sample_interval_seconds"] == 15
     assert payload["sample_count"] == len(payload["samples"])
@@ -340,7 +402,7 @@ def test_replay_html_and_controller_do_not_expose_forbidden_browser_behavior(
 
     assert response.status_code == 200
     body = response.text
-    script = _controller_script(body)
+    script = _controller_script(client)
     forbidden_script_tokens = (
         "eval",
         "new Function",

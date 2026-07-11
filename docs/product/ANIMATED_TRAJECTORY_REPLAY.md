@@ -37,9 +37,11 @@ The service remains the scientific authority for:
 - observer azimuth, elevation, and slant range; and
 - dateline-safe track segmentation.
 
-JavaScript does not propagate orbits, calculate time systems, transform coordinates, normalize
-longitude, interpolate scientific values, or infer visibility. It only selects an existing sample,
-moves the marker to supplied SVG coordinates, and updates readouts from that same sample.
+The same-origin replay controller is served only from `/assets/trajectory-replay.js`, an explicit
+allowlisted packaged asset route. JavaScript does not propagate orbits, calculate time systems,
+transform coordinates, normalize longitude, interpolate scientific values, or infer visibility. It
+only selects an existing sample, moves the marker to supplied SVG coordinates, and updates readouts
+from that same sample.
 
 ## Sampling interval policy
 
@@ -101,9 +103,9 @@ Source and interval summary includes object identity, safe source identity, sour
 age/offset at replay start, replay start/end, selected sampling interval, sample count, segment
 count, observer coordinates, and model identifiers.
 
-## Embedded JSON safety
+## Embedded JSON and script isolation
 
-The page embeds one compact display-only JSON payload in a non-executable script block. The payload
+The page embeds one compact display-only JSON payload in an inert `<template>` element. The payload
 is versioned and includes only display data needed by the controller:
 
 - ordered sample sequence numbers;
@@ -120,10 +122,24 @@ is versioned and includes only display data needed by the controller:
 It does not include raw TLE lines, raw provider content, filesystem paths, environment values,
 internal exceptions, database objects, SQLAlchemy models, secrets, or unused Cartesian state.
 
-The JSON is serialized compactly and escaped for script-block safety, including `<`, `>`, `&`,
-U+2028, and U+2029. A value containing `</script>` cannot terminate the data block. The controller
-uses `JSON.parse` over `textContent`; it does not use `eval`, `new Function`, `document.write`, or
-dynamic `innerHTML`.
+The JSON is serialized compactly and escaped for HTML/script-block safety, including `<`, `>`, `&`,
+U+2028, and U+2029. A value containing `</script>` cannot terminate the data container. The
+controller uses `JSON.parse` over `textContent`; it does not use `eval`, `new Function`,
+`document.write`, or dynamic `innerHTML`.
+
+Executable replay JavaScript is not inline. Browser pages receive a restrictive Content Security
+Policy with `script-src 'self'`, `connect-src 'none'`, `object-src 'none'`, `base-uri 'none'`,
+`frame-ancestors 'none'`, and `form-action 'self'`. Existing server-rendered inline CSS remains
+allowed while the project still uses page-local styles.
+
+The replay controller route:
+
+- returns only the exact packaged asset;
+- has no user-controlled path parameter;
+- exposes no directory listing or filesystem path;
+- returns `application/javascript; charset=utf-8`;
+- sets `X-Content-Type-Options: nosniff`; and
+- fails with a fixed response if the packaged asset is unavailable.
 
 ## Accessibility
 

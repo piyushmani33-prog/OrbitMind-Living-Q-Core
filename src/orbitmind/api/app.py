@@ -8,10 +8,11 @@ exception handlers. ``app`` (module-level) is the ASGI target for uvicorn:
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from starlette.responses import Response
 
 from orbitmind import __version__
 from orbitmind.api.container import AppContainer
@@ -40,6 +41,31 @@ API_DESCRIPTION = (
     "propagation from bundled sample TLEs (NOT live data), with verification, "
     "provenance, persistence, and visual artifacts."
 )
+CONTENT_SECURITY_POLICY = (
+    "default-src 'none'; "
+    "script-src 'self'; "
+    "style-src 'unsafe-inline'; "
+    "img-src 'self' data:; "
+    "font-src 'none'; "
+    "connect-src 'none'; "
+    "object-src 'none'; "
+    "base-uri 'none'; "
+    "frame-ancestors 'none'; "
+    "form-action 'self'; "
+    "worker-src 'none'; "
+    "media-src 'none'; "
+    "manifest-src 'none'"
+)
+SECURITY_HEADERS = {
+    "Content-Security-Policy": CONTENT_SECURITY_POLICY,
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "no-referrer",
+    "Permissions-Policy": (
+        "geolocation=(), microphone=(), camera=(), payment=(), usb=(), "
+        "magnetometer=(), gyroscope=(), accelerometer=()"
+    ),
+}
 
 
 def create_app(container: AppContainer | None = None) -> FastAPI:
@@ -59,6 +85,21 @@ def create_app(container: AppContainer | None = None) -> FastAPI:
         description=API_DESCRIPTION,
         lifespan=lifespan,
     )
+
+    @app.middleware("http")
+    async def add_browser_security_headers(
+        request: Request,
+        call_next: Callable[[Request], Awaitable[Response]],
+    ) -> Response:
+        response = await call_next(request)
+        content_type = (
+            response.headers.get("content-type", "").split(";", maxsplit=1)[0].strip().lower()
+        )
+        if content_type == "text/html":
+            for name, value in SECURITY_HEADERS.items():
+                response.headers.setdefault(name, value)
+        return response
+
     register_exception_handlers(app)
     app.include_router(system_router)
     app.include_router(v1_system_router)

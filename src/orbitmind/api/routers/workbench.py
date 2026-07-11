@@ -7,11 +7,12 @@ import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from html import escape
+from importlib import resources
 from typing import Annotated
 from urllib.parse import parse_qs
 
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from pydantic import ValidationError as PydanticValidationError
 
 from orbitmind.api.container import AppContainer
@@ -54,6 +55,7 @@ ContainerDep = Annotated[AppContainer, Depends(get_container)]
 MAX_WORKBENCH_BODY_BYTES = 4_096
 WORKBENCH_COARSE_STEP_SECONDS = 60
 MAX_REPLAY_HTML_BYTES = 1_000_000
+REPLAY_CONTROLLER_ASSET_PATH = "/assets/trajectory-replay.js"
 _WORKBENCH_SOURCE_MODES = frozenset({"catalog", "custom"})
 _WORKBENCH_FORM_FIELDS = frozenset(
     {
@@ -292,6 +294,30 @@ class WorkbenchFormError(ValueError):
 
 class WorkbenchBodyTooLarge(WorkbenchFormError):
     """Bounded-body failure before form parsing."""
+
+
+@router.get("/assets/trajectory-replay.js", include_in_schema=False)
+def trajectory_replay_controller_asset() -> Response:
+    """Serve the one reviewed replay controller asset from package resources."""
+
+    try:
+        script = (
+            resources.files("orbitmind.api.assets")
+            .joinpath("trajectory_replay.js")
+            .read_text(encoding="utf-8")
+        )
+    except (FileNotFoundError, ModuleNotFoundError, OSError):
+        return Response(
+            "Replay controller asset unavailable.",
+            status_code=500,
+            media_type="text/plain; charset=utf-8",
+            headers={"X-Content-Type-Options": "nosniff"},
+        )
+    return Response(
+        script,
+        media_type="application/javascript; charset=utf-8",
+        headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"},
+    )
 
 
 @router.get("/workbench", response_class=HTMLResponse)
@@ -715,8 +741,8 @@ def _replay_page(
         {_replay_accuracy_card(result)}
       </section>
       {_replay_method_and_evidence(source, result)}
-      <script id="trajectory-replay-data" type="application/json">{projection.payload_json}</script>
-      <script>{_replay_controller_script()}</script>
+      <template id="trajectory-replay-data">{projection.payload_json}</template>
+      <script src="{REPLAY_CONTROLLER_ASSET_PATH}" defer></script>
       <p class="footer-link"><a href="/workbench">Calculate another mission window</a> ·
       <a href="/review">Reviewer sandbox</a></p>
     """
@@ -953,149 +979,6 @@ def _replay_method_and_evidence(
         <ul class="limitations">{limitations}</ul>
       </details>
     """
-
-
-def _replay_controller_script() -> str:
-    return """
-(function () {
-  "use strict";
-  const dataNode = document.getElementById("trajectory-replay-data");
-  const marker = document.getElementById("satellite-marker");
-  const slider = document.getElementById("replay-slider");
-  const playButton = document.getElementById("replay-play");
-  const previousButton = document.getElementById("replay-prev");
-  const nextButton = document.getElementById("replay-next");
-  const speedSelect = document.getElementById("replay-speed");
-  const errorBox = document.getElementById("trajectory-replay-error");
-  const values = Array.from(document.querySelectorAll(".readout-grid .metric-value"));
-  let payload;
-  let sampleIndex = 0;
-  let playing = false;
-  let startedAt = 0;
-  const baseMs = 30000;
-
-  function fail() {
-    playing = false;
-    playButton.disabled = true;
-    previousButton.disabled = true;
-    nextButton.disabled = true;
-    slider.disabled = true;
-    speedSelect.disabled = true;
-    errorBox.style.display = "block";
-  }
-
-  function isGoodSample(sample, index) {
-    return sample && sample.sequence === index && Number.isFinite(sample.x) &&
-      Number.isFinite(sample.y) && typeof sample.timestamp_utc === "string" &&
-      Number.isFinite(sample.latitude_deg) && Number.isFinite(sample.longitude_deg) &&
-      Number.isFinite(sample.altitude_km);
-  }
-
-  function setValue(index, value) {
-    if (values[index]) {
-      values[index].textContent = value;
-    }
-  }
-
-  function show(index) {
-    const sample = payload.samples[index];
-    if (!isGoodSample(sample, index)) {
-      fail();
-      return;
-    }
-    sampleIndex = index;
-    marker.setAttribute("cx", String(sample.x));
-    marker.setAttribute("cy", String(sample.y));
-    slider.value = String(index);
-    slider.setAttribute("aria-valuenow", String(index + 1));
-    slider.setAttribute("aria-valuetext", "Sample " + String(index + 1) +
-      " of " + String(payload.sample_count));
-    setValue(0, String(index + 1) + " of " + String(payload.sample_count));
-    setValue(1, sample.timestamp_utc.replace("T", " ").replace("Z", " UTC"));
-    setValue(2, sample.latitude_deg.toFixed(4) + "°");
-    setValue(3, sample.longitude_deg.toFixed(4) + "°");
-    setValue(4, sample.altitude_km.toFixed(3) + " km");
-    if (Object.prototype.hasOwnProperty.call(sample, "azimuth_deg")) {
-      setValue(5, sample.azimuth_deg.toFixed(2) + "°");
-      setValue(6, sample.elevation_deg.toFixed(2) + "°");
-      setValue(7, sample.range_km.toFixed(2) + " km");
-    }
-  }
-
-  function setPlaying(next) {
-    playing = next;
-    playButton.textContent = playing ? "Pause" : "Play";
-    playButton.setAttribute("aria-pressed", playing ? "true" : "false");
-    if (playing) {
-      startedAt = performance.now() - (sampleIndex / Math.max(payload.sample_count - 1, 1)) *
-        baseMs / Number(speedSelect.value);
-      requestAnimationFrame(tick);
-    }
-  }
-
-  function tick(now) {
-    if (!playing) {
-      return;
-    }
-    const speed = Number(speedSelect.value);
-    const progress = Math.min((now - startedAt) / (baseMs / speed), 1);
-    const nextIndex = Math.round(progress * (payload.sample_count - 1));
-    show(nextIndex);
-    if (progress >= 1) {
-      setPlaying(false);
-      return;
-    }
-    requestAnimationFrame(tick);
-  }
-
-  try {
-    payload = JSON.parse(dataNode.textContent);
-    if (!payload || payload.schema_version !== "trajectory-replay-display-v1" ||
-        !Array.isArray(payload.samples) || payload.samples.length !== payload.sample_count ||
-        payload.sample_count < 2) {
-      fail();
-      return;
-    }
-    for (let index = 0; index < payload.samples.length; index += 1) {
-      if (!isGoodSample(payload.samples[index], index)) {
-        fail();
-        return;
-      }
-    }
-  } catch {
-    fail();
-    return;
-  }
-
-  playButton.addEventListener("click", function () {
-    if (!playing && sampleIndex === payload.sample_count - 1) {
-      show(0);
-    }
-    setPlaying(!playing);
-  });
-  previousButton.addEventListener("click", function () {
-    setPlaying(false);
-    show(Math.max(sampleIndex - 1, 0));
-  });
-  nextButton.addEventListener("click", function () {
-    setPlaying(false);
-    show(Math.min(sampleIndex + 1, payload.sample_count - 1));
-  });
-  slider.addEventListener("input", function () {
-    setPlaying(false);
-    show(Number(slider.value));
-  });
-  speedSelect.addEventListener("change", function () {
-    if (playing) {
-      setPlaying(false);
-    }
-  });
-  if (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-    setPlaying(false);
-  }
-  show(0);
-}());
-"""
 
 
 def _sample_x(projection: ReplayDisplayProjection, sequence: int) -> float:
