@@ -26,6 +26,7 @@ created merely for appearance.
 | `knowledge` | **(doc-only, Phase 3)** | concepts/claims/evidence graph | — |
 | `memory` | **(doc-only)** | mission/scientific/procedural memory | — |
 | `simulation` | **(doc-only)** | safe scientific/orbital simulation | — |
+| `mission_windows` | U4.1A offline engine | bounded deterministic Earth-observer geometric windows over pinned orbital elements; no API, persistence, network, optical visibility, or operational claims | observation_geometry, space, governance, core |
 | `research` | U4.0B durable structured memory | typed inputs, evidence, gaps, claims, and learning plus an owner-scoped PostgreSQL repository with atomic cycle persistence; no raw evidence vault, API wiring, network adapter, or runtime open-research activation | governance, core |
 | `tool_forge` | **(doc-only, Phase 6)** | generated-tool lifecycle (untrusted) | — |
 | `approvals` | **(modeled, governance)** | human review/approval queues | governance |

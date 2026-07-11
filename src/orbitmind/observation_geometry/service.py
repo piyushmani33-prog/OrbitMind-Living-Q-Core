@@ -22,6 +22,8 @@ from orbitmind.observation_geometry.models import (
     GeometryComputationResult,
     GeometrySample,
     GeometrySampleStatus,
+    GroundObservationSite,
+    PinnedOrbitElementSet,
     VisibilityRefinementStatus,
     source_identity_checksum,
 )
@@ -40,6 +42,28 @@ class _Boundary:
     status: VisibilityRefinementStatus
 
 
+class ObservationGeometryEvaluator:
+    """Evaluate pinned TLE look angles at caller-selected UTC instants.
+
+    The evaluator reuses the established SGP4 -> TEME -> project Earth-fixed ->
+    WGS84 ENU path. It performs no sampling, event search, persistence, or I/O.
+    """
+
+    def __init__(
+        self,
+        *,
+        elements: PinnedOrbitElementSet,
+        site: GroundObservationSite,
+    ) -> None:
+        self._satrec = Satrec.twoline2rv(elements.tle_line1, elements.tle_line2)
+        self._site = site
+
+    def evaluate(self, timestamp: datetime) -> GeometrySample:
+        """Return one deterministic observer-relative geometry sample."""
+
+        return _propagate_look_angle(self._satrec, self._site, timestamp).sample
+
+
 def compute_observation_geometry(
     request: GeometryComputationRequest,
 ) -> GeometryComputationResult:
@@ -47,7 +71,7 @@ def compute_observation_geometry(
 
     satrec = Satrec.twoline2rv(request.elements.tle_line1, request.elements.tle_line2)
     samples = tuple(
-        _propagate_look_angle(satrec, request, timestamp).sample
+        _propagate_look_angle(satrec, request.site, timestamp).sample
         for timestamp in _primary_sample_times(request)
     )
     intervals = _visibility_intervals(satrec, request, samples)
@@ -75,7 +99,7 @@ def _primary_sample_times(request: GeometryComputationRequest) -> tuple[datetime
 
 def _propagate_look_angle(
     satrec: Satrec,
-    request: GeometryComputationRequest,
+    site: GroundObservationSite,
     timestamp: datetime,
 ) -> _PropagationOutcome:
     timestamp = ensure_utc(timestamp)
@@ -98,7 +122,7 @@ def _propagate_look_angle(
         seconds,
     )
     ecef = teme_to_ecef_km(teme_km, float(jd + fr))
-    azimuth, elevation, slant_range = look_angles_from_ecef(ecef, request.site.position)
+    azimuth, elevation, slant_range = look_angles_from_ecef(ecef, site.position)
     return _PropagationOutcome(
         GeometrySample(
             timestamp=timestamp,
@@ -266,7 +290,7 @@ def _refine_crossing(
         if (high_time - low_time).total_seconds() <= REFINEMENT_TIME_TOLERANCE_SECONDS:
             break
         mid_time = low_time + (high_time - low_time) / 2
-        mid = _propagate_look_angle(satrec, request, mid_time).sample
+        mid = _propagate_look_angle(satrec, request.site, mid_time).sample
         used += 1
         if mid.status is GeometrySampleStatus.ERROR:
             status = VisibilityRefinementStatus.REFINEMENT_FAILED
