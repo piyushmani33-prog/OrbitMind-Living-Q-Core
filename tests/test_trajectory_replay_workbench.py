@@ -10,11 +10,13 @@ from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 
 from orbitmind.api.container import AppContainer
 from orbitmind.api.presentation.trajectory_replay import script_safe_json
+from orbitmind.api.routers import workbench
 from orbitmind.persistence.database import Base
 from orbitmind.sources.registry import SourceRegistry
 from orbitmind.trajectory_replay.models import TrajectoryReplayRequest, TrajectoryReplayResult
@@ -215,6 +217,34 @@ def test_replay_uses_trajectory_replay_service(
 
     assert response.status_code == 200
     assert spy.calls == 1
+
+
+def test_replay_rendering_helper_failure_returns_sanitized_error(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    line1, line2 = _iss_tle()
+
+    def fail_render(*_args: object, **_kwargs: object) -> str:
+        raise ValueError("internal renderer exploded with raw details")
+
+    monkeypatch.setattr(workbench, "_replay_page", fail_render)
+
+    response = client.post("/workbench/replay", data=_custom_form())
+
+    assert response.status_code == 422
+    body = response.text
+    assert "The trajectory replay calculation could not complete safely." in body
+    assert "Traceback" not in body
+    assert "internal renderer exploded" not in body
+    assert line1 not in body
+    assert line2 not in body
+    assert "trajectory-replay-data" not in body
+    assert "Predicted trajectory" not in body
+    assert "Offline orbital source" not in body
+    assert "Not live tracking" not in body
+    assert "<svg" not in body
+    assert 'id="satellite-marker"' not in body
 
 
 def test_mission_window_service_behavior_still_uses_existing_route(client: TestClient) -> None:

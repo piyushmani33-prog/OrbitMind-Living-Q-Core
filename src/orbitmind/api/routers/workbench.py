@@ -415,6 +415,15 @@ async def replay_mission_workbench(request: Request, container: ContainerDep) ->
     try:
         result = container.trajectory_replay_service.calculate(replay_request)
         projection = build_replay_display_projection(result)
+        page = _workbench_page(
+            "OrbitMind Trajectory Replay",
+            _replay_page(source=source, result=result, projection=projection),
+        )
+        if len(page.encode("utf-8")) > MAX_REPLAY_HTML_BYTES:
+            return _workbench_error(
+                "The trajectory replay response exceeds the supported display size.",
+                status_code=413,
+            )
     except (OrbitMindError, PydanticValidationError, ValueError):
         return _workbench_error(
             "The trajectory replay calculation could not complete safely.",
@@ -426,15 +435,6 @@ async def replay_mission_workbench(request: Request, container: ContainerDep) ->
             status_code=500,
         )
 
-    page = _workbench_page(
-        "OrbitMind Trajectory Replay",
-        _replay_page(source=source, result=result, projection=projection),
-    )
-    if len(page.encode("utf-8")) > MAX_REPLAY_HTML_BYTES:
-        return _workbench_error(
-            "The trajectory replay response exceeds the supported display size.",
-            status_code=413,
-        )
     return HTMLResponse(page)
 
 
