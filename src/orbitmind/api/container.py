@@ -39,6 +39,7 @@ from orbitmind.sources.jpl.sbdb_connector import SbdbConnector
 from orbitmind.sources.policies import CELESTRAK_SOURCE_ID, SourceCatalog
 from orbitmind.sources.registry import SourceRegistry
 from orbitmind.space.propagation import PropagationService
+from orbitmind.trajectory_replay.service import TrajectoryReplayService
 from orbitmind.verification.checks import VerificationService
 from orbitmind.visualization.charts import VisualizationService
 from orbitmind.visualization.smallbody_charts import SmallBodyVisualizationService
@@ -152,6 +153,7 @@ class AppContainer:
             resolver=self.resolver,
         )
         self.mission_window_service = MissionWindowService()
+        self.trajectory_replay_service = TrajectoryReplayService()
 
         # --- Phase 3A: JPL small-body connectors + service ---
         sbdb = SbdbConnector(
