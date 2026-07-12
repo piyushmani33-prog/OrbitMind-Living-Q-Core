@@ -441,4 +441,5 @@ would need bounded, expiring, single-use, owner-bound server-side state; no such
 authorization contract exists in U4.3B. U4.3C documents the proposed architecture and its required
 decisions in
 [CUSTOM_TLE_TRANSIENT_HANDOFF_ARCHITECTURE.md](../architecture/CUSTOM_TLE_TRANSIENT_HANDOFF_ARCHITECTURE.md);
-it does not implement or authorize the handoff.
+U4.3D closes the local Solo Alpha design decisions, but neither slice implements the handoff or
+changes this historical session verdict.
