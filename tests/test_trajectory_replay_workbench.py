@@ -15,6 +15,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 
+from orbitmind.api.app import WORKBENCH_REFERRER_POLICY
 from orbitmind.api.container import AppContainer
 from orbitmind.api.presentation.trajectory_replay import script_safe_json
 from orbitmind.api.routers import workbench
@@ -150,7 +151,7 @@ def test_replay_is_server_rendered_html_and_no_json_api_is_added(client: TestCli
     )
     assert response.headers["x-content-type-options"] == "nosniff"
     assert response.headers["x-frame-options"] == "DENY"
-    assert response.headers["referrer-policy"] == "no-referrer"
+    assert response.headers["referrer-policy"] == WORKBENCH_REFERRER_POLICY
     assert "geolocation=()" in response.headers["permissions-policy"]
     assert client.get("/workbench/replay").status_code == 405
 

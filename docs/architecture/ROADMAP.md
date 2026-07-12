@@ -132,15 +132,25 @@ approved for public or multi-worker deployment. See
 origin, Host/Origin checks, ephemeral cookie, token, route/body, logical-size, capacity, atomicity,
 single-process, diagnostic, and failure contracts. It is approved for a later default-off
 single-process implementation only; public, non-loopback, reverse-proxy, and multi-worker use
-remain forbidden.
+remain forbidden. The implementation status is recorded in the U4.3E entry below.
 
 **U4.3F browser Origin compatibility decision:** Chrome evidence confirms the global
 `Referrer-Policy: no-referrer` causes a natural same-origin Workbench POST to send
 `Origin: null`. The approved correction is a Workbench-HTML-only `same-origin` policy while
-retaining exact canonical Origin and `Sec-Fetch-Site: same-origin` requirements. U4.3E may resume
-under those implementation and browser-QA conditions, but is not complete or merge-ready; public,
+retaining exact canonical Origin and `Sec-Fetch-Site: same-origin` requirements. U4.3E resumed
+under those implementation and browser-QA conditions; its resulting implementation status is
+recorded below. Public,
 non-loopback, proxy, and multi-worker deployment remain forbidden. See
 [CUSTOM_TLE_TRANSIENT_HANDOFF_ARCHITECTURE.md](CUSTOM_TLE_TRANSIENT_HANDOFF_ARCHITECTURE.md).
+
+**U4.3E custom-TLE transient handoff implementation:** the default-off, canonical-loopback,
+single-process handoff is implemented with bounded process-local state, exact Host/Origin/Fetch-
+Metadata checks, HttpOnly SameSite session binding, opaque single-use tokens, atomic consume,
+expiry, owner-mismatch preservation, and no persistence/network/provider path. Focused and adjacent
+regressions plus real Chrome desktop, mobile, no-JavaScript, reduced-motion, expiry, duplicate,
+and owner-mismatch checks passed. The full suite exceeded the local 15-minute cap and is not
+claimed as passed. This is merge-review-ready only; public, authenticated, proxy, multi-worker,
+and production use remain forbidden.
 
 ### Further optimization (planned / deferred)
 Larger instances / additional solvers, still classical-baseline-first and bounded.

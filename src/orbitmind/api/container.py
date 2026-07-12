@@ -11,6 +11,7 @@ from collections.abc import Callable
 
 import httpx
 
+from orbitmind.api.transient_handoff import CustomTleTransientHandoffStore
 from orbitmind.core.config import Settings, get_settings
 from orbitmind.memory.service import MemoryService
 from orbitmind.mission_windows.service import MissionWindowService
@@ -122,8 +123,16 @@ class AppContainer:
         celestrak_sleep: Callable[[float], None] = time.sleep,
         jpl_transport: httpx.BaseTransport | None = None,
         jpl_sleep: Callable[[float], None] = time.sleep,
+        custom_tle_handoff_store: CustomTleTransientHandoffStore | None = None,
     ) -> None:
         self.settings = settings or get_settings()
+        if custom_tle_handoff_store is not None and not self.settings.custom_tle_handoff_enabled:
+            raise ValueError("custom-TLE handoff store requires explicit feature enablement")
+        self.custom_tle_handoff_store = (
+            custom_tle_handoff_store or CustomTleTransientHandoffStore()
+            if self.settings.custom_tle_handoff_enabled
+            else None
+        )
         self.database = Database(self.settings.database_url)
         self.registry = SourceRegistry()
         self.catalog = SourceCatalog(self.settings)
@@ -208,3 +217,9 @@ class AppContainer:
             for definition in self.catalog.list():
                 source_repo.sync_definition(definition)
             session.commit()
+
+    def shutdown(self) -> None:
+        """Clear process-local sensitive state owned by this container."""
+
+        if self.custom_tle_handoff_store is not None:
+            self.custom_tle_handoff_store.clear()

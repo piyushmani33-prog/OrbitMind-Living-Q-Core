@@ -66,6 +66,7 @@ SECURITY_HEADERS = {
         "magnetometer=(), gyroscope=(), accelerometer=()"
     ),
 }
+WORKBENCH_REFERRER_POLICY = "same-origin"
 
 
 def create_app(container: AppContainer | None = None) -> FastAPI:
@@ -77,7 +78,10 @@ def create_app(container: AppContainer | None = None) -> FastAPI:
         configure_logging(level=active.settings.log_level, json_output=active.settings.log_json)
         active.init_storage()
         app.state.container = active
-        yield
+        try:
+            yield
+        finally:
+            active.shutdown()
 
     app = FastAPI(
         title="OrbitMind Living Q-Core",
@@ -98,6 +102,11 @@ def create_app(container: AppContainer | None = None) -> FastAPI:
         if content_type == "text/html":
             for name, value in SECURITY_HEADERS.items():
                 response.headers.setdefault(name, value)
+            request_path = request.scope.get("path")
+            if request_path == "/workbench" or (
+                isinstance(request_path, str) and request_path.startswith("/workbench/")
+            ):
+                response.headers["Referrer-Policy"] = WORKBENCH_REFERRER_POLICY
         return response
 
     register_exception_handlers(app)

@@ -446,7 +446,20 @@ changes this historical session verdict.
 
 U4.3F records a later browser compatibility decision without changing the historical findings or
 verdict. Chrome 150 evidence showed that the application-wide `Referrer-Policy: no-referrer`
-causes a natural same-origin Workbench POST to send `Origin: null`. The approved, not-yet-implemented
-correction is a Workbench-HTML-only `same-origin` policy with exact canonical Origin and
-same-origin Fetch-Metadata checks. U4.3E may resume under the architecture's implementation and
-browser gates; it is not complete or merge-ready.
+caused a natural same-origin Workbench POST to send `Origin: null`. The approved correction was a
+Workbench-HTML-only `same-origin` policy with exact canonical Origin and same-origin Fetch-Metadata
+checks; U4.3E now records the implementation and QA outcome below.
+
+## U4.3E implementation follow-up (2026-07-12)
+
+U4.3E implemented the approved compatibility policy and transient handoff. Focused and adjacent
+regressions passed, and direct Chrome QA passed feature-disabled behavior, canonical Origin and
+same-origin Fetch Metadata, temporary handoff creation, exact source/observer/interval continuity,
+replay, duplicate consume, owner mismatch preservation, correct-owner consume, five-minute expiry,
+JavaScript-disabled replay, reduced motion, mobile `390 x 844`, CSP, same-origin network scope,
+non-disclosure, and unchanged database/artifact/cache snapshots.
+
+The full suite was attempted with a 900-second local cap and timed out; no full-suite pass is
+claimed. U4.3E is merge-review-ready for this local Solo Alpha boundary, not production-ready or
+public-ready. Authentication, authorization, complete CSRF protection, proxy and multi-worker
+support, durable audit, and live tracking remain unavailable.

@@ -7,6 +7,7 @@ import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from html import escape
+from http.cookies import SimpleCookie
 from importlib import resources
 from typing import Annotated
 from urllib.parse import parse_qs
@@ -25,6 +26,17 @@ from orbitmind.api.presentation.trajectory_replay import (
     escape_attr,
 )
 from orbitmind.api.routers.review import PAGE_CSS
+from orbitmind.api.transient_handoff import (
+    HANDOFF_TOKEN_PATTERN,
+    SESSION_COOKIE_MAX_AGE_SECONDS,
+    SESSION_COOKIE_NAME,
+    HandoffCapacityError,
+    HandoffCreation,
+    HandoffRecordError,
+    HandoffUnavailableError,
+    TransientCustomTleHandoffRecord,
+    TransientHandoffInput,
+)
 from orbitmind.core.errors import OrbitMindError
 from orbitmind.mission_windows.models import (
     MissionWindowEvent,
@@ -53,6 +65,7 @@ router = APIRouter(tags=["workbench"])
 ContainerDep = Annotated[AppContainer, Depends(get_container)]
 
 MAX_WORKBENCH_BODY_BYTES = 4_096
+MAX_HANDOFF_BODY_BYTES = 512
 WORKBENCH_COARSE_STEP_SECONDS = 60
 MAX_REPLAY_HTML_BYTES = 1_000_000
 REPLAY_CONTROLLER_ASSET_PATH = "/assets/trajectory-replay.js"
@@ -77,6 +90,17 @@ _UNSAFE_WORKBENCH_LABEL = re.compile(
     r"(?i)(?:\bauthorization\s*:\s*bearer\b|\bbearer\s+[A-Za-z0-9._-]{6,}|\bcookie\s*:)"
 )
 _COMPASS_LABELS = ("N", "NE", "E", "SE", "S", "SW", "W", "NW")
+_FORWARDED_HEADER_NAMES = frozenset(
+    {
+        b"forwarded",
+        b"x-original-host",
+        b"x-original-proto",
+        b"x-original-url",
+        b"x-real-ip",
+        b"x-rewrite-url",
+    }
+)
+_INVALID_PERCENT_ENCODING = re.compile(r"%(?![0-9A-Fa-f]{2})")
 NO_WINDOW_MESSAGE = "No qualifying geometric window was found in the requested interval."
 EARTH_ORIENTATION_LIMITATION = (
     "UTC is used as a UT1 approximation; full Earth-orientation and polar-motion corrections "
@@ -304,6 +328,14 @@ class WorkbenchBodyTooLarge(WorkbenchFormError):
     """Bounded-body failure before form parsing."""
 
 
+class HandoffRequestError(ValueError):
+    """Fixed client protocol failure for the dedicated handoff route."""
+
+    def __init__(self, *, status_code: int) -> None:
+        super().__init__("The temporary replay handoff request is invalid.")
+        self.status_code = status_code
+
+
 @router.get("/assets/trajectory-replay.js", include_in_schema=False)
 def trajectory_replay_controller_asset() -> Response:
     """Serve the one reviewed replay controller asset from package resources."""
@@ -354,6 +386,11 @@ def mission_workbench_home(container: ContainerDep) -> HTMLResponse:
 async def run_mission_workbench(request: Request, container: ContainerDep) -> HTMLResponse:
     """Validate one offline request and render deterministic geometric windows."""
 
+    if container.custom_tle_handoff_store is not None:
+        protocol_error = _validate_handoff_protocol(request, container)
+        if protocol_error is not None:
+            return protocol_error
+
     try:
         form = await _parse_workbench_form(request)
     except WorkbenchBodyTooLarge as exc:
@@ -403,12 +440,42 @@ async def run_mission_workbench(request: Request, container: ContainerDep) -> HT
             status_code=500,
         )
 
-    return HTMLResponse(
+    handoff_creation: HandoffCreation | None = None
+    handoff_unavailable = False
+    if form.source_mode == "custom" and container.custom_tle_handoff_store is not None:
+        try:
+            handoff_creation = container.custom_tle_handoff_store.create(
+                _transient_handoff_input(source, form),
+                submitted_cookie=_session_cookie_value(request),
+            )
+        except (HandoffCapacityError, HandoffRecordError):
+            handoff_unavailable = True
+        except Exception:  # pragma: no cover - final sanitized creation boundary.
+            handoff_unavailable = True
+
+    response = HTMLResponse(
         _workbench_page(
             "OrbitMind Mission Workbench Result",
-            _result_page(source=source, result=result, form=form),
+            _result_page(
+                source=source,
+                result=result,
+                form=form,
+                handoff_creation=handoff_creation,
+                handoff_unavailable=handoff_unavailable,
+            ),
         )
     )
+    if handoff_creation is not None and handoff_creation.session_cookie_value is not None:
+        response.set_cookie(
+            key=SESSION_COOKIE_NAME,
+            value=handoff_creation.session_cookie_value,
+            max_age=SESSION_COOKIE_MAX_AGE_SECONDS,
+            path="/workbench",
+            secure=False,
+            httponly=True,
+            samesite="strict",
+        )
+    return response
 
 
 @router.post("/workbench/replay", response_class=HTMLResponse)
@@ -446,6 +513,74 @@ async def replay_mission_workbench(request: Request, container: ContainerDep) ->
             status_code=422,
         )
 
+    return _calculate_replay_response(
+        source=source,
+        replay_request=replay_request,
+        container=container,
+    )
+
+
+@router.post("/workbench/replay/custom-handoff", response_class=HTMLResponse)
+async def replay_custom_tle_handoff(request: Request, container: ContainerDep) -> HTMLResponse:
+    """Atomically consume one local custom-TLE handoff and render its replay."""
+
+    store = container.custom_tle_handoff_store
+    if store is None:
+        return _handoff_unavailable_error()
+    protocol_error = _validate_handoff_protocol(request, container)
+    if protocol_error is not None:
+        return protocol_error
+    try:
+        handoff_id = await _parse_handoff_id(request)
+    except HandoffRequestError as exc:
+        return _workbench_error(str(exc), status_code=exc.status_code)
+
+    try:
+        record = store.consume(
+            handoff_id,
+            submitted_cookie=_session_cookie_value(request),
+        )
+    except HandoffUnavailableError:
+        return _handoff_unavailable_error()
+
+    try:
+        source = _source_from_handoff_record(record)
+        replay_request = TrajectoryReplayRequest(
+            orbital_source=source.elements,
+            trajectory_reference=record.stable_source_reference,
+            observer=GeodeticPosition(
+                latitude_deg=record.observer_latitude_deg,
+                longitude_deg=record.observer_longitude_deg,
+                altitude_km=record.observer_altitude_metres / 1000.0,
+            ),
+            start_time=record.start_time_utc,
+            end_time=record.end_time_utc,
+            sample_interval_seconds=record.sample_interval_seconds,
+            maximum_samples=record.maximum_samples,
+        )
+    except (OrbitMindError, PydanticValidationError, ValueError):
+        return _workbench_error(
+            "The trajectory replay calculation could not complete safely.",
+            status_code=422,
+        )
+    except Exception:  # pragma: no cover - final sanitized reconstruction boundary.
+        return _workbench_error(
+            "The trajectory replay calculation could not complete safely.",
+            status_code=500,
+        )
+    return _calculate_replay_response(
+        source=source,
+        replay_request=replay_request,
+        container=container,
+    )
+
+
+def _calculate_replay_response(
+    *,
+    source: ResolvedWorkbenchSource,
+    replay_request: TrajectoryReplayRequest,
+    container: AppContainer,
+) -> HTMLResponse:
     try:
         result = container.trajectory_replay_service.calculate(replay_request)
         projection = build_replay_display_projection(result)
@@ -468,8 +603,206 @@ async def replay_mission_workbench(request: Request, container: ContainerDep) ->
             "The trajectory replay calculation could not complete safely.",
             status_code=500,
         )
-
     return HTMLResponse(page)
+
+
+def _validate_handoff_protocol(
+    request: Request,
+    container: AppContainer,
+) -> HTMLResponse | None:
+    headers = request.scope.get("headers", [])
+    if not isinstance(headers, list):
+        return _handoff_protocol_error(status_code=400)
+    lowered_names = [name.lower() for name, _value in headers]
+    if any(
+        name in _FORWARDED_HEADER_NAMES or name.startswith(b"x-forwarded-")
+        for name in lowered_names
+    ):
+        return _handoff_protocol_error(status_code=400)
+
+    expected_host = f"127.0.0.1:{container.settings.custom_tle_handoff_port}".encode("ascii")
+    host_values = _raw_header_values(headers, b"host")
+    if (
+        len(host_values) != 1
+        or host_values[0] != expected_host
+        or request.scope.get("scheme") != "http"
+    ):
+        return _handoff_protocol_error(status_code=400)
+
+    canonical_origin = f"http://127.0.0.1:{container.settings.custom_tle_handoff_port}".encode(
+        "ascii"
+    )
+    origin_values = _raw_header_values(headers, b"origin")
+    if origin_values != [canonical_origin]:
+        return _handoff_protocol_error(status_code=403)
+    fetch_site_values = _raw_header_values(headers, b"sec-fetch-site")
+    if fetch_site_values != [b"same-origin"]:
+        return _handoff_protocol_error(status_code=403)
+    return None
+
+
+def _raw_header_values(
+    headers: list[tuple[bytes, bytes]],
+    name: bytes,
+) -> list[bytes]:
+    return [value for header_name, value in headers if header_name.lower() == name]
+
+
+def _handoff_protocol_error(*, status_code: int) -> HTMLResponse:
+    return _workbench_error(
+        "This local Workbench request is unavailable.",
+        status_code=status_code,
+    )
+
+
+def _handoff_unavailable_error() -> HTMLResponse:
+    return _workbench_error(
+        "This temporary replay handoff is unavailable or no longer valid. "
+        "Return to the Workbench and submit the custom TLE again.",
+        status_code=410,
+    )
+
+
+async def _parse_handoff_id(request: Request) -> str:
+    headers = request.scope.get("headers", [])
+    if not isinstance(headers, list):
+        raise HandoffRequestError(status_code=422)
+
+    content_types = _raw_header_values(headers, b"content-type")
+    if len(content_types) != 1 or not _valid_handoff_content_type(content_types[0]):
+        raise HandoffRequestError(status_code=415)
+
+    content_lengths = _raw_header_values(headers, b"content-length")
+    declared_length: int | None = None
+    if len(content_lengths) > 1:
+        raise HandoffRequestError(status_code=422)
+    if content_lengths:
+        declared = content_lengths[0]
+        if not declared.isdigit():
+            raise HandoffRequestError(status_code=422)
+        declared_length = int(declared)
+        if declared_length > MAX_HANDOFF_BODY_BYTES:
+            raise HandoffRequestError(status_code=413)
+
+    transfer_encodings = _raw_header_values(headers, b"transfer-encoding")
+    if len(transfer_encodings) > 1 or (
+        transfer_encodings and transfer_encodings[0].lower() != b"chunked"
+    ):
+        raise HandoffRequestError(status_code=422)
+
+    body = bytearray()
+    async for chunk in request.stream():
+        remaining = MAX_HANDOFF_BODY_BYTES + 1 - len(body)
+        if remaining > 0:
+            body.extend(chunk[:remaining])
+        if len(body) > MAX_HANDOFF_BODY_BYTES or len(chunk) > remaining:
+            raise HandoffRequestError(status_code=413)
+    if declared_length is not None and declared_length != len(body):
+        raise HandoffRequestError(status_code=422)
+    try:
+        encoded = bytes(body).decode("utf-8", errors="strict")
+    except UnicodeDecodeError as exc:
+        raise HandoffRequestError(status_code=422) from exc
+    if _INVALID_PERCENT_ENCODING.search(encoded) is not None:
+        raise HandoffRequestError(status_code=422)
+    try:
+        parsed = parse_qs(
+            encoded,
+            keep_blank_values=True,
+            strict_parsing=True,
+            max_num_fields=2,
+            encoding="utf-8",
+            errors="strict",
+        )
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise HandoffRequestError(status_code=422) from exc
+    if set(parsed) != {"handoff_id"} or len(parsed["handoff_id"]) != 1:
+        raise HandoffRequestError(status_code=422)
+    handoff_id = parsed["handoff_id"][0]
+    if HANDOFF_TOKEN_PATTERN.fullmatch(handoff_id) is None:
+        raise HandoffRequestError(status_code=422)
+    return handoff_id
+
+
+def _valid_handoff_content_type(value: bytes) -> bool:
+    try:
+        decoded = value.decode("ascii")
+    except UnicodeDecodeError:
+        return False
+    parts = [part.strip() for part in decoded.split(";")]
+    if not parts or parts[0].lower() != "application/x-www-form-urlencoded":
+        return False
+    if len(parts) == 1:
+        return True
+    if len(parts) != 2 or "=" not in parts[1]:
+        return False
+    name, charset = (item.strip() for item in parts[1].split("=", maxsplit=1))
+    return name.lower() == "charset" and charset.lower() == "utf-8"
+
+
+def _session_cookie_value(request: Request) -> str | None:
+    headers = request.scope.get("headers", [])
+    if not isinstance(headers, list):
+        return None
+    cookie_values = _raw_header_values(headers, b"cookie")
+    if len(cookie_values) != 1:
+        return None
+    try:
+        decoded = cookie_values[0].decode("ascii")
+        target_count = sum(
+            segment.partition("=")[0].strip() == SESSION_COOKIE_NAME
+            for segment in decoded.split(";")
+        )
+        if target_count != 1:
+            return None
+        parsed = SimpleCookie()
+        parsed.load(decoded)
+    except (UnicodeDecodeError, ValueError):
+        return None
+    morsel = parsed.get(SESSION_COOKIE_NAME)
+    return morsel.value if morsel is not None else None
+
+
+def _transient_handoff_input(
+    source: ResolvedWorkbenchSource,
+    form: WorkbenchForm,
+) -> TransientHandoffInput:
+    end_time = form.start_time_utc + timedelta(hours=form.duration_hours)
+    return TransientHandoffInput(
+        safe_source_label=source.display_label,
+        source_checksum=source.elements.element_checksum,
+        stable_source_reference=source.stable_identity,
+        tle_line1=source.elements.tle_line1,
+        tle_line2=source.elements.tle_line2,
+        observer_latitude_deg=form.observer_latitude_deg,
+        observer_longitude_deg=form.observer_longitude_deg,
+        observer_altitude_metres=form.observer_altitude_metres,
+        start_time_utc=form.start_time_utc,
+        end_time_utc=end_time,
+        sample_interval_seconds=_replay_sample_interval_seconds(form.duration_hours),
+        maximum_samples=MAX_REPLAY_SAMPLES,
+    )
+
+
+def _source_from_handoff_record(
+    record: TransientCustomTleHandoffRecord,
+) -> ResolvedWorkbenchSource:
+    resolved = resolve_custom_offline_tle(
+        satellite_label=record.safe_source_label,
+        tle_line1=record.tle_line1,
+        tle_line2=record.tle_line2,
+    )
+    if (
+        resolved.elements.element_checksum != record.source_checksum
+        or f"custom-tle:{resolved.elements.element_checksum}" != record.stable_source_reference
+    ):
+        raise ValueError("transient handoff source integrity failed")
+    return ResolvedWorkbenchSource(
+        elements=resolved.elements,
+        display_label=resolved.elements.source.name,
+        stable_identity=record.stable_source_reference,
+        source_mode_label="User-provided offline TLE",
+    )
 
 
 def _workbench_form(catalog: tuple[BundledOfflineCatalogEntry, ...]) -> str:
@@ -1005,6 +1338,8 @@ def _result_page(
     source: ResolvedWorkbenchSource,
     result: MissionWindowResult,
     form: WorkbenchForm,
+    handoff_creation: HandoffCreation | None = None,
+    handoff_unavailable: bool = False,
 ) -> str:
     lead = _primary_window(result.windows[0]) if result.windows else _no_window_state(result)
     all_windows = _all_windows_table(result) if len(result.windows) > 1 else ""
@@ -1027,15 +1362,44 @@ def _result_page(
         {_accuracy_card(result)}
       </section>
       {all_windows}
-      {_replay_handoff(form)}
+      {_replay_handoff(form, handoff_creation, unavailable=handoff_unavailable)}
       {_method_and_evidence(result)}
       <p class="footer-link"><a href="/workbench">Calculate another mission window</a> ·
       <a href="/review">Reviewer sandbox</a></p>
     """
 
 
-def _replay_handoff(form: WorkbenchForm) -> str:
+def _replay_handoff(
+    form: WorkbenchForm,
+    handoff_creation: HandoffCreation | None = None,
+    *,
+    unavailable: bool = False,
+) -> str:
     if form.source_mode != "catalog":
+        if handoff_creation is not None:
+            return f"""
+              <section class="card section-gap">
+                <h2>Replay this request</h2>
+                <p>Replay reuses this exact custom source, observer, and UTC interval. The
+                handoff is temporary and single-use. It opens a predicted trajectory replay;
+                this is not live tracking.</p>
+                <form method="post" action="/workbench/replay/custom-handoff"
+                  class="action-row">
+                  <input type="hidden" name="handoff_id"
+                    value="{escape(handoff_creation.handoff_token, quote=True)}">
+                  <button class="button" type="submit">Replay this request</button>
+                </form>
+              </section>
+            """
+        if unavailable:
+            return """
+              <section class="card section-gap">
+                <h2>Replay this request</h2>
+                <p>A temporary replay handoff is not available right now. The mission-window
+                result remains valid; return to the Workbench to try again. No catalog object
+                has been substituted.</p>
+              </section>
+            """
         return """
           <section class="card section-gap">
             <h2>Replay this request</h2>

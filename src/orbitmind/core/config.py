@@ -9,7 +9,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import SecretStr
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Project root = three levels up from this file: src/orbitmind/core/config.py
@@ -32,6 +32,15 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     log_json: bool = False
     execution_mode: str = "local"
+
+    # Local Solo Alpha custom-TLE replay handoff. This is intentionally disabled
+    # unless every single-process loopback guard is configured explicitly.
+    custom_tle_handoff_enabled: bool = False
+    custom_tle_handoff_port: int = Field(default=8000, ge=1024, le=65535)
+    api_bind_host: str = "127.0.0.1"
+    api_workers: int = Field(default=1, ge=1)
+    api_reload_enabled: bool = False
+    forwarded_header_trust_enabled: bool = False
 
     # Storage
     database_url: str = "sqlite:///./data/orbitmind.db"
@@ -118,6 +127,22 @@ class Settings(BaseSettings):
     evidence_signing_key_id: str = "primary"
     # Optional retired keys for historical verification: "keyid:secret,keyid2:secret2".
     evidence_signing_retired_keys: SecretStr = SecretStr("")
+
+    @model_validator(mode="after")
+    def validate_custom_tle_handoff_boundary(self) -> Settings:
+        """Reject partial or non-loopback handoff enablement at startup."""
+
+        if self.custom_tle_handoff_enabled and (
+            self.api_bind_host != "127.0.0.1"
+            or self.api_workers != 1
+            or self.api_reload_enabled
+            or self.forwarded_header_trust_enabled
+        ):
+            raise ValueError(
+                "Custom-TLE transient handoff requires canonical loopback HTTP, "
+                "exactly one worker, reload disabled, and forwarded-header trust disabled."
+            )
+        return self
 
     def resolved_ingestion_roots(self) -> tuple[Path, ...]:
         """Absolute, resolved allowlisted ingestion roots."""

@@ -2,23 +2,23 @@
 
 ## Status
 
-- **Document status:** Decision closed; documentation only
-- **Slices:** U4.3C architecture, U4.3D decision closure, and U4.3F browser compatibility
+- **Document status:** Decision closed; U4.3E implementation and QA recorded
+- **Slices:** U4.3C architecture, U4.3D decision closure, U4.3E implementation, and U4.3F browser compatibility
 - **Decision date:** 2026-07-12
 - **Design verdict:** **APPROVE DESIGN FOR IMPLEMENTATION**
 - **Browser compatibility verdict:** **APPROVE WITH REQUIRED IMPLEMENTATION CONDITIONS**
-- **Implementation authority:** A later reviewed slice may implement only this local Solo Alpha
-  design. This document implements no code, cookie, session, token, route, store, audit behavior,
-  persistence, migration, authentication, deployment, or network path.
+- **U4.3E implementation status:** Implemented on this branch; merge review-ready after the
+  validations recorded below. This remains a local Solo Alpha implementation and is not a public
+  deployment authorization.
 
 All material architecture decisions identified by U4.3C are closed below. Approval remains limited
 to an explicitly enabled, loopback-bound, single-process Solo Alpha application. Public,
 non-loopback, multi-worker, and distributed use remain forbidden.
 
-U4.3F closes a browser incompatibility found during U4.3E QA. U4.3E is not complete or merge-ready
-on the strength of this document. Implementation may resume only to apply the route-scoped
-Referrer-Policy and request-validation contract frozen below, add adversarial coverage, and pass
-the real-browser gates in this document.
+U4.3F closed a browser incompatibility found during U4.3E QA. U4.3E now applies the route-scoped
+Referrer-Policy and request-validation contract frozen below. The focused, adjacent, and real-browser
+gates passed; the full suite was attempted but exceeded the local 900-second limit and is not
+claimed as a full-suite pass.
 
 ## U4.3F browser evidence
 
@@ -43,9 +43,10 @@ JavaScript. Chrome sent:
 | `Content-Type` | `application/x-www-form-urlencoded` |
 
 The response that created the document carried `Referrer-Policy: no-referrer`; Chrome's request
-metadata reported the same effective policy. Current main contains the U4.3D design but not the
-U4.3E handoff route, so `/workbench/run` was used to reproduce the production browser/header
-behavior. The U4.3E handoff failure remains the motivating observation.
+metadata reported the same effective policy. This was the pre-U4.3E decision evidence: current
+main at that point contained the U4.3D design but not the handoff route, so `/workbench/run` was
+used to reproduce the production browser/header behavior. The implemented branch now applies the
+approved compatibility policy and the same natural form submits with canonical Origin.
 
 Local inspection used FastAPI `0.139.0` and Starlette `1.3.1`. The production form has a literal
 same-origin action and no redirect. The HTML-only middleware applies `no-referrer` from the response
@@ -712,7 +713,7 @@ debugger, crash dump, or compromised runtime.
 
 ## Implementation test plan
 
-The later implementation must test:
+The U4.3E implementation tests and browser QA cover:
 
 1. successful custom-TLE mission-window-to-replay handoff;
 2. exact source checksum, observer, UTC interval, and sampling-policy continuity;
@@ -760,7 +761,7 @@ owner-mismatch, atomicity, process, container, observability, representation, an
 decisions are closed by U4.3D, with the Referrer-Policy and Origin/Fetch-Metadata compatibility
 contract superseded and closed by U4.3F.
 
-Before implementation merge:
+U4.3E implementation gate result:
 
 - the `/workbench` HTML scope implements `Referrer-Policy: same-origin` while other HTML retains
   `no-referrer` and non-HTML responses remain unaffected;
@@ -771,6 +772,10 @@ Before implementation merge:
 - no migration, persistence, network, provider, artifact, or dependency is added;
 - existing Workbench/scientific behavior remains unchanged; and
 - the implementation remains default-off and local Solo Alpha-only.
+
+These gates passed on 2026-07-12. The full repository suite was attempted with a 900-second cap,
+timed out, and is not represented as passed. The focused and adjacent suites, browser QA, and
+database/artifact/cache snapshot checks passed.
 
 Before broader external review:
 
@@ -811,9 +816,10 @@ monitoring, proxy logging, incident response, and deployment rollback.
 ## Open decisions
 
 There are **no remaining material architecture decisions for the local single-process Solo Alpha
-implementation**. The browser compatibility decision is closed. Applying the route-scoped header,
-updating request validation and tests, and passing the browser gates are required implementation
-work, not open design questions.
+implementation**. The browser compatibility decision is closed and the approved implementation
+conditions have been exercised. Future requests for localhost aliases, IPv6, HTTPS, reverse
+proxies, multiple workers, non-loopback access, durable state, persistent audit, authentication,
+or public deployment reopen architecture and security review.
 
 Any request to support `localhost`, IPv6 loopback, HTTPS, reverse proxies, multiple workers,
 non-loopback access, durable state, persistent audit, authentication, or public deployment reopens
@@ -821,11 +827,11 @@ architecture and security review and is not an implementation detail.
 
 ## Final recommendation
 
-**APPROVE WITH REQUIRED IMPLEMENTATION CONDITIONS.**
+**U4.3E IMPLEMENTATION COMPLETE FOR MERGE REVIEW.**
 
-U4.3E may resume to implement this exact default-off, canonical-origin, single-process transient
-handoff with the Workbench-only `same-origin` policy and exact Origin/Fetch-Metadata requirements.
-U4.3E is not complete or merge-ready until the implementation, adversarial tests, and browser gates
-pass. Approval does not authorize public or multi-worker deployment. Broader external review
-remains blocked until implementation, browser QA, independent non-disclosure review, and
-persistence/network snapshot verification pass.
+The implementation conforms to the approved default-off, canonical-origin, single-process
+transient handoff and the Workbench-only `same-origin` policy. It is merge-review-ready based on
+the focused/adjacent validation and real-browser evidence recorded here. The full suite timed out
+at 900 seconds, so no full-suite pass is claimed. This does not authorize public or multi-worker
+deployment; authentication, authorization, complete CSRF protection, proxy support, durable audit,
+and production readiness remain deferred.
