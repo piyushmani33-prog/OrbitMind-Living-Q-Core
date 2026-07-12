@@ -134,6 +134,14 @@ single-process, diagnostic, and failure contracts. It is approved for a later de
 single-process implementation only; public, non-loopback, reverse-proxy, and multi-worker use
 remain forbidden.
 
+**U4.3F browser Origin compatibility decision:** Chrome evidence confirms the global
+`Referrer-Policy: no-referrer` causes a natural same-origin Workbench POST to send
+`Origin: null`. The approved correction is a Workbench-HTML-only `same-origin` policy while
+retaining exact canonical Origin and `Sec-Fetch-Site: same-origin` requirements. U4.3E may resume
+under those implementation and browser-QA conditions, but is not complete or merge-ready; public,
+non-loopback, proxy, and multi-worker deployment remain forbidden. See
+[CUSTOM_TLE_TRANSIENT_HANDOFF_ARCHITECTURE.md](CUSTOM_TLE_TRANSIENT_HANDOFF_ARCHITECTURE.md).
+
 ### Further optimization (planned / deferred)
 Larger instances / additional solvers, still classical-baseline-first and bounded.
 

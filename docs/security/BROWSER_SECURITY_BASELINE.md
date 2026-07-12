@@ -116,6 +116,47 @@ third-party resource decisions.
 No external script, font, CDN, map-tile, telemetry, or analytics access is
 allowed by this baseline.
 
+### U4.3F Workbench compatibility decision
+
+U4.3F is documentation-only. The currently implemented header remains
+`Referrer-Policy: no-referrer` on this branch. A resumed U4.3E implementation must
+apply this narrowly scoped exception:
+
+- HTML responses for the exact `/workbench` path and the `/workbench/` subtree,
+  including safe HTML errors, use `Referrer-Policy: same-origin`;
+- reviewer and other HTML surfaces retain `Referrer-Policy: no-referrer`; and
+- JSON, the allowlisted JavaScript asset, artifacts, binary downloads, and other
+  non-HTML responses remain outside the HTML Referrer-Policy middleware scope.
+
+Chrome `150.0.7871.114` on Windows 10 was tested with identical top-level
+same-origin POST forms. With `no-referrer`, Chrome sent `Origin: null` and no
+`Referer`. With `same-origin`, it sent the exact canonical Origin and the full
+same-origin page URL as `Referer`. The result was the same with JavaScript
+disabled. The controlled matrix also tested the browser default,
+`strict-origin`, `strict-origin-when-cross-origin`, `origin`, and
+`origin-when-cross-origin`; all except `no-referrer` retained the canonical
+Origin in this same-origin case.
+
+This is expected Fetch behavior rather than evidence of an opaque production
+document. For a non-CORS POST, the Fetch Standard sets serialized Origin to
+`null` under `no-referrer`; `same-origin` retains it when the initiator and target
+origins match. See the WHATWG
+[Fetch Standard](https://fetch.spec.whatwg.org/#origin-header) and the
+[Referrer Policy specification](https://w3c.github.io/webappsec-referrer-policy/).
+
+`same-origin` is selected instead of `strict-origin` because it sends no Referer
+on cross-origin requests. It does disclose the full Workbench page URL to the
+same OrbitMind origin. That is accepted for local Solo Alpha because Workbench
+URLs contain no raw TLE, handoff token, session identifier, credential, or other
+sensitive state; the handoff token remains only in a bounded POST body. Any
+future proposal to place sensitive state in a Workbench URL reopens this decision.
+
+The exception does not permit an external form action, script, font, map, fetch,
+or redirect. CSP remains unchanged, including `form-action 'self'`,
+`connect-src 'none'`, and `frame-ancestors 'none'`. It does not weaken exact Host,
+Origin, Fetch-Metadata, cookie, token, single-use, or owner-binding checks. It
+does not make OrbitMind production-ready.
+
 ## Production Readiness Boundary
 
 This browser-security baseline is defense-in-depth for local and private review
