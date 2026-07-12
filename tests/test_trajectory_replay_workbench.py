@@ -75,6 +75,23 @@ def _controller_script(client: TestClient) -> str:
     return response.text
 
 
+def _handoff_form(body: str) -> dict[str, str]:
+    match = re.search(
+        r'<form method="post" action="/workbench/replay" class="action-row">(.*?)</form>',
+        body,
+        re.S,
+    )
+    assert match is not None
+    return {
+        name: html.unescape(value)
+        for name, value in re.findall(
+            r'<input type="hidden" name="([^"]+)"\s+value="([^"]*)">',
+            match.group(1),
+            re.S,
+        )
+    }
+
+
 def _row_counts(container: AppContainer) -> dict[str, int]:
     names = sorted(Base.metadata.tables)
     with container.database.session() as session:
@@ -86,6 +103,13 @@ def _row_counts(container: AppContainer) -> dict[str, int]:
 
 def _artifact_files(container: AppContainer) -> set[Path]:
     root = container.settings.resolved_artifacts_dir()
+    if not root.exists():
+        return set()
+    return {path for path in root.rglob("*") if path.is_file()}
+
+
+def _cache_files(container: AppContainer) -> set[Path]:
+    root = container.settings.resolved_cache_dir()
     if not root.exists():
         return set()
     return {path for path in root.rglob("*") if path.is_file()}
@@ -212,6 +236,59 @@ def test_valid_offline_catalog_replay_renders_svg_payload_controls_and_evidence(
     assert payload["sample_count"] == len(payload["samples"])
     assert len(body.encode("utf-8")) < 1_000_000
 
+    for control_id in (
+        "replay-play",
+        "replay-prev",
+        "replay-slider",
+        "replay-next",
+        "replay-speed",
+    ):
+        assert re.search(rf'id="{control_id}"[^>]*\bdisabled\b', body)
+    assert ".replay-controls :disabled" in body
+
+
+def test_catalog_window_result_posts_exact_request_into_replay_without_persistence(
+    client: TestClient,
+    container: AppContainer,
+) -> None:
+    request_form = _catalog_form(
+        observer_latitude_deg="12.9716",
+        observer_longitude_deg="77.5946",
+        observer_altitude_metres="920",
+        start_time_utc="2019-12-09T17:00:00Z",
+        duration_hours="6.25",
+        minimum_elevation_deg="10",
+    )
+    before_rows = _row_counts(container)
+    before_artifacts = _artifact_files(container)
+    before_cache = _cache_files(container)
+
+    window_response = client.post("/workbench/run", data=request_form)
+    handoff = _handoff_form(window_response.text)
+    replay_response = client.post("/workbench/replay", data=handoff)
+    payload = _payload(replay_response.text)
+
+    assert window_response.status_code == replay_response.status_code == 200
+    assert window_response.headers["content-security-policy"]
+    assert replay_response.headers["content-security-policy"]
+    assert 'method="post" action="/workbench/replay"' in window_response.text
+    assert "Replay this request" in window_response.text
+    assert "This is not live tracking." in window_response.text
+    assert "http://" not in window_response.text.lower()
+    assert "https://" not in window_response.text.lower()
+    assert handoff == request_form
+    assert payload["source_identity"]["object_label"] == "ISS (ZARYA)"
+    assert payload["source_identity"]["trajectory_reference"] == "offline-catalog:iss"
+    assert payload["observer"]["latitude_deg"] == pytest.approx(12.9716)
+    assert payload["observer"]["longitude_deg"] == pytest.approx(77.5946)
+    assert payload["observer"]["altitude_km"] == pytest.approx(0.92)
+    assert payload["samples"][0]["timestamp_utc"] == "2019-12-09T17:00:00.000Z"
+    assert payload["samples"][-1]["timestamp_utc"] == "2019-12-09T23:15:00.000Z"
+    assert payload["sample_interval_seconds"] == 30
+    assert _row_counts(container) == before_rows
+    assert _artifact_files(container) == before_artifacts
+    assert _cache_files(container) == before_cache
+
 
 def test_valid_custom_tle_replay_succeeds_without_rendering_raw_tle(client: TestClient) -> None:
     line1, line2 = _iss_tle()
@@ -228,6 +305,25 @@ def test_valid_custom_tle_replay_succeeds_without_rendering_raw_tle(client: Test
     assert line2 not in body
     assert line1 not in json.dumps(_payload(body))
     assert line2 not in json.dumps(_payload(body))
+
+
+def test_custom_tle_window_result_does_not_fake_or_leak_a_replay_handoff(
+    client: TestClient,
+) -> None:
+    line1, line2 = _iss_tle()
+
+    response = client.post("/workbench/run", data=_custom_form(custom_label="Alpha & Beta"))
+    normalized = " ".join(response.text.split())
+
+    assert response.status_code == 200
+    assert "Direct replay handoff is unavailable for a request-local custom TLE" in normalized
+    assert "No catalog object has been substituted." in normalized
+    assert 'form method="post" action="/workbench/replay"' not in response.text
+    assert "offline-catalog:iss" not in response.text
+    assert line1 not in response.text
+    assert line2 not in response.text
+    assert "http://" not in response.text.lower()
+    assert "https://" not in response.text.lower()
 
 
 def test_replay_preserves_exactly_one_source_validation(client: TestClient) -> None:

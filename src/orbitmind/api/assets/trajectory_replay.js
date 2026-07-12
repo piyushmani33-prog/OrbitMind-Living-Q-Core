@@ -23,13 +23,17 @@
   let startedAt = 0;
   const baseMs = 30000;
 
+  function setControlsDisabled(disabled) {
+    playButton.disabled = disabled;
+    previousButton.disabled = disabled;
+    nextButton.disabled = disabled;
+    slider.disabled = disabled;
+    speedSelect.disabled = disabled;
+  }
+
   function fail() {
     playing = false;
-    playButton.disabled = true;
-    previousButton.disabled = true;
-    nextButton.disabled = true;
-    slider.disabled = true;
-    speedSelect.disabled = true;
+    setControlsDisabled(true);
     errorBox.style.display = "block";
   }
 
@@ -148,6 +152,7 @@
       setPlaying(false);
     }
   });
+  setControlsDisabled(false);
   if (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
     setPlaying(false);
   }

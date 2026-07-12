@@ -295,11 +295,23 @@ def test_replay_controller_guards_required_dom_before_registering_listeners(
     ):
         assert script.index(listener) > guard_end
 
+    validation_start = script.index("  try {")
+    enable_controls = script.index("  setControlsDisabled(false);")
+    assert script.index("payload.sample_count < 2", validation_start) < enable_controls
+    assert script.index("fail();", validation_start) < enable_controls
+    assert script.index('speedSelect.addEventListener("change"') < enable_controls
+    assert "setControlsDisabled(true);" in script
+
     replay = client.post("/workbench/replay", data=_catalog_form())
     assert replay.status_code == 200
-    assert 'id="replay-play"' in replay.text
-    assert 'id="replay-slider"' in replay.text
-    assert 'id="replay-speed"' in replay.text
+    for control_id in (
+        "replay-play",
+        "replay-prev",
+        "replay-slider",
+        "replay-next",
+        "replay-speed",
+    ):
+        assert re.search(rf'id="{control_id}"[^>]*\bdisabled\b', replay.text)
 
 
 def test_html_content_type_with_surrounding_whitespace_receives_security_headers(
