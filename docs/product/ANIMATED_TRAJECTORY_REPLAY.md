@@ -15,14 +15,25 @@ command, collision, maneuver, safety, approval, or operational decisions.
 `POST /workbench/replay` accepts the same bounded Mission Workbench form as
 `POST /workbench/run`.
 
+When the default-off local Solo Alpha transient handoff is enabled,
+`POST /workbench/replay/custom-handoff` accepts only one bounded opaque identifier, atomically
+consumes its container-owned custom-TLE record, and invokes the same replay service. There is no
+GET equivalent, state-carrying redirect, raw-TLE field, or JavaScript requirement.
+
+This dedicated route is implemented behind the explicit default-off local Solo Alpha flag. It
+requires the documented canonical Host, Origin, and Fetch-Metadata checks and the Workbench-only
+`Referrer-Policy: same-origin` compatibility scope. It remains loopback-only, single-process,
+non-authenticated, non-public, and non-production.
+
 Supported offline source modes remain:
 
 - allowlisted bundled offline catalog samples; and
 - request-local custom TLE text validated through the existing offline TLE path.
 
-Exactly one source mode must be active. Custom TLE values are posted in the request body only; raw
-TLE lines are not placed in URLs, rendered in HTML, embedded in replay JSON, persisted, or written
-to artifacts.
+Exactly one source mode must be active on the ordinary replay form. Custom TLE values are posted in
+the request body only; raw lines are not placed in URLs, rendered in HTML, embedded in replay JSON,
+cookies, diagnostics, persisted records, or artifacts. The transient handoff carries only an
+opaque single-use token in its POST body.
 
 There is no JSON API route for replay in this slice.
 
@@ -174,10 +185,11 @@ disabled, and a fixed local error is shown. No network recovery is attempted.
 
 ## State boundary
 
-The replay route does not persist calculations, create missions, write artifacts, modify source
-cache rows, create research memory, or add migrations. It performs no network access and adds no
-provider behavior, scheduler, background job, agent, LLM call, quantum behavior, collision analysis,
-maneuver recommendation, deployment code, or authentication.
+The replay routes do not persist calculations, create missions, write artifacts, modify source
+cache rows, create research memory, or add migrations. Optional handoff state is bounded process
+memory and is lost on use, expiry, shutdown, or restart. The routes perform no network access and
+add no provider behavior, scheduler, background job, agent, LLM call, quantum behavior, collision
+analysis, maneuver recommendation, deployment code, authentication, or authorization.
 
 ## Future work
 

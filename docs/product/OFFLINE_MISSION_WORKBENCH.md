@@ -16,9 +16,16 @@ certified for command, maneuver, collision, or safety decisions.
 `MissionWindowService`, and renders the result. There is no JSON API for this surface.
 
 Successful bundled-catalog results include a POST-only `Replay this request` action that reuses
-the same allowlisted catalog identity, observer, and interval. Request-local custom TLE results do
-not embed raw TLE lines in a handoff; they state that direct replay is unavailable and return the
-user to the Workbench without substituting catalog data.
+the same allowlisted catalog identity, observer, and interval. When the local Solo Alpha transient
+handoff is explicitly enabled, successful custom-TLE results provide a separate temporary,
+single-use POST action backed by bounded process memory. The browser receives only an opaque token;
+raw TLE remains server-side and no catalog object is substituted. With the feature disabled,
+custom results retain the honest unavailable guidance.
+
+U4.3E is implemented behind the explicit default-off local Solo Alpha flag. Workbench HTML uses
+the approved `Referrer-Policy: same-origin` compatibility scope, and enabled natural browser forms
+send the canonical Origin plus `Sec-Fetch-Site: same-origin`. The handoff remains loopback-only,
+single-process, non-authenticated, non-public, and non-production.
 
 The form requires:
 
@@ -104,16 +111,17 @@ values must be finite and within the Mission Window Engine bounds. User-visible 
 escaped, unsafe display labels are rejected, and errors use fixed safe messages without reflecting
 orbital text.
 
-Calculations are request-local and are not persisted by this slice. No process-global registry,
-background job, scheduler, network adapter, authentication mechanism, or new artifact-serving path
-is introduced.
+Calculations are not durably persisted. The optional custom-TLE handoff uses a container-owned,
+bounded, five-minute process-local record and a scoped 30-minute opaque session cookie. It is
+default-off, single-process, loopback-only, and cleared at shutdown. It is not authentication,
+authorization, browser storage, a process-global registry, durable audit, background job,
+scheduler, network adapter, or artifact path.
 
 ## Deferred work
 
-Direct custom-TLE result-to-replay handoff remains deferred because the Workbench does not retain
-raw TLE input and has no bounded owner-scoped transient session contract. Guarded fresh-source
-integration also remains separate and must preserve explicit enablement, source policy, caching,
-attribution, freshness, and non-live safety language.
+Public, reverse-proxied, multi-worker, durable, or authenticated custom-TLE handoff remains
+deferred. Guarded fresh-source integration also remains separate and must preserve explicit
+enablement, source policy, caching, attribution, freshness, and non-live safety language.
 
 Live source search, city search, geolocation, map tiles, 3D globes, generated video, calculation
 persistence, public APIs, collision analysis, agents, LLMs, and quantum behavior remain out of

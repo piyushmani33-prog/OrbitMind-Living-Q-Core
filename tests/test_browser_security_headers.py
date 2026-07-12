@@ -14,7 +14,11 @@ import pytest
 from fastapi.testclient import TestClient
 from starlette.responses import Response
 
-from orbitmind.api.app import CONTENT_SECURITY_POLICY, create_app
+from orbitmind.api.app import (
+    CONTENT_SECURITY_POLICY,
+    WORKBENCH_REFERRER_POLICY,
+    create_app,
+)
 from orbitmind.api.container import AppContainer
 from orbitmind.api.presentation.trajectory_replay import script_safe_json
 from orbitmind.api.routers import workbench
@@ -106,6 +110,12 @@ def _extract_mission_id(body: str) -> str:
         ("POST", "/workbench/run", _catalog_form(catalog_sample_id="unknown"), 422),
         ("POST", "/workbench/replay", _catalog_form(), 200),
         ("POST", "/workbench/replay", _catalog_form(catalog_sample_id="unknown"), 422),
+        (
+            "POST",
+            "/workbench/replay/custom-handoff",
+            {"handoff_id": "A" * 43},
+            410,
+        ),
         ("GET", "/review", None, 200),
     ],
 )
@@ -122,7 +132,12 @@ def test_html_responses_receive_browser_security_headers(
     assert response.headers["content-type"].startswith("text/html")
     assert response.headers["content-security-policy"] == CONTENT_SECURITY_POLICY
     assert response.headers["x-content-type-options"] == "nosniff"
-    assert response.headers["referrer-policy"] == "no-referrer"
+    expected_referrer_policy = (
+        WORKBENCH_REFERRER_POLICY
+        if path == "/workbench" or path.startswith("/workbench/")
+        else "no-referrer"
+    )
+    assert response.headers["referrer-policy"] == expected_referrer_policy
     assert response.headers["x-frame-options"] == "DENY"
     assert "geolocation=()" in response.headers["permissions-policy"]
 
@@ -153,6 +168,7 @@ def test_replay_controller_asset_is_exact_allowlisted_resource(client: TestClien
     assert first.headers["x-content-type-options"] == "nosniff"
     assert first.headers["cache-control"] == "no-store"
     assert "content-security-policy" not in first.headers
+    assert "referrer-policy" not in first.headers
     assert first.content == second.content
     assert "sourceMappingURL" not in first.text
     assert "C:\\" not in first.text
@@ -337,6 +353,29 @@ def test_html_content_type_with_surrounding_whitespace_receives_security_headers
     assert "geolocation=()" in response.headers["permissions-policy"]
 
 
+def test_workbench_referrer_policy_path_scope_is_exact(container: AppContainer) -> None:
+    app = create_app(container)
+
+    def html_response() -> Response:
+        return Response("<p>HTML probe</p>", media_type="text/html")
+
+    def binary_response() -> Response:
+        return Response(b"binary probe", media_type="application/octet-stream")
+
+    app.add_api_route("/workbench-other", html_response, methods=["GET"])
+    app.add_api_route("/_test/unrelated-html", html_response, methods=["GET"])
+    app.add_api_route("/workbench-binary", binary_response, methods=["GET"])
+    with TestClient(app) as test_client:
+        workbench_other = test_client.get("/workbench-other")
+        unrelated = test_client.get("/_test/unrelated-html")
+        binary = test_client.get("/workbench-binary")
+
+    assert workbench_other.headers["referrer-policy"] == "no-referrer"
+    assert unrelated.headers["referrer-policy"] == "no-referrer"
+    assert "referrer-policy" not in binary.headers
+    assert "content-security-policy" not in binary.headers
+
+
 def test_json_and_file_responses_do_not_receive_html_csp(client: TestClient) -> None:
     json_response = client.get("/health")
     sample_response = client.post("/review/run")
@@ -346,9 +385,11 @@ def test_json_and_file_responses_do_not_receive_html_csp(client: TestClient) -> 
     assert json_response.status_code == 200
     assert json_response.headers["content-type"].startswith("application/json")
     assert "content-security-policy" not in json_response.headers
+    assert "referrer-policy" not in json_response.headers
     assert artifact_response.status_code == 200
     assert "OrbitMind Offline Sample Static Report" in artifact_response.text
     assert "content-security-policy" not in artifact_response.headers
+    assert "referrer-policy" not in artifact_response.headers
 
 
 def test_pyproject_package_data_includes_replay_asset() -> None:

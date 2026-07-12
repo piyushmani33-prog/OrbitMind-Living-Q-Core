@@ -99,7 +99,8 @@ values, or internal exceptions.
 HTML responses also receive:
 
 - `X-Content-Type-Options: nosniff`
-- `Referrer-Policy: no-referrer`
+- `Referrer-Policy: no-referrer` by default; Workbench HTML uses the documented
+  `same-origin` compatibility policy
 - `X-Frame-Options: DENY`
 - `Permissions-Policy` disabling geolocation, microphone, camera, payment, USB,
   magnetometer, gyroscope, and accelerometer.
@@ -118,9 +119,7 @@ allowed by this baseline.
 
 ### U4.3F Workbench compatibility decision
 
-U4.3F is documentation-only. The currently implemented header remains
-`Referrer-Policy: no-referrer` on this branch. A resumed U4.3E implementation must
-apply this narrowly scoped exception:
+U4.3F selected and U4.3E implements this narrowly scoped exception:
 
 - HTML responses for the exact `/workbench` path and the `/workbench/` subtree,
   including safe HTML errors, use `Referrer-Policy: same-origin`;
@@ -151,7 +150,10 @@ URLs contain no raw TLE, handoff token, session identifier, credential, or other
 sensitive state; the handoff token remains only in a bounded POST body. Any
 future proposal to place sensitive state in a Workbench URL reopens this decision.
 
-The exception does not permit an external form action, script, font, map, fetch,
+Real Chrome QA on the enabled feature confirmed natural custom-TLE form submission,
+canonical Origin, exact `Sec-Fetch-Site: same-origin`, replay success, duplicate and owner-mismatch
+failure, expiry failure, JavaScript-disabled replay, reduced-motion pause, mobile layout, and
+same-origin-only requests. No normal-use CSP violation occurred. The exception does not permit an external form action, script, font, map, fetch,
 or redirect. CSP remains unchanged, including `form-action 'self'`,
 `connect-src 'none'`, and `frame-ancestors 'none'`. It does not weaken exact Host,
 Origin, Fetch-Metadata, cookie, token, single-use, or owner-binding checks. It
