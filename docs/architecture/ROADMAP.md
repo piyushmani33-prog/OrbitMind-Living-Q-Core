@@ -128,6 +128,12 @@ ephemeral session-cookie, CSRF/origin, limits, audit, and single-process decisio
 approved for public or multi-worker deployment. See
 [CUSTOM_TLE_TRANSIENT_HANDOFF_ARCHITECTURE.md](CUSTOM_TLE_TRANSIENT_HANDOFF_ARCHITECTURE.md).
 
+**U4.3D transient handoff decision closure:** the local Solo Alpha design now freezes its canonical
+origin, Host/Origin checks, ephemeral cookie, token, route/body, logical-size, capacity, atomicity,
+single-process, diagnostic, and failure contracts. It is approved for a later default-off
+single-process implementation only; public, non-loopback, reverse-proxy, and multi-worker use
+remain forbidden.
+
 ### Further optimization (planned / deferred)
 Larger instances / additional solvers, still classical-baseline-first and bounded.
 

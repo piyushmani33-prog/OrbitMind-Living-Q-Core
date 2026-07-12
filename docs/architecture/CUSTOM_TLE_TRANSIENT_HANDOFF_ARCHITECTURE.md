@@ -2,64 +2,65 @@
 
 ## Status
 
-- **Document status:** Proposed; documentation only
-- **Slice:** U4.3C
-- **Date:** 2026-07-12
-- **Design verdict:** **APPROVE DESIGN WITH REQUIRED DECISIONS**
-- **Implementation authority:** None. This document does not authorize production code,
-  persistence, a migration, authentication, deployment, or a network path.
+- **Document status:** Decision closed; documentation only
+- **Slices:** U4.3C architecture and U4.3D decision closure
+- **Decision date:** 2026-07-12
+- **Design verdict:** **APPROVE DESIGN FOR IMPLEMENTATION**
+- **Implementation authority:** A later reviewed slice may implement only this local Solo Alpha
+  design. This document implements no code, cookie, session, token, route, store, audit behavior,
+  persistence, migration, authentication, deployment, or network path.
 
-Implementation remains gated on the decisions in [Review gates](#review-gates). The design is
-limited to the local, single-process Solo Alpha environment.
+All material architecture decisions identified by U4.3C are closed below. Approval remains limited
+to an explicitly enabled, loopback-bound, single-process Solo Alpha application. Public,
+non-loopback, multi-worker, and distributed use remain forbidden.
 
 ## Problem statement
 
 The Mission Workbench accepts a request-local custom TLE, validates it, and can calculate mission
-windows or a trajectory replay when the raw lines are present in that request. A successful
-custom-TLE mission-window result should be able to offer `Replay this request` without asking the
-user to enter the same TLE again.
+windows or a trajectory replay while the raw lines remain in that request. A successful custom-TLE
+mission-window result should offer `Replay this request` without asking the user to enter those
+lines again.
 
 The handoff must not disclose raw TLE through HTML, URLs, JavaScript, browser storage, cookies,
 logs, errors, artifacts, caches, or durable database records. It must not substitute a catalog
-object and must not create a new provider or network path.
+object and must not introduce a provider or network path.
 
 ## Existing limitation
 
 `POST /workbench/run` parses a bounded `WorkbenchForm`, resolves custom input through the existing
-custom-TLE validator, builds a typed `MissionWindowRequest`, and renders a result. The rendered
-result retains only safe display identity and checksum information. In particular, its stable
-identity is `custom-tle:<element-checksum>`.
+custom-TLE validator, builds a typed `MissionWindowRequest`, and renders a result. That result
+retains only safe display identity and checksum information. Its stable identity is
+`custom-tle:<element-checksum>`.
 
-A checksum authenticates matching recovered input; it cannot reconstruct the two orbital-element
-lines. `POST /workbench/replay` therefore cannot replay that result unless the user submits the raw
+A checksum can authenticate matching recovered input but cannot reconstruct the two orbital-element
+lines. `POST /workbench/replay` therefore cannot replay the result unless the user submits the raw
 TLE again. U4.3B correctly leaves direct custom-TLE handoff unavailable and never falls back to a
 bundled object.
 
-Current related boundaries are:
+Current boundaries relevant to this decision are:
 
-- the Workbench body is bounded to 4,096 bytes;
-- the existing validator bounds each TLE line to 100 characters and the optional label to 80;
-- Workbench calculations do not persist missions, replay, artifacts, or source-cache entries;
+- the Workbench request body is bounded to 4,096 bytes;
+- the validator bounds each TLE line to 100 characters and the optional label to 80 characters;
+- Workbench calculations do not persist missions, replays, artifacts, or source-cache entries;
 - network, CelesTrak, and open research are disabled by default;
-- the browser CSP permits only same-origin script and form actions and sets `connect-src 'none'`;
+- browser CSP permits same-origin scripts and forms and sets `connect-src 'none'`;
 - the application container owns process-lifetime services;
-- OrbitMind has no browser session framework or authenticated user principal;
-- `get_current_owner_id()` is a fixed local-owner boundary for selected persisted APIs, not a
-  browser identity and not suitable for binding two browser requests; and
-- the existing governed `AuditEvent` path is database-backed. Reusing it would make lifecycle
-  events durable and therefore needs an explicit persistence/privacy decision.
+- OrbitMind has no browser session framework or authenticated browser principal;
+- the fixed `local-owner` dependency used by selected persisted APIs cannot distinguish browsers;
+  and
+- the governed `AuditEvent` path is database-backed and is not used by this transient design.
 
 ## Goals
 
-- Carry one validated custom-TLE mission-window request into one trajectory replay.
+- Carry one validated custom-TLE mission-window request into exactly one trajectory replay.
 - Keep raw TLE entirely server-side after the original POST.
 - Bind the handoff to one short-lived local browser session and one replay-only purpose.
-- Use an unguessable opaque identifier with fixed expiry and strict capacity limits.
+- Use a 256-bit opaque identifier with fixed expiry and strict capacity limits.
 - Guarantee atomic single use under concurrent submissions.
 - Fail closed on absence, malformed input, expiry, reuse, owner mismatch, restart, or capacity
   exhaustion.
-- Preserve the existing typed trajectory-replay service as scientific authority.
-- Make lifecycle outcomes auditable without recording raw TLE, token, or session values.
+- Preserve `TrajectoryReplayService` as the scientific authority.
+- Provide bounded transient diagnostic observability without sensitive data.
 
 ## Non-goals
 
@@ -68,218 +69,341 @@ Current related boundaries are:
 - Durable handoff recovery across restart
 - Database, filesystem, artifact, browser-storage, or cache persistence
 - Provider calls, source refresh, catalog substitution, or network access
-- A general session framework or general-purpose cache
-- Replay of any purpose other than custom-TLE trajectory replay
+- A general session framework, general cache, or durable audit system
+- Replay for any purpose other than custom-TLE trajectory replay
 - Changes to SGP4, mission-window, geometry, or trajectory-replay calculations
-- A complete CSRF solution for future public deployment
+- A complete public-deployment CSRF system
 
 ## Safety invariants
 
 1. Raw TLE is never emitted in HTML, a URL, JavaScript, browser storage, a cookie, a log, an
    error, an artifact, a cache file, or a database record.
-2. The client receives only a cryptographically random opaque handoff identifier.
+2. The client receives only a server-generated opaque handoff identifier.
 3. The identifier is accepted only by a fixed same-origin POST endpoint for custom-TLE replay.
-4. A record is bound to one ephemeral browser-session identity and one purpose.
-5. Consumption atomically removes the record before replay calculation starts.
-6. Missing, malformed, expired, consumed, owner-mismatched, or restart-lost state produces no
-   replay and no source fallback.
-7. Store capacity, per-session capacity, input sizes, and lifetimes are fixed and bounded.
-8. Process shutdown clears all remaining state; process restart cannot recover it.
-9. Audit output never contains raw TLE, token values, session-cookie values, raw request bodies,
-   authorization headers, or local paths.
-10. This mechanism is local request continuity, not authentication or authorization.
+4. A record is bound to one ephemeral browser session and one purpose.
+5. Correct consumption atomically removes the record before replay begins.
+6. Owner mismatch does not remove or consume the record.
+7. Missing, malformed, expired, consumed, mismatched, or restart-lost state produces no replay and
+   no source fallback.
+8. Capacity, per-session capacity, input sizes, and lifetimes are fixed and bounded.
+9. Shutdown clears state; restart cannot recover it.
+10. Diagnostic output never contains raw TLE, token, session value, session digest, request body,
+    authorization material, path, or stack trace.
+11. This mechanism provides local request continuity, not authentication or authorization.
 
 ## Threat model
 
-| Threat | Local Solo Alpha treatment | Residual/public-deployment concern |
+| Threat | Local Solo Alpha treatment | Residual/public concern |
 | --- | --- | --- |
-| Raw TLE in HTML or hidden fields | Raw lines remain only in the server record; client form carries the opaque identifier | Independent disclosure review remains required |
-| Token in URL, Referer, browser history, or access-log query | POST body only; no GET route or query parameter; `Referrer-Policy: no-referrer` remains | Reverse-proxy request-body logging must be disabled/reviewed |
-| Token leakage through analytics | No analytics or external reporting exists | Public telemetry policy remains required |
-| Another browser/user replays a token | Record is bound to a separate opaque session cookie | Cookie theft and real user authorization require HTTPS and authentication |
-| Replay after expiry | Monotonic deadline is checked while holding the store lock; expired record is removed | Distributed clock/store behavior is not addressed |
-| Token reuse | Atomic pop means only one consumer can receive the record | Distributed atomicity is not addressed |
-| Token guessing | 256 bits from an operating-system CSPRNG; fixed bounded parsing | Rate limiting remains required for public exposure |
-| Token fixation | Server creates both session and handoff identifiers; client cannot select either | Session fixation controls need broader review with authentication |
-| Cross-request source substitution | All source and replay inputs are stored in one immutable record; client cannot resubmit them | No residual substitution within this design |
-| Catalog/ISS fallback | Explicitly prohibited on every failure | No residual fallback is accepted |
-| Process restart or auto-reload | State is deliberately lost; replay fails closed | Usability and multi-worker routing remain limitations |
-| Unbounded memory growth | Global and per-session caps, bounded record shape, TTL, and opportunistic cleanup | Host-level DoS and rate limiting remain public concerns |
-| Excessive handoff creation | Per-session/global caps; capacity rejection does not retain input | Distributed abuse protection remains deferred |
-| Concurrent duplicate consume | One short thread-safe critical section performs validation and pop | Multiple processes cannot share this atomicity |
-| Error/debug leakage | Fixed browser errors and sanitized reason codes; no raw values in exceptions | Server/debug/proxy configuration requires deployment review |
-| CSRF | SameSite=Strict, POST-only, opaque single-use token, and strict local Origin/Host checks reduce risk | Dedicated CSRF protection is still required before public deployment |
-| Future multi-user use | Explicitly unsupported | Authentication, authorization, tenancy, HTTPS, shared atomic store, and rate limits are required |
+| Raw TLE in HTML or hidden fields | Raw lines stay in a server-side record; the form carries only an opaque identifier | Independent disclosure review remains required |
+| Identifier in URL, Referer, history, or query logs | POST body only; no GET/query route; `Referrer-Policy: no-referrer` remains | Proxy request-body logging requires separate review |
+| Alternate host or DNS rebinding | Exact configured Host and port; no DNS resolution; forwarded headers rejected | Trusted-proxy design remains deferred |
+| Cross-origin form submission | Exact Origin or narrowly accepted same-origin fetch metadata | A public CSRF framework remains mandatory |
+| Another browser consumes a token | Keyed session binding checked before removal | Cookie theft requires HTTPS and authentication |
+| Expired or reused token | Monotonic expiry and atomic pop | Distributed atomicity is not addressed |
+| Token guessing or fixation | 256 CSPRNG bits; server creates identifiers; strict format | Public rate limiting remains required |
+| Cross-request source substitution | All replay inputs are in one immutable server record | No client scientific fields are accepted |
+| Catalog/ISS fallback | Prohibited on every failure | No fallback is accepted |
+| Restart, reload, or multiple workers | Feature is one-process only; restart/reload loses state; multi-worker enablement is rejected | Shared-state design remains deferred |
+| Unbounded memory or creation abuse | Fixed global/session caps, logical-size bound, TTL, and cleanup | Host DoS and public rate limiting remain deferred |
+| Concurrent duplicate consume | One lock-held validation and removal gives exactly one success | Multiple processes are prohibited |
+| Error/debug leakage | Fixed browser messages and bounded reason codes | Deployment logging/proxy policy remains deferred |
 
-The local design addresses accidental client disclosure, guessing, reuse, short-lived cross-request
-continuity, bounded memory, and same-process races. It does not address a compromised browser,
-host, process, or reverse proxy, nor does it provide public-deployment identity or abuse controls.
+The local design addresses client disclosure, guessing, reuse, short-lived cross-request
+continuity, DNS-rebinding inputs, bounded memory, and same-process races. It does not protect a
+compromised browser, host, process, debugger, crash dump, or reverse proxy.
 
 ## Options considered
 
-| Option | Confidentiality | Expiry / single use | Owner binding | Restart behavior | Complexity / auditability | Local Solo Alpha | Future multi-user |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| A. Raw TLE hidden fields | Fails: raw TLE is in HTML | Client can replay indefinitely | None | Survives in page | Simple but disclosive | **Reject** | **Reject** |
-| B. Raw TLE URL/query | Fails through history, Referer, and logs | Poor | None | URL survives | Simple and highly observable | **Reject** | **Reject** |
-| C. Base64/reversible client value | Encoding provides no confidentiality | Replayable | None | Client retains it | Misleadingly simple | **Reject** | **Reject** |
-| D. Signed/encrypted client payload | Encryption can protect content if keys are sound | Must add expiry/replay registry | Possible but complex | Survives process restart if keys do | Key rotation, body logging, size, replay state, and error handling are substantial | Not the smallest safe choice | Reconsider only with managed keys and full session/auth design |
-| E. Bounded process-local store | Raw TLE stays server-side | Native TTL and atomic pop | Ephemeral session binding | Deliberate total loss | Small, reviewable, auditable in memory | **Recommended** | **Not suitable** |
-| F. Database transient record | Server-side confidentiality | Transactional expiry/use possible | Auth principal possible | Can survive restart | Requires schema, cleanup, retention, encryption/access review | Defer; violates this slice's no-persistence boundary | Candidate only in a separately approved distributed design |
-| G. localStorage/sessionStorage/cookie with raw TLE | Fails client non-disclosure boundary | Browser-controlled | Weak | Browser-dependent | Exposes source to scripts/storage tools | **Reject** | **Reject** |
-| H. Catalog substitution | Avoids carrying raw TLE by changing scientific source | Irrelevant | Irrelevant | Irrelevant | Scientifically dishonest | **Reject** | **Reject** |
+| Option | Confidentiality | Expiry / single use | Owner binding | Restart | Local Solo Alpha | Future multi-user |
+| --- | --- | --- | --- | --- | --- | --- |
+| Raw TLE hidden fields | Fails: raw TLE is HTML | Replayable | None | Page retains it | **Reject** | **Reject** |
+| Raw TLE URL/query | Fails through history, Referer, and logs | Poor | None | URL retains it | **Reject** | **Reject** |
+| Base64/reversible client value | Encoding is not confidentiality | Replayable | None | Client retains it | **Reject** | **Reject** |
+| Signed/encrypted client payload | Depends on key custody | Needs replay state | Complex | Can survive | Not the smallest safe option | Reconsider only with managed keys and auth |
+| Bounded process-local store | Raw TLE stays server-side | Native TTL and atomic pop | Ephemeral session HMAC | Deliberate loss | **Approved** | **Not suitable** |
+| Database transient record | Server-side | Transactional | Principal possible | Can survive | Reject for this no-persistence boundary | Separate future review only |
+| Browser storage/cookie with raw TLE | Fails client boundary | Browser-controlled | Weak | Browser-dependent | **Reject** | **Reject** |
+| Catalog substitution | Changes scientific source | Irrelevant | Irrelevant | Irrelevant | **Reject** | **Reject** |
 
-An encrypted client-carried payload is not recommended merely to avoid server memory. It would add
-key custody, rotation, ciphertext logging, nonce, expiry, replay prevention, cookie/session
-binding, and size concerns while still requiring server-side state for strict single use.
+An encrypted client-carried payload would still require key rotation, expiry, replay prevention,
+session binding, ciphertext-log review, and size controls. It is not approved for this feature.
 
 ## Decision
 
-The recommended initial architecture is an application-container-owned, bounded, process-local
-transient handoff store. It is available only when the app runs as one process on loopback for
-Solo Alpha.
+Approve an application-container-owned, bounded, process-local transient handoff store. It is
+available only when explicitly enabled for one process bound to the canonical loopback origin.
 
-After a custom-TLE mission-window request has passed existing form validation, custom-TLE
-validation, and mission-window calculation, the server stores one immutable replay record. The
-record contains the validated raw elements and every scientifically relevant request input. The
-server renders only a 256-bit random opaque handoff identifier in a same-origin POST form.
+After existing custom-TLE validation and successful mission-window calculation, the server stores
+one immutable replay record containing the validated elements and all scientifically relevant
+inputs. It renders only a random opaque handoff identifier in a same-origin POST form.
 
-`POST /workbench/replay/custom-handoff` is the recommended fixed route. A dedicated route makes
-the replay-only purpose and strict one-field parser explicit and avoids overloading the existing
-full Workbench form parser. It is not a JSON API and accepts no source, observer, interval, or TLE
-fields from the browser.
+The approved route is:
 
-The store hashes the presented handoff identifier for lookup and hashes the session identifier for
-binding. Neither raw identifier is retained in records or emitted to audit. A constant-time
-comparison should be used wherever digest comparisons are not delegated to exact dictionary-key
-lookup.
+```text
+POST /workbench/replay/custom-handoff
+```
+
+It is replay-only, accepts one form field, is not a JSON API, and does not use the full Workbench
+form parser. The token digest is the store key. Session binding is a keyed in-process HMAC digest.
+Neither raw identifier is retained in a record or diagnostic event.
+
+## Canonical origin and host validation
+
+The feature has exactly one configured canonical origin:
+
+```text
+http://127.0.0.1:<configured-port>
+```
+
+The future setting `ORBITMIND_CUSTOM_TLE_HANDOFF_PORT` is an integer from 1,024 through 65,535 and
+defaults to `8000`. The canonical origin contains that explicit decimal port, no trailing slash,
+path, query, fragment, user information, or alternate spelling.
+
+`localhost`, `::1`, bracketed IPv6 loopback, hostnames that resolve to loopback, alternate IPv4
+forms, and another port are rejected. `localhost` is not an alias and is not a separately supported
+cookie scope. Trust is never inferred through DNS resolution.
+
+For every Workbench request that can create or consume handoff state:
+
+- raw ASGI headers must contain exactly one `Host` header;
+- its value must be exactly `127.0.0.1:<configured-port>` after trimming optional HTTP whitespace;
+- commas, user information, empty host/port, malformed port, and duplicate Host headers fail;
+- the ASGI request scheme must be exactly `http` for this approved local origin;
+- any `Forwarded` header, any header whose lower-case name starts with `x-forwarded-`, or
+  `X-Original-Host`, `X-Original-Proto`, `X-Real-IP`, or `X-Rewrite-URL` fails closed; and
+- forwarded values are never consulted, even when they claim loopback.
+
+Validation occurs before reading a request body, issuing a session cookie, creating state, or
+looking up a token. Failure returns status 400 with fixed safe HTML:
+
+> This local Workbench request is unavailable.
+
+The response retains browser-security headers and contains no supplied header, host, port, raw
+TLE, token, path, or internal detail.
+
+## Origin policy
+
+Every state-changing Workbench POST involved in creation or consumption uses this policy:
+
+- raw headers may contain at most one `Origin` header;
+- if supplied, its value must be exactly the canonical origin string;
+- `Origin: null`, malformed origins, trailing slash, alternate host, `localhost`, `::1`, different
+  port, HTTPS/HTTP mismatch, duplicate Origin headers, credentials, path, query, or fragment fail;
+- supplied Origin comparison is exact after trimming optional surrounding HTTP whitespace; no DNS,
+  default-port, case, or alias normalization creates equivalence;
+- if Origin is absent, the request is accepted only when Host and scheme passed the canonical
+  checks, no forwarded header is present, and raw headers contain exactly one
+  `Sec-Fetch-Site: same-origin` value; and
+- an absent Origin with missing, duplicate, malformed, `none`, `same-site`, or `cross-site`
+  `Sec-Fetch-Site` fails closed.
+
+Rejected Origin/fetch-metadata requests return status 403 with the same fixed safe HTML used for
+Host rejection. No body is parsed and no state is created, looked up, rotated, or consumed.
+
+This deliberately favors current browser form behavior. Non-browser and older clients that do not
+provide either exact Origin or accepted fetch metadata must not use this handoff.
 
 ## Session/owner binding
 
-A safe owner-bound design is not possible in the current browser architecture without introducing
-a minimal ephemeral session cookie. IP address and User-Agent are unstable, shared, spoofable, and
-must not be used as owner identity.
+A browser-specific binding requires a minimal ephemeral session cookie. IP address, User-Agent,
+and the fixed `local-owner` value are not owner identities for this purpose.
 
-The proposed local session contract is:
+The approved cookie contract is:
 
-- server-generated 32 random bytes encoded as unpadded base64url;
-- cookie name fixed by the implementation review, for example `orbitmind_local_session`;
-- contains only the opaque random identifier, never TLE, credentials, ownership claims, or replay
-  data;
-- `HttpOnly`, `SameSite=Strict`, and `Path=/workbench`;
-- 30-minute absolute lifetime, with no sliding extension from arbitrary requests;
-- rotate by issuing a new identifier when absent or expired; do not accept a client-selected
-  replacement;
-- clear on expiry where a response can do so; server-side bindings expire independently;
-- `Secure` must be true under HTTPS;
-- for the explicitly approved loopback HTTP Solo Alpha command only, `Secure` must be false
-  because browsers otherwise withhold it. This exception is not permitted for non-loopback HTTP;
-  and
-- no `Domain` attribute, so it remains host-only.
+- name: `orbitmind_handoff_session`;
+- value: 32 bytes from the operating-system CSPRNG, encoded as exactly 43 unpadded base64url
+  characters from `[A-Za-z0-9_-]`;
+- `HttpOnly`;
+- `SameSite=Strict`;
+- no `Domain` attribute, making it host-only;
+- `Path=/workbench`;
+- `Max-Age=1800`;
+- absolute 30-minute server-side monotonic expiry with no sliding extension;
+- `Secure=False` only on the approved canonical loopback HTTP origin;
+- `Secure=True` is mandatory for any separately approved HTTPS design;
+- the feature is disabled on non-loopback HTTP;
+- no credentials, raw TLE, ownership claim, or replay data in the value; and
+- no raw session value in records, diagnostics, logs, errors, or rendered content.
 
-This cookie is an ephemeral browser correlation mechanism. It is not authentication, does not
-identify a person, does not authorize access, and is not a multi-user tenancy boundary. The fixed
-`local-owner` dependency is not reused because it would bind all local browsers to the same owner.
+The container creates one 32-byte CSPRNG HMAC key at startup. It is never configured, persisted,
+logged, rendered, or exported and is discarded at shutdown. The store uses
+`HMAC-SHA-256(process_key, raw_session_value)` as the session binding. This prevents a reusable raw
+cookie or unsalted digest from entering records and makes all bindings invalid after restart.
 
-Session rotation invalidates prior handoffs for that browser because their binding digest no
-longer matches. Consuming a handoff does not need to rotate the whole session; the handoff itself
-is removed atomically.
+A bounded in-memory session registry stores only the HMAC digest plus monotonic creation/expiry
+deadlines. It has the same global maximum of 128 live entries as the handoff store. A session is
+created only after a successful custom-TLE mission-window calculation needs a handoff, not on GET.
+
+On the creation path, a missing, malformed, expired, or registry-unknown cookie is replaced with a
+new server-generated value if capacity permits. The submitted value is never registered or treated
+as authoritative. Rotation invalidates prior handoffs for that browser. On the consume path, an
+invalid or unknown cookie is not rotated into authority for the submitted handoff; consumption
+fails as unavailable. Consuming one handoff does not rotate a valid session.
+
+This is browser correlation, not authentication, authorization, tenancy, or proof of identity.
+
+## Handoff token contract
+
+- Generate exactly 32 bytes with the operating-system CSPRNG.
+- Encode as exactly 43 unpadded base64url characters.
+- Permit only ASCII `[A-Za-z0-9_-]`.
+- Reject length or alphabet errors before hashing or store lookup.
+- Use the 32-byte SHA-256 digest of the ASCII token as the store key.
+- Place the raw token only in the POST request body.
+- Never place it in a URL, query, fragment, cookie, log, diagnostic event, error, or redirect.
+- Retry generation at most three times if its digest collides with a live key.
+- After three collisions, create no record and return the fixed capacity/internal-unavailable
+  presentation without exposing collision details.
+
+SHA-256 is sufficient for the store key because the input has 256 bits of server-generated
+entropy. The session binding uses keyed HMAC because session values have a separate lifecycle and
+must not leave reusable digests in records.
 
 ## Transient record model
 
-The later implementation should define frozen typed models rather than dictionaries. A record
-needs only:
+The future record is frozen and typed. It contains only:
 
-- handoff lookup digest (or the digest as its map key);
-- session-binding digest;
-- fixed purpose enum: `CUSTOM_TLE_TRAJECTORY_REPLAY`;
-- monotonic creation and expiry deadlines;
-- safe custom source label and stable source/checksum identity;
-- validated TLE line 1 and line 2 required to reconstruct `PinnedOrbitElementSet`;
-- validated observer latitude, longitude, and altitude;
-- UTC replay start and end, or start plus bounded duration;
-- selected deterministic replay sample interval and maximum sample bound; and
-- immutable schema/version marker for fail-closed decoding across code changes, if needed.
+- 32-byte handoff lookup digest;
+- 32-byte session HMAC digest;
+- fixed purpose `CUSTOM_TLE_TRAJECTORY_REPLAY`;
+- fixed record schema version;
+- monotonic creation, handoff-expiry, and session-expiry deadlines;
+- validated safe custom label;
+- validated TLE line 1 and line 2;
+- 64-character lowercase hexadecimal source checksum;
+- safe stable custom source reference;
+- UTC replay start and end;
+- observer latitude, longitude, and altitude as finite binary64 values;
+- deterministic sample interval; and
+- maximum sample count.
 
-Store all replay-defining inputs server-side. Resubmitting observer, interval, or sample settings as
-hidden fields would be non-sensitive but would permit mutation between mission-window and replay
-requests. Keeping them in the record guarantees that `Replay this request` means the exact source,
-observer, interval, and sampling policy from the successful result. The trade-off is a slightly
-larger record, still tightly bounded and short-lived.
+All replay inputs remain server-side. The client cannot alter source, observer, interval, or
+sampling policy between mission-window calculation and replay.
 
-Explicitly exclude passwords, provider keys, authorization headers, cookies, raw session values,
-arbitrary headers, filesystem paths, arbitrary metadata, ORM objects, sessions/connections, full
-HTML, client-generated state, mission records, artifacts, and unrelated form fields.
+The record explicitly excludes passwords, provider keys, authorization/cookie headers, raw
+session values, arbitrary headers, paths, metadata, ORM objects, database connections, HTML,
+browser state, artifacts, and unrelated form fields.
 
-No consumed flag is required in the live record: successful lookup removes the record. A bounded
-reason counter may record a consume outcome, but no token tombstone is required or exposed.
+The record type must not use a default representation that includes sensitive fields. Raw TLE
+fields use `repr=False`, and the type provides only a fixed redacted representation such as:
+
+```text
+TransientCustomTleHandoffRecord(<redacted>)
+```
+
+Logging the record object is prohibited. Exceptions, assertions, validation messages, and
+diagnostic events must identify only a safe field name and fixed reason code, never a rejected or
+stored value.
+
+## Logical record-size definition
+
+The enforceable logical size is not Python heap usage and must not use `sys.getsizeof`. Before
+insertion, compute:
+
+```text
+logical_size =
+    raw byte length of fixed binary scalar fields
+  + UTF-8 byte length of every textual scalar
+  + 4 bytes of framing for each textual scalar
+```
+
+Approved per-field maxima are:
+
+| Field group | Maximum encoded bytes |
+| --- | ---: |
+| Handoff digest and session HMAC | 64 total |
+| Purpose | 32 |
+| Record schema version | 32 |
+| Custom label | 80 |
+| TLE line 1 | 100 |
+| TLE line 2 | 100 |
+| Source checksum | 64 |
+| Stable source reference | 80 |
+| UTC start and end | 35 each, 70 total |
+| Observer binary64 values | 24 total |
+| Creation, handoff-expiry, session-expiry binary64 values | 24 total |
+| Sample interval and maximum sample count as unsigned 64-bit integers | 16 total |
+| Text framing for nine textual fields | 36 total |
+
+The total logical record size must be at most **1,024 bytes**. The implementation must calculate
+and reject above-limit records before acquiring capacity for insertion. This bound has deliberate
+headroom over the enumerated maximum while remaining deterministic and enforceable.
 
 ## Lifecycle and state transitions
 
-The stored state model is intentionally small:
+The stored state is deliberately small:
 
 ```text
 validated request
       |
       v
-  AVAILABLE --atomic pop--> CONSUMED (record absent)
+  AVAILABLE --atomic remove--> CONSUMED (record absent)
       |
-      +--deadline/capacity cleanup--> EXPIRED (record absent)
+      +--expiry cleanup-------> EXPIRED (record absent)
 
-Any pre-storage or lookup failure --> REJECTED (event only; no record)
+Any pre-storage or lookup failure -> REJECTED (diagnostic outcome only)
 ```
 
-`CREATED` is an operation, not a durable state. `CONSUMING` is unnecessary because lookup,
-validation, and removal occur in one lock-held operation with no `await` or scientific work inside
-the critical section.
+Creation occurs only after existing form/custom-TLE validation and successful mission-window
+calculation. Under the store lock, creation removes expired records and sessions, checks limits,
+generates a unique digest within three attempts, and inserts one immutable `AVAILABLE` record.
 
-Lifecycle details:
+Atomic consumption uses this exact ordering:
 
-1. Parse and validate the original custom-TLE form through the existing path.
-2. Resolve the validated custom source and complete the mission-window calculation.
-3. Ensure an approved local session exists; generate it server-side if needed.
-4. Sweep expired records, then enforce per-session and global capacity while holding the lock.
-5. Generate 32 CSPRNG bytes for the handoff and retry only on the practically impossible digest
-   collision, with a fixed small retry bound.
-6. Store the immutable record as `AVAILABLE`, bound to session and replay purpose.
-7. Render a POST-only `Replay this request` form containing only the opaque identifier.
-8. On consume, parse the identifier to its exact bounded format, hash it, acquire the store lock,
-   sweep if due, find the record, verify purpose, expiry, and session binding, and atomically pop.
-9. Release the lock and invoke the existing typed trajectory replay service using the returned
-   immutable record.
-10. If replay succeeds, render the existing replay page. If replay fails after pop, return a fixed
-    sanitized error and do not reinsert the record. The user must resubmit the custom TLE.
+1. Validate token length and alphabet.
+2. Derive the SHA-256 lookup digest.
+3. Acquire the single store lock.
+4. Remove expired records and sessions.
+5. Look up the record.
+6. Validate purpose.
+7. Validate the handoff and bound-session expiry deadlines.
+8. Validate the current session HMAC binding.
+9. Atomically remove the record.
+10. Release the lock.
+11. Execute replay from the immutable record.
 
-Two concurrent submissions cannot both consume: one pop succeeds and the other sees unavailable
-state. Duplicate submission, browser back/refresh, missing state, process restart, or auto-reload
-also returns unavailable. Capacity rejection does not create a record and does not affect the
-already completed mission-window result.
+There is no `await`, logging, replay calculation, TLE parsing, HTML rendering, or other external
+call while the lock is held. There is no reinsertion after replay or rendering failure. Two
+concurrent attempts yield exactly one successful removal.
+
+Owner/session binding is validated before removal. A mismatch does not delete, expire, mutate, or
+consume the record. The correct session may consume it later before expiry. The mismatched client
+receives the same unavailable response as an unknown or consumed identifier and cannot learn that
+another session owns it.
 
 ## Limits and expiry
 
-Proposed conservative initial values, subject to implementation review:
+These values are approved for the initial implementation:
 
-| Limit | Proposed value | Rationale |
-| --- | --- | --- |
-| Handoff token entropy | 32 random bytes (256 bits) | Unguessable opaque capability identifier |
-| Encoded token length | 43 unpadded base64url characters | Fixed bounded parser; no arbitrary token input |
-| Handoff TTL | 5 minutes absolute | Enough for immediate handoff; small disclosure/replay window |
-| Session TTL | 30 minutes absolute | Bounded local browser continuity without a persistent session |
-| Global live records | 128 | Hard process-memory ceiling for Solo Alpha |
-| Live records per session | 4 | Bounds repeated generation by one browser |
-| TLE line length | Existing maximum 100 characters each | Reuse reviewed custom-TLE validator |
-| Custom label length | Existing maximum 80 characters | Reuse reviewed label validator |
-| Original Workbench body | Existing maximum 4,096 bytes | Preserve current parser boundary |
-| Handoff POST body | Maximum 256 bytes | One fixed-name, fixed-length identifier plus form encoding |
-| Cleanup cadence | At every create and consume; additionally when 30 seconds have elapsed since the last sweep | Deterministic request-driven cleanup without a scheduler |
-| Collision retries | 3 | Fixed bounded behavior before sanitized internal failure |
+| Limit | Approved value |
+| --- | --- |
+| Handoff entropy | 32 random bytes / 256 bits |
+| Encoded token | 43 unpadded base64url characters |
+| Handoff TTL | 5 minutes absolute, monotonic |
+| Session TTL | 30 minutes absolute, monotonic |
+| Global live handoff records | 128 |
+| Live handoff records per session | 4 |
+| Global live session entries | 128 |
+| TLE line | 100 characters each, existing validator |
+| Custom label | 80 characters, existing validator |
+| Original Workbench body | 4,096 bytes, unchanged |
+| Handoff POST body | 512 wire bytes |
+| Logical record | 1,024 encoded scalar bytes |
+| Token collision retries | 3 |
+| Diagnostic event ring | 256 events |
 
-Use `time.monotonic()` for in-process creation, expiry, and cleanup scheduling so wall-clock changes
-cannot extend a handoff. Use UTC-aware wall time only for sanitized human/audit timestamps. On
-shutdown, clear the whole store. No background scheduler is needed.
+Use `time.monotonic()` for expiry and UTC-aware wall time only for display-safe diagnostic event
+timestamps. Cleanup is request-driven: sweep expired records and sessions before every creation
+capacity check and before every consume lookup. There is no timer, scheduler, or background job.
 
-At the stated caps, raw orbital text is below 200 characters per record plus bounded typed data;
-the implementation should still define a small maximum record-size assertion (proposed 2 KiB of
-bounded scalar input) rather than rely on informal estimates.
+Never evict a live record to make capacity. Never evict another session's record. At per-session or
+global capacity, retain no new raw TLE record and show:
+
+> A temporary replay handoff is not available right now. The mission-window result remains valid;
+> return to the Workbench to try again.
+
+The mission-window response remains HTTP 200 because its scientific calculation succeeded.
 
 ## Request/UI contract
 
@@ -287,254 +411,269 @@ bounded scalar input) rather than rely on informal estimates.
 POST /workbench/run (validated custom TLE)
   -> mission-window result
   -> POST /workbench/replay/custom-handoff
-       handoff_id=<opaque identifier only>
+       handoff_id=<43-character opaque identifier only>
   -> atomic server consume
   -> existing TrajectoryReplayService
   -> server-rendered predicted replay
 ```
 
-Requirements:
+The handoff route contract is:
 
-- The action is a normal HTML form and needs no JavaScript.
-- It uses one fixed same-origin action and POST only; there is no GET counterpart, redirect to an
-  external origin, query parameter, or raw-TLE hidden field.
-- The mission-window result states: the handoff is temporary, single-use, uses the same observer
-  and interval, and opens a predicted replay that is not live tracking.
-- The replay route accepts only the handoff field. Duplicate or unexpected fields fail closed.
-- Existing CSP/security headers apply to success and error HTML.
-- No missing/error path invokes catalog resolution or bundled ISS fallback.
+- method: POST only; no GET equivalent;
+- fixed same-origin action `/workbench/replay/custom-handoff`;
+- media type: exactly `application/x-www-form-urlencoded` after lower-casing and trimming the media
+  type;
+- parameters: absent or exactly one case-insensitive `charset=utf-8`; duplicate Content-Type,
+  duplicate charset, unknown parameter, or another charset is rejected;
+- body: at most 512 wire bytes, decoded as strict UTF-8;
+- form fields: exactly one `handoff_id`; duplicate, missing, blank, or unknown fields are rejected;
+- value: exact 43-character token contract after form decoding;
+- no query, redirect carrying state, raw-TLE field, client scientific field, or JavaScript
+  requirement; and
+- security headers apply to every HTML success and error.
 
-Externally visible token-state failures should deliberately share one response to avoid revealing
-whether another session owns a guessed identifier:
+The normal encoded body is 54 bytes (`handoff_id=` plus 43 safe characters). A 512-byte wire limit
+leaves more than nine times that size for standard form framing while remaining small enough to
+reject padding, repeated fields, and oversized parser input before framework form parsing. Python
+object or framework allocation overhead is not part of the wire-size calculation.
 
-> This temporary replay handoff is unavailable or no longer valid. Return to the Workbench and
-> submit the custom TLE again.
-
-Use status 422 for malformed/missing submissions and 409 or 410 for a well-formed but unavailable
-handoff, with the exact choice approved and tested. Owner mismatch, expired, consumed, restart-lost,
-and unknown state must have the same body. Capacity failure on creation may say:
-
-> A temporary replay handoff is not available right now. The mission-window result remains valid;
-> return to the Workbench to try again.
-
-An internal replay failure after consume uses the existing fixed calculation-failure wording and
-never returns partial replay HTML or embedded payload.
+The mission-window result states that the handoff is temporary, single-use, uses the exact same
+source, observer, and interval, opens a predicted replay, and is not live tracking. It works as an
+ordinary HTML form without JavaScript.
 
 ## Failure semantics
 
-| Condition | Required behavior |
-| --- | --- |
-| Missing or malformed identifier | No lookup beyond bounded parsing; no replay; fixed error |
-| Unknown, expired, or already consumed | No replay; record absent/removed; fixed indistinguishable error |
-| Owner/session mismatch | No replay; do not reveal ownership; fixed indistinguishable error |
-| Wrong purpose | No replay; remove or reject according to approved invariant; fixed error |
-| Process restart/reload | Empty store; no replay; fixed unavailable error |
-| Capacity full | Do not retain raw TLE; render result without active handoff plus fixed guidance |
-| Concurrent duplicate consume | Exactly one obtains the record; all others fail |
-| Replay failure after consume | No reinsertion, no partial result, no fallback, sanitized error |
-| Internal store exception | No token/source detail, no partial result, no fallback |
+All responses are fixed server-rendered HTML with browser-security headers and no reflected input.
 
-Every failure drops request-local raw values as soon as the request completes. Scientific services
-must never receive missing, expired, reused, mismatched, or substituted source state.
+| Condition | Status | Fixed user-facing behavior |
+| --- | ---: | --- |
+| Invalid/duplicate Host or forwarded header | 400 | `This local Workbench request is unavailable.` |
+| Invalid/duplicate/missing-unqualified Origin | 403 | `This local Workbench request is unavailable.` |
+| Unsupported Content-Type | 415 | `The temporary replay handoff request is invalid.` |
+| Body over 512 bytes | 413 | `The temporary replay handoff request is invalid.` |
+| Missing/duplicate/unknown field or malformed token | 422 | `The temporary replay handoff request is invalid.` |
+| Unknown, expired, consumed, owner-mismatched, purpose-mismatched, or restart-lost token | 410 | `This temporary replay handoff is unavailable or no longer valid. Return to the Workbench and submit the custom TLE again.` |
+| Creation capacity unavailable | 200 mission result | Show the fixed capacity message; create no handoff |
+| Internal creation/store failure | 500 | `A temporary replay handoff could not be created safely.` |
+| Expected replay validation/calculation failure after consume | 422 | `The trajectory replay calculation could not complete safely.` |
+| Unexpected replay/rendering failure after consume | 500 | `The trajectory replay calculation could not complete safely.` |
 
-## Audit and logging
+Purpose mismatch does not remove the record and is treated as unavailable externally. Expired
+records are removed during the required sweep. Consumed and restart-lost identifiers have no
+tombstone and are indistinguishable from unknown. Missing or invalid session state on consume is
+also unavailable, not a new authoritative session.
 
-Required lifecycle event names are:
+No failure path returns a partial scientific result, restores a consumed record, invokes a
+provider, writes persistence/artifacts/cache, or falls back to catalog/ISS.
 
-- `custom_tle_handoff.created`
-- `custom_tle_handoff.consumed`
-- `custom_tle_handoff.expired`
-- `custom_tle_handoff.rejected`
-- `custom_tle_handoff.capacity_rejected`
-- `custom_tle_handoff.owner_mismatch`
-- `custom_tle_handoff.malformed_identifier`
+## Transient diagnostic observability
 
-Permitted fields are event type, UTC timestamp, fixed purpose, source checksum after successful
-validation, source classification `custom-tle`, bounded reason code, result status, and an existing
-safe correlation identifier if one is already available. The handoff/session values must not be
-used as correlation identifiers.
+The exact term is **transient diagnostic observability**. It is not audit evidence, governed audit,
+or a durable lifecycle record.
 
-For the initial local implementation, lifecycle observability should be bounded and memory-only:
-typed counters plus a small fixed-size event ring (proposed maximum 256 sanitized events, cleared
-on shutdown). Do not write these events through the existing database-backed `AuditEvent` path
-without separate approval, because that changes the no-persistence guarantee. Structured process
-logging may report aggregate event name and bounded reason code only if request-body logging is
-disabled and tests prove token/session/TLE absence; otherwise counters are the safer initial
-default.
+One container-owned ring holds at most 256 typed events. When full, a new event overwrites the
+oldest. It is cleared on restart and shutdown. Permitted fields are:
 
-Never record raw TLE, raw request body, token, session cookie, authorization/cookie headers,
-arbitrary labels, local paths, or user-facing stack traces. Persistent governed audit integration
-is an open decision, not silently included in this design.
+- fixed event type;
+- UTC-aware event timestamp;
+- fixed purpose enum;
+- fixed result status; and
+- bounded reason-code enum.
 
-## Concurrency and process lifecycle
+Approved event types are `created`, `consumed`, `expired`, `rejected`, `capacity_rejected`,
+`owner_mismatch`, and `malformed_identifier`. Reason codes are an implementation-reviewed enum,
+not arbitrary strings.
 
-- One store instance belongs to `AppContainer`, matching the existing app-lifetime ownership
-  pattern.
-- Use one thread-safe lock with a very small scope around sweep, capacity checks, insert, and
-  consume/pop. FastAPI routes may cross thread boundaries, so an unprotected dictionary or an
-  async-only lock is insufficient.
-- Never hold the lock during TLE validation, mission-window calculation, trajectory propagation,
-  HTML rendering, logging, or any `await`.
-- Startup creates an empty store. Shutdown clears records, session bindings, and memory-only audit
-  data.
-- Request-driven cleanup removes expired records. A full global cap remains effective even if no
-  cleanup request arrives.
+The ring must not contain raw TLE, source checksum, token, raw session identifier, reusable session
+digest/HMAC, request body, arbitrary header, authorization/cookie material, label, path, exception
+message, or stack trace. Source checksum is intentionally prohibited because even memory-only
+retention would permit cross-session correlation of the same custom source. Aggregate counters may
+use only the same fixed event/status/reason vocabulary.
 
-A process-local store works only for a single application process. Multiple Uvicorn workers,
-horizontal replicas, or load balancing can route creation and consume to different stores and
-must be rejected by configuration or considered unsupported. Development auto-reload and process
-restart intentionally invalidate every handoff. No sticky-session claim repairs atomicity across
-workers.
+The existing database-backed `AuditEvent` system is not used. Process logs may state only a fixed
+event name and bounded reason code if tests prove all prohibited values absent; logging the record,
+request, token, cookie, or exception object is forbidden.
 
-A future multi-worker design requires a separately reviewed shared atomic store, authenticated
-principal binding, encryption/access policy, retention cleanup, and deployment controls. It must
-not silently switch this design to PostgreSQL.
+## Container ownership and process lifecycle
+
+The store, session registry, process HMAC key, and diagnostic ring are:
+
+- constructed by `AppContainer` from immutable validated limits;
+- explicitly injected into the Workbench handoff service/routes;
+- replaceable by a bounded test implementation;
+- never module globals or mutable default arguments;
+- unavailable to unrelated routes and domain/scientific services; and
+- cleared through application lifespan shutdown, with startup always empty.
+
+Use one thread-safe lock for session/record cleanup, capacity checks, insertion, and atomic consume.
+Never hold it during validation, propagation, rendering, logging, or `await`.
+
+## Single-process enforcement
+
+The future feature is disabled by default through:
+
+```text
+ORBITMIND_CUSTOM_TLE_HANDOFF_ENABLED=false
+```
+
+Enabling it requires all of:
+
+- canonical host fixed to `127.0.0.1` and configured port in the approved range;
+- authoritative OrbitMind worker setting `ORBITMIND_API_WORKERS=1`;
+- authoritative reload setting `ORBITMIND_API_RELOAD_ENABLED=false`;
+- supported startup binding exactly to that host and port; and
+- no trusted-proxy or forwarded-header mode.
+
+The supported local launcher must derive its Uvicorn worker/reload arguments from these settings;
+operators must not override them with direct CLI worker or reload flags. Startup validation occurs
+before the store is constructed. If the feature is enabled and workers are not exactly one, reload
+is enabled, origin configuration is invalid, or proxy forwarding is enabled, the application
+rejects startup with the fixed operator-facing error:
+
+```text
+Custom-TLE transient handoff requires canonical loopback HTTP, exactly one worker, reload disabled,
+and forwarded-header trust disabled.
+```
+
+It must not silently disable only some workers or provide partial handoff behavior. Development
+auto-reload is unsupported because restart loses all handoffs. Multiple workers, horizontal
+replicas, sticky sessions, non-loopback binding, or a direct unsupported launcher remain forbidden.
+
+A process-local store works only for a single application process. Broader deployment requires a
+separately reviewed authenticated shared atomic store; PostgreSQL must not be introduced silently.
 
 ## CSRF considerations
 
-The proposed controls are defense in depth for loopback Solo Alpha:
+Implementation may proceed before a general CSRF subsystem only under this exact local policy:
 
-- host-only `SameSite=Strict` ephemeral session cookie;
-- POST-only fixed route;
-- opaque replay-only single-use identifier;
-- existing `form-action 'self'` CSP; and
-- strict configured Host and Origin validation for state-changing Workbench POSTs. An absent Origin
-  may be accepted only under a separately approved same-origin browser policy; a mismatched or
-  non-loopback origin must fail closed.
+- explicit feature enablement;
+- canonical loopback HTTP origin only;
+- one process and no reload;
+- exact Host/scheme and forwarded-header rejection;
+- exact Origin policy, with the narrow fetch-metadata fallback above;
+- same-origin POST form;
+- `SameSite=Strict` host-only ephemeral session cookie; and
+- opaque replay-only single-use handoff token.
 
-The handoff token is not a complete CSRF token. SameSite does not replace origin validation, and
-neither provides authentication. The application currently has no complete CSRF framework.
+POST-only is not complete CSRF protection. The handoff token is not a CSRF token. SameSite is
+defense in depth, not authentication or authorization. This policy does not authorize non-loopback,
+public, authenticated, reverse-proxied, or multi-user use.
 
-Conservative recommendation: implementation may precede a general CSRF slice only for explicitly
-loopback-bound, single-process Solo Alpha after the exact Host/Origin policy is approved and tested.
-Do not enable the mechanism on a non-loopback bind. Dedicated CSRF protection, HTTPS, `Secure`
-cookies, trusted-host configuration, authentication, and authorization are mandatory before any
-external or multi-user review.
+Dedicated CSRF tokens/validation, HTTPS, `Secure` cookies, trusted-host/origin configuration,
+authentication, authorization, and rate limiting are mandatory before broader external deployment.
 
 ## Privacy and non-disclosure
 
-The design guarantees that normal client-visible state contains only an opaque handoff identifier,
-safe result metadata, and an opaque session identifier. Neither identifier encodes or permits
-reconstruction of raw orbital elements.
+Normal client-visible state contains only the opaque handoff token, safe result metadata, and the
+opaque session cookie. Neither opaque value encodes or permits reconstruction of raw orbital
+elements.
 
 Fail-closed guarantees are:
 
-- missing token -> no replay;
-- malformed token -> no replay;
-- expired token -> no replay;
-- reused token -> no replay;
-- owner mismatch -> no replay;
-- process restart -> no replay;
-- capacity failure -> no raw-TLE exposure and no retained record;
-- internal exception -> sanitized HTML with no partial scientific result;
+- missing/malformed token -> no replay;
+- expired/reused token -> no replay;
+- owner mismatch -> no replay and no consumption;
+- process restart/reload -> no replay;
+- capacity failure -> no retained raw-TLE record;
+- internal exception -> sanitized HTML and no partial result;
 - every failure -> no catalog/ISS fallback, provider call, persistence, or artifact write; and
-- every log/audit path -> no raw TLE, token, session value, raw body, or local path.
+- every diagnostic/log path -> no raw TLE, token, session value/digest, checksum, body, header,
+  path, record representation, or stack trace.
 
-This is confidentiality minimization, not a claim that the host process memory is encrypted or
-protected from an administrator, debugger, crash dump, or compromised runtime.
+This is data minimization, not process-memory encryption or protection from an administrator,
+debugger, crash dump, or compromised runtime.
 
 ## Implementation test plan
 
-The later implementation must add tests for:
+The later implementation must test:
 
 1. successful custom-TLE mission-window-to-replay handoff;
-2. exact source and element checksum preservation;
-3. exact observer, UTC interval, duration, and selected sample interval preservation;
-4. POST-only route and absence of a GET/query handoff;
-5. raw TLE absent from HTML, URL, JavaScript, cookies, browser storage, logs, errors, audit, and
-   response headers;
-6. identifier format, 32-byte CSPRNG generation, uniqueness, and fixed parser bounds;
-7. five-minute monotonic expiry and cleanup;
-8. atomic single use and failure on refresh/resubmission;
-9. two simultaneous consume attempts with exactly one success;
-10. session owner mismatch without an ownership oracle;
-11. malformed, missing, wrong-purpose, unknown, expired, and restart-lost identifiers;
-12. global and per-session capacity limits and recovery after expiry;
-13. startup-empty and shutdown-clear behavior;
-14. no replay reinsertion after scientific or rendering failure;
-15. no catalog/ISS fallback on every failure path;
-16. sanitized HTML error responses retain CSP/security headers, including missing replay asset
-    behavior;
-17. database table counts, artifact tree, and source-cache tree unchanged before/after success and
-    failure;
-18. no provider or external network call, using an active fail-on-network probe;
-19. fixed-size memory audit/counters omit token, session, TLE, body, headers, and paths;
-20. session cookie attributes, rotation, expiry, path, loopback HTTP behavior, and future HTTPS
-    `Secure` requirement;
-21. Host/Origin acceptance and rejection according to the approved local CSRF decision;
-22. no JavaScript requirement for handoff, useful mobile layout, and safe no-JavaScript flow;
-23. raw-TLE security probes in label/lines do not escape validation or safe error boundaries; and
-24. existing catalog handoff, Workbench, replay, CSP, no-network, architecture, and scientific
-    regression suites remain unchanged.
+2. exact source checksum, observer, UTC interval, and sampling-policy continuity;
+3. POST-only route, exact Content-Type, 512-byte limit, and strict one-field parser;
+4. raw TLE/token/session absent from HTML, URL, JavaScript, logs, errors, diagnostics, and storage;
+5. token entropy, alphabet, length, digest lookup, collision retries, and strict pre-lookup rejection;
+6. five-minute handoff expiry and 30-minute absolute session expiry using a controllable monotonic
+   clock;
+7. session creation, rotation, host-only path, SameSite, HttpOnly, Max-Age, and loopback HTTP
+   `Secure=False` behavior;
+8. future HTTPS mode requires `Secure=True`, while non-loopback HTTP cannot enable the feature;
+9. owner mismatch does not delete or consume the valid record;
+10. the correct owner can consume after a mismatched attempt;
+11. concurrent duplicate consume yields exactly one success;
+12. unknown, consumed, purpose-mismatched, restart-lost, malformed, and missing state;
+13. global, per-session, session-registry, and logical 1,024-byte limits;
+14. cleanup before capacity checks, no live eviction, and capacity recovery after expiry;
+15. record `repr` redaction and absence of raw values from exceptions/assertions;
+16. source checksum is absent from diagnostic events, proving no memory-ring cross-session
+    correlation;
+17. 256-event overwrite-oldest behavior and shutdown/restart clearing;
+18. `localhost`, `::1`, alternate IPv4, different port, malformed/duplicate Host, and arbitrary
+    DNS hostname rejection;
+19. every listed forwarded header and prefix rejection;
+20. matching/mismatched/duplicate/malformed/null/missing Origin cases and missing-Origin
+    `Sec-Fetch-Site` policy;
+21. HTTP/HTTPS scheme mismatch rejection;
+22. feature default-off and startup rejection for worker count other than one, reload, bad origin,
+    or forwarded trust;
+23. no fallback or reinsertion after replay/rendering failure;
+24. CSP/security headers on all safe HTML errors;
+25. database counts and artifact/cache trees unchanged before/after success and failure;
+26. active no-network/provider proof;
+27. mobile and no-JavaScript form handoff; and
+28. existing catalog handoff, Workbench, replay, architecture, CSP, and scientific regressions.
 
-Tests must exercise the real typed store and typed replay result. They must not use an arbitrary
-dictionary as scientific state. Real-browser QA must inspect page source, URL, cookies, console,
-requests, and errors for raw-TLE/token leakage.
+Real-browser QA must inspect page source, URL, cookies, console, requests, and errors. Tests use the
+real typed store and typed replay result rather than arbitrary scientific dictionaries.
 
 ## Review gates
 
-Before implementation:
+The architecture, cookie, Host/Origin, local CSRF, token, route/body, logical-size, capacity,
+owner-mismatch, atomicity, process, container, observability, representation, and failure-status
+decisions are closed by U4.3D.
 
-- architecture review approval;
-- security review approval;
-- explicit approval of the ephemeral session-cookie name, attributes, rotation, and local HTTP
-  exception;
-- explicit decision on the localhost Host/Origin checks and whether this narrow mechanism may
-  precede general CSRF protection;
-- approval of token entropy, TTLs, capacities, body/record bounds, and cleanup behavior;
-- approval that audit remains bounded and memory-only, or separate approval for any persistence;
-- acceptance of total loss on restart/auto-reload;
-- acceptance and enforcement of the single-process, loopback-only limitation; and
-- acceptance that this is not authentication and cannot be used for public/multi-user deployment.
+Before implementation merge:
+
+- implementation and security review approve conformance to this document;
+- adversarial, concurrency, startup-policy, and non-disclosure tests pass;
+- no migration, persistence, network, provider, artifact, or dependency is added;
+- existing Workbench/scientific behavior remains unchanged; and
+- the implementation remains default-off and local Solo Alpha-only.
 
 Before broader external review:
 
-- implementation is separately reviewed and merged;
-- adversarial and concurrency tests pass;
+- implementation is merged;
 - real-browser desktop/mobile/no-JavaScript QA passes;
-- raw-TLE non-disclosure is independently reviewed;
-- expiry, single use, owner binding, restart loss, and capacity rejection are independently
-  reproduced;
-- database, artifact, cache, and network before/after snapshots remain unchanged;
-- CSP and browser-security behavior remains intact; and
+- raw-TLE/token/session non-disclosure is independently reviewed;
+- expiry, single use, owner mismatch preservation, and restart loss are independently reproduced;
+- database, artifact, cache, and network snapshots remain unchanged; and
 - the Solo Alpha follow-up report is updated without rewriting its historical verdict.
 
 ## Deployment limitations
 
-This architecture is intentionally unsuitable for multiple workers, horizontal scaling,
+This architecture is unsuitable for multiple workers, horizontal scaling, reverse proxies,
 non-loopback access, public deployment, or multiple authenticated users. It provides no durable
-availability, distributed atomicity, disaster recovery, authentication, authorization, rate
-limiting, or full CSRF protection.
+availability, distributed atomicity, authentication, authorization, rate limiting, or public CSRF
+protection.
 
-Broader use requires a new design review covering HTTPS, secure cookies, trusted origins/hosts,
-authentication and authorization, tenant isolation, distributed atomic storage, encryption and
-retention, rate limiting, operational monitoring, reverse-proxy log policy, and incident response.
+Broader use requires a new review covering HTTPS, trusted proxies/origins/hosts, authenticated
+principals, tenant isolation, distributed atomic storage, encryption/retention, rate limiting,
+monitoring, proxy logging, incident response, and deployment rollback.
 
 ## Open decisions
 
-1. Approve the cookie name, 30-minute absolute session TTL, `/workbench` path, rotation semantics,
-   and loopback-only `Secure=False` exception.
-2. Approve the exact Host/Origin policy and whether implementation may proceed before a general
-   CSRF mechanism.
-3. Approve the proposed 5-minute handoff TTL, 128 global cap, four-per-session cap, 30-second
-   request-driven sweep cadence, and 2 KiB record assertion.
-4. Approve the dedicated `POST /workbench/replay/custom-handoff` contract.
-5. Approve bounded memory-only audit counters/event ring, or explicitly authorize a later durable
-   audit design.
-6. Accept that auto-reload, restart, another worker, or another process always loses the handoff.
-7. Decide whether the implementation must actively reject startup with more than one worker or
-   merely leave this feature disabled outside the approved single-process mode.
+There are **no remaining material architecture decisions for the local single-process Solo Alpha
+implementation**. Implementation details that do not alter these frozen contracts may be resolved
+during code review.
+
+Any request to support `localhost`, IPv6 loopback, HTTPS, reverse proxies, multiple workers,
+non-loopback access, durable state, persistent audit, authentication, or public deployment reopens
+architecture and security review and is not an implementation detail.
 
 ## Final recommendation
 
-**APPROVE DESIGN WITH REQUIRED DECISIONS.**
+**APPROVE DESIGN FOR IMPLEMENTATION.**
 
-The process-local bounded store is the smallest architecture that can preserve raw-TLE
-non-disclosure, exact scientific source continuity, expiry, atomic single use, and local browser
-binding without adding durable persistence. Safe binding does require the proposed ephemeral
-session cookie; the current fixed local owner is not sufficient.
-
-Do not implement until the session-cookie contract, Host/Origin/CSRF position, exact limits, audit
-behavior, and single-process enforcement are approved. Even after implementation, keep the feature
-loopback-only and Solo Alpha-only until authentication, HTTPS, full CSRF protection, rate limiting,
-and a distributed-state design receive separate approval.
+A later narrow implementation slice may implement this exact default-off, canonical-origin,
+single-process transient handoff. Approval does not authorize public or multi-worker deployment.
+Broader external review remains blocked until implementation, adversarial testing, browser QA,
+independent non-disclosure review, and persistence/network snapshot verification pass.
