@@ -438,4 +438,7 @@ verdict above.
 
 A future custom-TLE handoff requires a separately reviewed design. The smallest credible option
 would need bounded, expiring, single-use, owner-bound server-side state; no such session or
-authorization contract exists in U4.3B.
+authorization contract exists in U4.3B. U4.3C documents the proposed architecture and its required
+decisions in
+[CUSTOM_TLE_TRANSIENT_HANDOFF_ARCHITECTURE.md](../architecture/CUSTOM_TLE_TRANSIENT_HANDOFF_ARCHITECTURE.md);
+it does not implement or authorize the handoff.
