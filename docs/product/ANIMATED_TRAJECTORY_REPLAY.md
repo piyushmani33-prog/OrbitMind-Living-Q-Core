@@ -82,6 +82,12 @@ Playback starts paused. Controls include:
 - visualization-speed selector with 0.5x, 1x, 2x, and 4x; and
 - sample index/count and UTC timestamp readout.
 
+All controls are disabled in server-rendered HTML. The packaged same-origin controller enables
+them only after every required replay element exists and the complete inert payload parses and
+validates. Missing elements, malformed payloads, and empty sample sets leave controls disabled.
+With JavaScript disabled, the static trajectory and scientific summary remain useful while the
+native disabled state makes the unavailable controls explicit.
+
 Playback speed changes only the visual duration. It does not alter scientific timestamps, sample
 values, request interval, source identity, or deterministic references.
 
@@ -102,6 +108,10 @@ The visible readout always includes:
 Source and interval summary includes object identity, safe source identity, source epoch, source
 age/offset at replay start, replay start/end, selected sampling interval, sample count, segment
 count, observer coordinates, and model identifiers.
+
+The age value includes the same plain-language interpretation as mission-window results: it is the
+time from orbital-element epoch to requested prediction, increasing age can reduce fidelity, and
+it neither certifies freshness nor establishes a true current position.
 
 ## Embedded JSON and script isolation
 

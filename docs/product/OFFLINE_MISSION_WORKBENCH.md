@@ -15,6 +15,11 @@ certified for command, maneuver, collision, or safety decisions.
 `GET /workbench` renders the bounded form. `POST /workbench/run` validates one request, invokes
 `MissionWindowService`, and renders the result. There is no JSON API for this surface.
 
+Successful bundled-catalog results include a POST-only `Replay this request` action that reuses
+the same allowlisted catalog identity, observer, and interval. Request-local custom TLE results do
+not embed raw TLE lines in a handoff; they state that direct replay is unavailable and return the
+user to the Workbench without substituting catalog data.
+
 The form requires:
 
 - exactly one offline orbital source;
@@ -67,6 +72,10 @@ Source age is calculated relative to the submitted analysis start, not the brows
 The visible accuracy panel includes the source epoch, maximum prediction offset from that epoch,
 propagator and geometry identifiers, event-refinement tolerance, and coarse sample step.
 
+Immediately beside the age value, the Workbench explains that age is the interval between the
+orbital-element epoch and requested prediction, increasing age can reduce prediction fidelity,
+and the value neither certifies freshness nor establishes a true current position.
+
 The surface always states:
 
 - predicted from the identified orbital element set using the pinned propagation and geometry
@@ -101,10 +110,11 @@ is introduced.
 
 ## Deferred work
 
-U4.2B may add an animated SVG replay using deterministic server-generated trajectory data after a
-separate design and review. Guarded fresh-source integration also remains separate and must preserve
-explicit enablement, source policy, caching, attribution, freshness, and non-live safety language.
+Direct custom-TLE result-to-replay handoff remains deferred because the Workbench does not retain
+raw TLE input and has no bounded owner-scoped transient session contract. Guarded fresh-source
+integration also remains separate and must preserve explicit enablement, source policy, caching,
+attribution, freshness, and non-live safety language.
 
-Animation, live source search, city search, geolocation, map tiles, 3D globes, generated video,
-calculation persistence, public APIs, collision analysis, agents, LLMs, and quantum behavior remain
-out of scope.
+Live source search, city search, geolocation, map tiles, 3D globes, generated video, calculation
+persistence, public APIs, collision analysis, agents, LLMs, and quantum behavior remain out of
+scope.

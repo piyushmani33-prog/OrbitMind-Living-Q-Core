@@ -82,6 +82,12 @@ EARTH_ORIENTATION_LIMITATION = (
     "UTC is used as a UT1 approximation; full Earth-orientation and polar-motion corrections "
     "are not applied."
 )
+SOURCE_AGE_GUIDANCE = (
+    "Source age is the time from the orbital-element epoch to the requested prediction "
+    "interval. As it increases, prediction fidelity can decrease. It does not certify "
+    "freshness or establish a true current position; this remains a deterministic prediction "
+    "from the supplied source."
+)
 
 WORKBENCH_CSS = (
     PAGE_CSS
@@ -223,6 +229,7 @@ WORKBENCH_CSS = (
       min-height: 42px;
       padding: 9px 13px;
     }
+    .replay-controls :disabled { cursor: not-allowed; opacity: 0.55; }
     .timeline-field { display: grid; gap: 6px; min-width: 180px; }
     .timeline-field input { accent-color: var(--accent); }
     .readout-grid {
@@ -230,6 +237,7 @@ WORKBENCH_CSS = (
       grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
       gap: 12px;
     }
+    .source-age-guidance { display: block; margin-top: 6px; }
     .replay-error {
       background: #fff1f0;
       border: 1px solid #e3a29d;
@@ -398,7 +406,7 @@ async def run_mission_workbench(request: Request, container: ContainerDep) -> HT
     return HTMLResponse(
         _workbench_page(
             "OrbitMind Mission Workbench Result",
-            _result_page(source=source, result=result),
+            _result_page(source=source, result=result, form=form),
         )
     )
 
@@ -825,18 +833,18 @@ def _replay_controls(result: TrajectoryReplayResult) -> str:
     return f"""
         <div class="replay-controls requires-js">
           <button id="replay-play" class="button compact-button" type="button"
-            aria-pressed="false">Play</button>
+            aria-pressed="false" disabled>Play</button>
           <button id="replay-prev" class="button secondary-button compact-button"
-            type="button">Previous</button>
+            type="button" disabled>Previous</button>
           <label class="timeline-field">Timeline
             <input id="replay-slider" type="range" min="0" max="{last}" value="0" step="1"
               aria-valuemin="1" aria-valuemax="{result.sample_count}" aria-valuenow="1"
-              aria-valuetext="Sample 1 of {result.sample_count}">
+              aria-valuetext="Sample 1 of {result.sample_count}" disabled>
           </label>
           <button id="replay-next" class="button secondary-button compact-button"
-            type="button">Next</button>
+            type="button" disabled>Next</button>
           <label>Visualization speed
-            <select id="replay-speed">
+            <select id="replay-speed" disabled>
               <option value="0.5">0.5x</option>
               <option value="1" selected>1x</option>
               <option value="2">2x</option>
@@ -886,7 +894,8 @@ def _replay_source_summary(
           <dt>NORAD catalog ID</dt>
           <dd>{_optional_number(result.source_identity.norad_catalog_id)}</dd>
           <dt>Source epoch</dt><dd>{_format_utc(result.source_identity.source_epoch)}</dd>
-          <dt>Source age at replay start</dt><dd>{_format_replay_source_age(result)}</dd>
+          <dt>Source age at replay start</dt>
+          <dd>{_source_age_value(_format_replay_source_age(result))}</dd>
           <dt>Replay start</dt><dd>{_format_utc(result.request_start)}</dd>
           <dt>Replay end</dt><dd>{_format_utc(result.request_end)}</dd>
           <dt>Selected sampling interval</dt><dd>{result.sample_interval_seconds} seconds</dd>
@@ -991,7 +1000,12 @@ def _sample_y(projection: ReplayDisplayProjection, sequence: int) -> float:
     return float(first_segment.split(",", maxsplit=1)[1])
 
 
-def _result_page(*, source: ResolvedWorkbenchSource, result: MissionWindowResult) -> str:
+def _result_page(
+    *,
+    source: ResolvedWorkbenchSource,
+    result: MissionWindowResult,
+    form: WorkbenchForm,
+) -> str:
     lead = _primary_window(result.windows[0]) if result.windows else _no_window_state(result)
     all_windows = _all_windows_table(result) if len(result.windows) > 1 else ""
     return f"""
@@ -1013,9 +1027,53 @@ def _result_page(*, source: ResolvedWorkbenchSource, result: MissionWindowResult
         {_accuracy_card(result)}
       </section>
       {all_windows}
+      {_replay_handoff(form)}
       {_method_and_evidence(result)}
       <p class="footer-link"><a href="/workbench">Calculate another mission window</a> ·
       <a href="/review">Reviewer sandbox</a></p>
+    """
+
+
+def _replay_handoff(form: WorkbenchForm) -> str:
+    if form.source_mode != "catalog":
+        return """
+          <section class="card section-gap">
+            <h2>Replay this request</h2>
+            <p>Direct replay handoff is unavailable for a request-local custom TLE because
+            OrbitMind does not retain or render the raw TLE after this result. No catalog object
+            has been substituted.</p>
+            <p><a href="/workbench">Return to the Workbench</a> and submit the custom TLE using
+            <strong>Replay Predicted Trajectory</strong>.</p>
+          </section>
+        """
+
+    start_time = form.start_time_utc.astimezone(UTC).isoformat().replace("+00:00", "Z")
+    return f"""
+      <section class="card section-gap">
+        <h2>Replay this request</h2>
+        <p>Reuse this offline catalog object, observer, and UTC interval for a predicted
+        trajectory replay. This is not live tracking.</p>
+        <form method="post" action="/workbench/replay" class="action-row">
+          <input type="hidden" name="source_mode" value="catalog">
+          <input type="hidden" name="catalog_sample_id"
+            value="{escape(form.catalog_sample_id, quote=True)}">
+          <input type="hidden" name="custom_label" value="">
+          <input type="hidden" name="tle_line1" value="">
+          <input type="hidden" name="tle_line2" value="">
+          <input type="hidden" name="observer_latitude_deg"
+            value="{_format_form_number(form.observer_latitude_deg)}">
+          <input type="hidden" name="observer_longitude_deg"
+            value="{_format_form_number(form.observer_longitude_deg)}">
+          <input type="hidden" name="observer_altitude_metres"
+            value="{_format_form_number(form.observer_altitude_metres)}">
+          <input type="hidden" name="start_time_utc" value="{escape(start_time, quote=True)}">
+          <input type="hidden" name="duration_hours"
+            value="{_format_form_number(form.duration_hours)}">
+          <input type="hidden" name="minimum_elevation_deg"
+            value="{_format_form_number(form.minimum_elevation_deg)}">
+          <button class="button" type="submit">Replay this request</button>
+        </form>
+      </section>
     """
 
 
@@ -1069,7 +1127,7 @@ def _identity_card(source: ResolvedWorkbenchSource, result: MissionWindowResult)
           <dt>NORAD catalog ID</dt>
           <dd>{_optional_number(result.source_identity.norad_catalog_id)}</dd>
           <dt>Source epoch</dt><dd>{_format_optional_utc(result.source_epoch)}</dd>
-          <dt>Source age at start</dt><dd>{_format_source_age(result)}</dd>
+          <dt>Source age at start</dt><dd>{_source_age_value(_format_source_age(result))}</dd>
           <dt>Analysis start</dt><dd>{_format_utc(result.request_start)}</dd>
           <dt>Analysis end</dt><dd>{_format_utc(result.request_end)}</dd>
           <dt>Minimum elevation</dt><dd>{result.minimum_elevation_deg:.2f}°</dd>
@@ -1249,6 +1307,17 @@ def _format_replay_source_age(result: TrajectoryReplayResult) -> str:
     offset = result.source_start_offset_seconds
     relation = "after" if offset >= 0 else "before"
     return f"{_format_offset(abs(offset))} {relation} source epoch"
+
+
+def _source_age_value(value: str) -> str:
+    return (
+        f"{escape(value)}"
+        f'<span class="helper source-age-guidance">{escape(SOURCE_AGE_GUIDANCE)}</span>'
+    )
+
+
+def _format_form_number(value: float) -> str:
+    return format(value, ".15g")
 
 
 def _format_maximum_prediction_offset(result: MissionWindowResult) -> str:

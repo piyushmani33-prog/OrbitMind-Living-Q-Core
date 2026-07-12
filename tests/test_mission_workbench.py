@@ -9,6 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from orbitmind.api.container import AppContainer
+from orbitmind.api.routers import workbench
 from orbitmind.persistence.repositories import SqlAlchemyMissionRepository
 from orbitmind.sources.celestrak.connector import CelestrakConnector
 from orbitmind.sources.registry import SourceRegistry
@@ -90,6 +91,13 @@ def test_valid_catalog_request_renders_useful_result_before_evidence(
     assert "Source age at start" in body
     assert "Offline orbital source" in body
     assert "Predicted geometry" in body
+    assert workbench.SOURCE_AGE_GUIDANCE in body
+    assert re.search(
+        r"Source age at start</dt><dd>[^<]+"
+        r'<span class="helper source-age-guidance">',
+        body,
+    )
+    assert "3 h 1 min 31 s after source epoch" in body
     assert body.index("Next predicted pass/contact window") < body.index("Method and evidence")
     _assert_no_mission_persisted(container)
 
@@ -111,7 +119,29 @@ def test_valid_custom_tle_request_escapes_label_and_never_renders_tle_lines(
     assert line1 not in body
     assert line2 not in body
     assert "Next predicted pass/contact window" in body
+    assert "Direct replay handoff is unavailable for a request-local custom TLE" in body
+    assert 'action="/workbench/replay"' not in body
     _assert_no_mission_persisted(container)
+
+
+def test_source_age_guidance_is_conservative_and_has_no_threshold_or_score(
+    client: TestClient,
+) -> None:
+    mission = client.post("/workbench/run", data=_catalog_form())
+    replay = client.post("/workbench/replay", data=_catalog_form())
+
+    assert mission.status_code == replay.status_code == 200
+    for body in (mission.text, replay.text):
+        assert workbench.SOURCE_AGE_GUIDANCE in body
+        assert body.count(workbench.SOURCE_AGE_GUIDANCE) == 1
+        assert "does not certify freshness" in body
+        assert "deterministic prediction from the supplied source" in body
+        assert "freshness threshold" not in body.lower()
+        assert "readiness score" not in body.lower()
+        assert "certified fresh" not in body.lower()
+        assert "current true position" not in body.lower()
+    assert "3 h 1 min 31 s after source epoch" in mission.text
+    assert "3 h 1 min 31 s after source epoch" in replay.text
 
 
 @pytest.mark.parametrize(

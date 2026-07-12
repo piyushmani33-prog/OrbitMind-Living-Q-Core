@@ -417,3 +417,25 @@ Run one small, reviewed U4.3B usability correction slice limited to the three P2
 Keep U43A-04 through U43A-06 as non-blocking presentation/evidence follow-ups. Do not combine
 this correction with live providers, authentication, deployment, schema changes, or new
 scientific calculations.
+
+## U4.3B follow-up status (2026-07-12)
+
+This note records correction status without changing the historical session observations or
+verdict above.
+
+- U43A-01 is resolved for bundled catalog requests. Successful catalog results now provide a
+  POST-only `Replay this request` handoff carrying the same allowlisted catalog identifier,
+  observer, UTC interval, duration, and threshold. It adds no persistence or browser storage.
+- U43A-01 remains blocked for request-local custom TLE input. The existing opaque checksum
+  identity cannot reconstruct raw orbital elements, and the raw TLE cannot safely be placed in
+  HTML, a URL, JavaScript, browser storage, or an unsigned token. The result now states this
+  limitation and does not substitute a catalog object.
+- U43A-02 is resolved. Replay controls render disabled and the same-origin controller enables
+  them only after required elements and the complete embedded payload validate successfully.
+- U43A-03 is resolved. Mission-window and replay source-age values now share the same nearby
+  plain-language explanation without thresholds, scores, or freshness certification.
+- U43A-04, U43A-05, and U43A-06 remain unchanged and open as P3 findings.
+
+A future custom-TLE handoff requires a separately reviewed design. The smallest credible option
+would need bounded, expiring, single-use, owner-bound server-side state; no such session or
+authorization contract exists in U4.3B.
