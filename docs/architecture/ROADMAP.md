@@ -121,6 +121,13 @@ restrictive CSP and browser-security headers; inline CSS remains temporarily all
 rate limiting, HTTPS termination, and deployment controls remain deferred. See
 [BROWSER_SECURITY_BASELINE.md](../security/BROWSER_SECURITY_BASELINE.md).
 
+**U4.3C custom-TLE transient handoff architecture:** a documentation-only design proposes a
+bounded, expiring, atomic single-use, process-local handoff for exact custom-TLE replay continuity
+without placing raw elements in the browser or durable storage. Implementation remains gated on
+ephemeral session-cookie, CSRF/origin, limits, audit, and single-process decisions and is not
+approved for public or multi-worker deployment. See
+[CUSTOM_TLE_TRANSIENT_HANDOFF_ARCHITECTURE.md](CUSTOM_TLE_TRANSIENT_HANDOFF_ARCHITECTURE.md).
+
 ### Further optimization (planned / deferred)
 Larger instances / additional solvers, still classical-baseline-first and bounded.
 
