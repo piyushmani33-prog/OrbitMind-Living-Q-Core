@@ -3,9 +3,10 @@
 ## Status
 
 - **Document status:** Decision closed; documentation only
-- **Slices:** U4.3C architecture and U4.3D decision closure
+- **Slices:** U4.3C architecture, U4.3D decision closure, and U4.3F browser compatibility
 - **Decision date:** 2026-07-12
 - **Design verdict:** **APPROVE DESIGN FOR IMPLEMENTATION**
+- **Browser compatibility verdict:** **APPROVE WITH REQUIRED IMPLEMENTATION CONDITIONS**
 - **Implementation authority:** A later reviewed slice may implement only this local Solo Alpha
   design. This document implements no code, cookie, session, token, route, store, audit behavior,
   persistence, migration, authentication, deployment, or network path.
@@ -13,6 +14,88 @@
 All material architecture decisions identified by U4.3C are closed below. Approval remains limited
 to an explicitly enabled, loopback-bound, single-process Solo Alpha application. Public,
 non-loopback, multi-worker, and distributed use remain forbidden.
+
+U4.3F closes a browser incompatibility found during U4.3E QA. U4.3E is not complete or merge-ready
+on the strength of this document. Implementation may resume only to apply the route-scoped
+Referrer-Policy and request-validation contract frozen below, add adversarial coverage, and pass
+the real-browser gates in this document.
+
+## U4.3F browser evidence
+
+Chrome `150.0.7871.114` was launched directly on Windows 10 with a fresh temporary profile,
+extensions disabled, and no request interception or header overrides. The launch used the installed
+`chrome.exe` with `--headless=new`, a temporary `--remote-debugging-port`, and a temporary
+`--user-data-dir`; CDP performed navigation, a trusted mouse click, and observation only. It did
+not construct the production document, submit through fetch, or modify headers. The real OrbitMind
+app was started with the documented Uvicorn command on `http://127.0.0.1:8000`. A top-level page loaded
+directly from `/workbench`; it was not a `file:` document, copied markup, or a frame. A trusted
+mouse click submitted the server-rendered, same-origin `POST /workbench/run` form without requiring
+JavaScript. Chrome sent:
+
+| Header | Observed value |
+| --- | --- |
+| `Host` | `127.0.0.1:8000` |
+| `Origin` | `null` |
+| `Referer` | absent |
+| `Sec-Fetch-Site` | `same-origin` |
+| `Sec-Fetch-Mode` | `navigate` |
+| `Sec-Fetch-Dest` | `document` |
+| `Content-Type` | `application/x-www-form-urlencoded` |
+
+The response that created the document carried `Referrer-Policy: no-referrer`; Chrome's request
+metadata reported the same effective policy. Current main contains the U4.3D design but not the
+U4.3E handoff route, so `/workbench/run` was used to reproduce the production browser/header
+behavior. The U4.3E handoff failure remains the motivating observation.
+
+Local inspection used FastAPI `0.139.0` and Starlette `1.3.1`. The production form has a literal
+same-origin action and no redirect. The HTML-only middleware applies `no-referrer` from the response
+media type, while CSP separately restricts forms to self and blocks framing. Starlette exposes the
+raw ASGI header list needed for duplicate-header validation. No framework normalization, redirect,
+form attribute, cookie attribute, or CSP directive explained the matrix; changing only the response
+Referrer-Policy changed the resulting Origin.
+
+An isolated loopback server then varied only the response `Referrer-Policy` for identical
+top-level same-origin HTML forms. Server-side raw-header capture produced this matrix; every row
+was a successful HTTP 200 top-level form navigation with JavaScript enabled,
+`Sec-Fetch-Site: same-origin`, and the probe's `SameSite=Strict; HttpOnly` cookie present:
+
+| Referrer-Policy | Origin | Referer |
+| --- | --- | --- |
+| no header (browser default) | canonical origin | full same-origin page URL |
+| `no-referrer` | `null` | absent |
+| `same-origin` | canonical origin | full same-origin page URL |
+| `strict-origin` | canonical origin | origin only |
+| `strict-origin-when-cross-origin` | canonical origin | full same-origin page URL |
+| `origin` | canonical origin | origin only |
+| `origin-when-cross-origin` | canonical origin | full same-origin page URL |
+
+The same `no-referrer` result occurred in a fresh browser profile, an existing profile, a
+same-origin iframe, and with JavaScript disabled. A sandboxed iframe and an automation-created
+`data:` document also sent `Origin: null`, but were distinguishable from the legitimate top-level
+flow: each sent `Sec-Fetch-Site: cross-site` and omitted the Strict cookie. A same-origin iframe
+under `no-referrer` sent `Origin: null`, `Sec-Fetch-Site: same-origin`, and the cookie, which is an
+additional reason not to accept `null` as equivalent to the canonical origin. With
+`Referrer-Policy: same-origin`, the JavaScript-disabled top-level form sent the exact canonical
+Origin and the cookie.
+
+This establishes causation for Chrome 150: `no-referrer`, rather than an opaque top-level
+document, redirect, copied form, extension, or request-interception harness, caused the legitimate
+form's `Origin: null`. It also matches the Fetch Standard's Origin-header algorithm: for a
+non-CORS, non-GET/HEAD request, `no-referrer` sets the serialized Origin to `null`, while
+`same-origin` retains it when current and request origins match. The HTML form-navigation algorithm
+passes the document's referrer policy into Fetch. See the WHATWG
+[Fetch Standard](https://fetch.spec.whatwg.org/#origin-header) and
+[HTML Standard](https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#form-submission-algorithm).
+
+The compatibility options were decided as follows:
+
+| Option | Decision | Reason |
+| --- | --- | --- |
+| A. Preserve exact Origin and change a proven header condition | **Selected** | Workbench-only `same-origin` restores canonical Origin for ordinary and no-JavaScript forms without exposing token/TLE or changing CSP |
+| B. Accept `Origin: null` under local constraints | Rejected | `null` conflates the legitimate flow with opaque/sandboxed initiators and makes Fetch Metadata carry more security weight than necessary |
+| C. Add a separate anti-CSRF form value | Deferred | Technically viable, but additional state and cryptography are disproportionate after Option A succeeds; reconsider for a public authenticated design |
+| JavaScript fetch/XHR | Rejected | Breaks the no-JavaScript requirement and conflicts with `connect-src 'none'` |
+| Keep the handoff blocked | Rejected | Unnecessary once Option A is implemented and the full browser gates pass |
 
 ## Problem statement
 
@@ -96,9 +179,9 @@ Current boundaries relevant to this decision are:
 | Threat | Local Solo Alpha treatment | Residual/public concern |
 | --- | --- | --- |
 | Raw TLE in HTML or hidden fields | Raw lines stay in a server-side record; the form carries only an opaque identifier | Independent disclosure review remains required |
-| Identifier in URL, Referer, history, or query logs | POST body only; no GET/query route; `Referrer-Policy: no-referrer` remains | Proxy request-body logging requires separate review |
+| Identifier in URL, Referer, history, or query logs | POST body only; no GET/query route; Workbench `same-origin` policy can disclose only the non-secret same-origin page path | Proxy request-body logging requires separate review |
 | Alternate host or DNS rebinding | Exact configured Host and port; no DNS resolution; forwarded headers rejected | Trusted-proxy design remains deferred |
-| Cross-origin form submission | Exact Origin or narrowly accepted same-origin fetch metadata | A public CSRF framework remains mandatory |
+| Cross-origin form submission | Exact canonical Origin and exact same-origin Fetch Metadata are both required | A public CSRF framework remains mandatory |
 | Another browser consumes a token | Keyed session binding checked before removal | Cookie theft requires HTTPS and authentication |
 | Expired or reused token | Monotonic expiry and atomic pop | Distributed atomicity is not addressed |
 | Token guessing or fixation | 256 CSPRNG bits; server creates identifiers; strict format | Public rate limiting remains required |
@@ -186,23 +269,55 @@ TLE, token, path, or internal detail.
 
 Every state-changing Workbench POST involved in creation or consumption uses this policy:
 
-- raw headers may contain at most one `Origin` header;
-- if supplied, its value must be exactly the canonical origin string;
+- raw headers must contain exactly one `Origin` header;
+- its value must be exactly the canonical origin string;
 - `Origin: null`, malformed origins, trailing slash, alternate host, `localhost`, `::1`, different
   port, HTTPS/HTTP mismatch, duplicate Origin headers, credentials, path, query, or fragment fail;
 - supplied Origin comparison is exact after trimming optional surrounding HTTP whitespace; no DNS,
   default-port, case, or alias normalization creates equivalence;
-- if Origin is absent, the request is accepted only when Host and scheme passed the canonical
-  checks, no forwarded header is present, and raw headers contain exactly one
-  `Sec-Fetch-Site: same-origin` value; and
-- an absent Origin with missing, duplicate, malformed, `none`, `same-site`, or `cross-site`
-  `Sec-Fetch-Site` fails closed.
+- raw headers must also contain exactly one `Sec-Fetch-Site` header with the exact lower-case value
+  `same-origin`; and
+- absent, duplicate, malformed, `none`, `same-site`, or `cross-site` Fetch Metadata fails closed
+  regardless of the Origin value.
 
 Rejected Origin/fetch-metadata requests return status 403 with the same fixed safe HTML used for
 Host rejection. No body is parsed and no state is created, looked up, rotated, or consumed.
 
-This deliberately favors current browser form behavior. Non-browser and older clients that do not
-provide either exact Origin or accepted fetch metadata must not use this handoff.
+There is no absent-Origin fallback. `Origin: null` is never treated as canonical. Non-browser and
+older clients that do not provide both exact fields must not use this browser handoff. A
+non-browser client can spoof these headers, so they remain defense in depth rather than identity;
+successful consumption still requires possession of both the valid single-use token and the
+matching HttpOnly session cookie.
+
+All HTML responses for the exact `/workbench` path and the `/workbench/` path subtree, including
+safe HTML errors, must use:
+
+```text
+Referrer-Policy: same-origin
+```
+
+This is a route-scoped compatibility exception. Other HTML surfaces retain `no-referrer`; JSON,
+JavaScript assets, artifacts, and binary responses remain outside the HTML header policy. Under
+`same-origin`, Chrome 150 sends the canonical Origin for the ordinary and JavaScript-disabled
+same-origin forms. The same-origin `Referer` includes the Workbench page path, but never a handoff
+token because the architecture forbids tokens in URLs. Cross-origin requests receive no Referer.
+The fixed form action remains same-origin, CSP retains `form-action 'self'` and
+`connect-src 'none'`, and no external request or redirect is introduced.
+
+The frozen request decision table is:
+
+| Origin | Sec-Fetch-Site | Result |
+| --- | --- | --- |
+| Exactly one canonical origin | Exactly one `same-origin` | Continue to cookie, media-type, body, token, and owner checks |
+| `null` | Any value or absent | HTTP 403 fixed safe HTML |
+| Absent | Any value or absent | HTTP 403 fixed safe HTML |
+| Malformed, duplicate, mismatched, `localhost`, alternate port/scheme | Any value or absent | HTTP 403 fixed safe HTML |
+| Exactly one canonical origin | Absent, duplicate, malformed, `none`, `same-site`, or `cross-site` | HTTP 403 fixed safe HTML |
+
+Host, scheme, and forwarded-header failures still occur first and return HTTP 400. The 403 body is
+always `This local Workbench request is unavailable.` and reflects no header or state. A natural
+JavaScript-disabled Chrome form under the selected policy supplies both accepted values. A
+non-browser client receives no compatibility relaxation.
 
 ## Session/owner binding
 
@@ -448,7 +563,7 @@ All responses are fixed server-rendered HTML with browser-security headers and n
 | Condition | Status | Fixed user-facing behavior |
 | --- | ---: | --- |
 | Invalid/duplicate Host or forwarded header | 400 | `This local Workbench request is unavailable.` |
-| Invalid/duplicate/missing-unqualified Origin | 403 | `This local Workbench request is unavailable.` |
+| Missing, null, invalid, mismatched, or duplicate Origin; missing, invalid, or duplicate Fetch Metadata | 403 | `This local Workbench request is unavailable.` |
 | Unsupported Content-Type | 415 | `The temporary replay handoff request is invalid.` |
 | Body over 512 bytes | 413 | `The temporary replay handoff request is invalid.` |
 | Missing/duplicate/unknown field or malformed token | 422 | `The temporary replay handoff request is invalid.` |
@@ -550,7 +665,10 @@ Implementation may proceed before a general CSRF subsystem only under this exact
 - canonical loopback HTTP origin only;
 - one process and no reload;
 - exact Host/scheme and forwarded-header rejection;
-- exact Origin policy, with the narrow fetch-metadata fallback above;
+- exact canonical Origin and exactly one `Sec-Fetch-Site: same-origin`, with no null/absent-Origin
+  fallback;
+- Workbench-only `Referrer-Policy: same-origin` so natural browser forms reliably provide that
+  canonical Origin;
 - same-origin POST form;
 - `SameSite=Strict` host-only ephemeral session cookie; and
 - opaque replay-only single-use handoff token.
@@ -558,6 +676,15 @@ Implementation may proceed before a general CSRF subsystem only under this exact
 POST-only is not complete CSRF protection. The handoff token is not a CSRF token. SameSite is
 defense in depth, not authentication or authorization. This policy does not authorize non-loopback,
 public, authenticated, reverse-proxied, or multi-user use.
+
+Option B, accepting `Origin: null` under Host, Fetch Metadata, cookie, and token constraints, is
+not selected. Although it could be risk-accepted for this loopback-only boundary, `null` also
+represents sandboxed and other opaque initiators, and non-browser clients can spoof Fetch Metadata.
+Option C, a separate session-bound anti-CSRF form value, remains technically viable but is
+disproportionate when the proven route-scoped policy restores a canonical Origin without raw-TLE
+or token exposure. Option D, replacing the form with JavaScript fetch/XHR, remains rejected because
+the no-JavaScript flow is required and CSP sets `connect-src 'none'`. Keeping the handoff blocked
+entirely is unnecessary once the implementation condition and browser gates are met.
 
 Dedicated CSRF tokens/validation, HTTPS, `Secure` cookies, trusted-host/origin configuration,
 authentication, authorization, and rate limiting are mandatory before broader external deployment.
@@ -610,8 +737,9 @@ The later implementation must test:
 18. `localhost`, `::1`, alternate IPv4, different port, malformed/duplicate Host, and arbitrary
     DNS hostname rejection;
 19. every listed forwarded header and prefix rejection;
-20. matching/mismatched/duplicate/malformed/null/missing Origin cases and missing-Origin
-    `Sec-Fetch-Site` policy;
+20. matching/mismatched/duplicate/malformed/null/missing Origin cases and accepted/missing/
+    duplicate/`none`/`same-site`/`cross-site` Fetch Metadata, including rejection before body or
+    state access;
 21. HTTP/HTTPS scheme mismatch rejection;
 22. feature default-off and startup rejection for worker count other than one, reload, bad origin,
     or forwarded trust;
@@ -629,10 +757,15 @@ real typed store and typed replay result rather than arbitrary scientific dictio
 
 The architecture, cookie, Host/Origin, local CSRF, token, route/body, logical-size, capacity,
 owner-mismatch, atomicity, process, container, observability, representation, and failure-status
-decisions are closed by U4.3D.
+decisions are closed by U4.3D, with the Referrer-Policy and Origin/Fetch-Metadata compatibility
+contract superseded and closed by U4.3F.
 
 Before implementation merge:
 
+- the `/workbench` HTML scope implements `Referrer-Policy: same-origin` while other HTML retains
+  `no-referrer` and non-HTML responses remain unaffected;
+- every state-changing handoff POST requires exactly one canonical Origin and exactly one
+  `Sec-Fetch-Site: same-origin`, with null and absent Origin rejected;
 - implementation and security review approve conformance to this document;
 - adversarial, concurrency, startup-policy, and non-disclosure tests pass;
 - no migration, persistence, network, provider, artifact, or dependency is added;
@@ -648,6 +781,22 @@ Before broader external review:
 - database, artifact, cache, and network snapshots remain unchanged; and
 - the Solo Alpha follow-up report is updated without rewriting its historical verdict.
 
+The required U4.3E real-browser gates are:
+
+1. feature-disabled behavior remains unchanged;
+2. feature-enabled natural custom-TLE form POST succeeds from the canonical origin;
+3. replay uses the same source, observer, and interval;
+4. duplicate consume returns the fixed unavailable response;
+5. a second browser context receives owner mismatch without consuming the record;
+6. the correct owner can consume after that mismatch;
+7. expiry fails closed;
+8. JavaScript-disabled submission succeeds and replay static content remains useful;
+9. reduced-motion and mobile `390 x 844` behavior pass;
+10. no normal-use CSP violation or external request occurs;
+11. raw TLE, token, and session values are absent from URLs, JavaScript, logs, diagnostics, and
+    user-facing errors; and
+12. database, artifact, and cache snapshots remain unchanged.
+
 ## Deployment limitations
 
 This architecture is unsuitable for multiple workers, horizontal scaling, reverse proxies,
@@ -662,8 +811,9 @@ monitoring, proxy logging, incident response, and deployment rollback.
 ## Open decisions
 
 There are **no remaining material architecture decisions for the local single-process Solo Alpha
-implementation**. Implementation details that do not alter these frozen contracts may be resolved
-during code review.
+implementation**. The browser compatibility decision is closed. Applying the route-scoped header,
+updating request validation and tests, and passing the browser gates are required implementation
+work, not open design questions.
 
 Any request to support `localhost`, IPv6 loopback, HTTPS, reverse proxies, multiple workers,
 non-loopback access, durable state, persistent audit, authentication, or public deployment reopens
@@ -671,9 +821,11 @@ architecture and security review and is not an implementation detail.
 
 ## Final recommendation
 
-**APPROVE DESIGN FOR IMPLEMENTATION.**
+**APPROVE WITH REQUIRED IMPLEMENTATION CONDITIONS.**
 
-A later narrow implementation slice may implement this exact default-off, canonical-origin,
-single-process transient handoff. Approval does not authorize public or multi-worker deployment.
-Broader external review remains blocked until implementation, adversarial testing, browser QA,
-independent non-disclosure review, and persistence/network snapshot verification pass.
+U4.3E may resume to implement this exact default-off, canonical-origin, single-process transient
+handoff with the Workbench-only `same-origin` policy and exact Origin/Fetch-Metadata requirements.
+U4.3E is not complete or merge-ready until the implementation, adversarial tests, and browser gates
+pass. Approval does not authorize public or multi-worker deployment. Broader external review
+remains blocked until implementation, browser QA, independent non-disclosure review, and
+persistence/network snapshot verification pass.

@@ -443,3 +443,10 @@ decisions in
 [CUSTOM_TLE_TRANSIENT_HANDOFF_ARCHITECTURE.md](../architecture/CUSTOM_TLE_TRANSIENT_HANDOFF_ARCHITECTURE.md);
 U4.3D closes the local Solo Alpha design decisions, but neither slice implements the handoff or
 changes this historical session verdict.
+
+U4.3F records a later browser compatibility decision without changing the historical findings or
+verdict. Chrome 150 evidence showed that the application-wide `Referrer-Policy: no-referrer`
+causes a natural same-origin Workbench POST to send `Origin: null`. The approved, not-yet-implemented
+correction is a Workbench-HTML-only `same-origin` policy with exact canonical Origin and
+same-origin Fetch-Metadata checks. U4.3E may resume under the architecture's implementation and
+browser gates; it is not complete or merge-ready.
