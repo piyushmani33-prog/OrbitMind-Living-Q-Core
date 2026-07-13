@@ -160,6 +160,12 @@ scientific/security-parity, resource, shutdown, antivirus, rollback, and data-pr
 must be reviewed before acceptance. It is not an external alpha, signed installer, updater, supported
 distribution channel, or public runtime. See [LOCAL_RUNTIME_ARCHITECTURE.md](LOCAL_RUNTIME_ARCHITECTURE.md).
 
+**U5.0B0 Windows packaging kickoff decisions:** the required kickoff design is closed
+for a bounded, non-distributable Windows PyInstaller spike. No packaging exists yet;
+implementation and clean-machine/parity/security/resource evidence remain U5.0B work,
+and external distribution remains blocked. See
+[WINDOWS_PACKAGING_KICKOFF_DECISIONS.md](WINDOWS_PACKAGING_KICKOFF_DECISIONS.md).
+
 ### Further optimization (planned / deferred)
 Larger instances / additional solvers, still classical-baseline-first and bounded.
 
