@@ -152,6 +152,14 @@ and owner-mismatch checks passed. The full suite exceeded the local 15-minute ca
 claimed as passed. This is merge-review-ready only; public, authenticated, proxy, multi-worker,
 and production use remain forbidden.
 
+**U5.0A local runtime architecture decision:** a documentation-only architecture defines a
+Windows-first, user-scoped packaging proof around the existing Python/FastAPI process. U5.0B is
+approved only as a bounded, non-distributable packaging and architecture spike: its kickoff design
+decisions must be approved before implementation, and its reproducible-build, clean-machine,
+scientific/security-parity, resource, shutdown, antivirus, rollback, and data-preservation evidence
+must be reviewed before acceptance. It is not an external alpha, signed installer, updater, supported
+distribution channel, or public runtime. See [LOCAL_RUNTIME_ARCHITECTURE.md](LOCAL_RUNTIME_ARCHITECTURE.md).
+
 ### Further optimization (planned / deferred)
 Larger instances / additional solvers, still classical-baseline-first and bounded.
 
