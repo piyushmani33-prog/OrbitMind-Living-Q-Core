@@ -9,6 +9,34 @@
 > - Forward-phase docs (Phase 2–8) exist below for transparency but are **out of scope** for this first review.
 > - Start here: [First Trusted Operator Dry-Run Pack](docs/operations/FIRST_TRUSTED_OPERATOR_DRY_RUN.md).
 
+## Solo Alpha Workbench: First Five Minutes
+
+OrbitMind is local Solo Alpha software, not a public hosted service. The shortest
+browser workflow is the server-rendered Mission Workbench. It uses bundled offline
+orbital data by default and performs no provider or external network fetch.
+
+From a Windows Command Prompt in the project root, run the approved default startup:
+
+```bat
+.venv\Scripts\python.exe -m alembic upgrade head
+.venv\Scripts\python.exe -m uvicorn orbitmind.api.app:app --host 127.0.0.1 --port 8000
+```
+
+Open the Workbench at:
+
+```text
+http://127.0.0.1:8000/workbench
+```
+
+The default configuration keeps the custom-TLE transient replay handoff disabled.
+Catalog mission windows and replay remain available, and custom-TLE mission-window
+calculation remains available. A custom result honestly reports that its transient
+replay handoff is unavailable; OrbitMind never substitutes a catalog object or ISS.
+The handoff is temporary and single-use when explicitly enabled, but this local feature
+is not authentication, authorization, complete public CSRF protection, or public-use
+support. See the [operator runbook](docs/operations/RUNBOOK.md) for the advanced local
+configuration and troubleshooting.
+
 **Try this first** after installing dependencies (see
 [Installation](#installation)):
 
@@ -142,14 +170,34 @@ All configuration is read only by `orbitmind.core.config.Settings`
 
 ## Local execution
 
+### Approved local operator mode
+
 ```bash
 # create/update the local schema
 python -m alembic upgrade head
 
-# run the API
-python -m uvicorn orbitmind.api.app:app --reload --port 8000
-# open http://127.0.0.1:8000/docs  (interactive API)
+# run the API with the approved local bind and one default Uvicorn worker
+python -m uvicorn orbitmind.api.app:app --host 127.0.0.1 --port 8000
+# Workbench: http://127.0.0.1:8000/workbench
 ```
+
+This is the safe default path: no provider credentials or external network are
+required, and the custom-TLE transient replay handoff remains disabled unless its
+advanced settings are explicitly enabled. Do not use `localhost` for the approved
+handoff path.
+
+### Developer mode: handoff disabled
+
+Developers may use reload for ordinary local work:
+
+```bash
+python -m uvicorn orbitmind.api.app:app --reload --port 8000
+```
+
+This command is for the default-disabled application only. Do not use `--reload`,
+`--workers`, a non-loopback bind, or proxy/forwarded-header trust when the custom-TLE
+transient replay handoff is enabled. The full enabled-mode contract is in the
+[operator runbook](docs/operations/RUNBOOK.md).
 
 Operational endpoints: `GET /health`, `GET /version`,
 `GET /api/v1/system/capabilities`.

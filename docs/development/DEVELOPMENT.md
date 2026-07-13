@@ -48,6 +48,10 @@ imports `orbitmind.persistence.database`.
 # http://127.0.0.1:8000/docs
 ```
 
+This reload command is for developer work with the custom-TLE transient replay handoff
+disabled. Use the approved no-reload, single-worker loopback command in the
+[Solo Alpha operator runbook](../operations/RUNBOOK.md) before enabling that handoff.
+
 The app also runs `create_all()` on startup as a dev convenience, so it works even
 before you run Alembic.
 
