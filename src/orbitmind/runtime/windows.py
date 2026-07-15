@@ -9,7 +9,7 @@ import threading
 from collections.abc import Callable
 from ctypes import wintypes
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 from orbitmind.runtime.status import ExitCode, ReasonCode, RuntimeFailure
 
@@ -20,6 +20,45 @@ _TOKEN_ELEVATION = 20
 _SDDL_REVISION_1 = 1
 _MUTEX_IDENTITY = "Global\\OrbitMind.U5.0B0.Runtime.v1"
 _CONSOLE_EVENTS = frozenset({0, 1, 2, 5, 6})
+
+
+class _CtypesFunction(Protocol):
+    argtypes: list[object]
+    restype: object
+
+    def __call__(self, *args: object) -> Any: ...
+
+
+class _Kernel32(Protocol):
+    GetCurrentProcess: _CtypesFunction
+    CloseHandle: _CtypesFunction
+    LocalFree: _CtypesFunction
+    CreateMutexW: _CtypesFunction
+    ReleaseMutex: _CtypesFunction
+    SetConsoleCtrlHandler: _CtypesFunction
+
+
+class _Advapi32(Protocol):
+    OpenProcessToken: _CtypesFunction
+    GetTokenInformation: _CtypesFunction
+    ConvertSidToStringSidW: _CtypesFunction
+    ConvertStringSecurityDescriptorToSecurityDescriptorW: _CtypesFunction
+
+
+class _WinDllFactory(Protocol):
+    def __call__(self, name: str, *, use_last_error: bool) -> object: ...
+
+
+class _WindowsVersion(Protocol):
+    major: int
+
+
+class _CallbackFactory(Protocol):
+    def __call__(self, callback: Callable[[int], bool]) -> object: ...
+
+
+class _WinFunctionTypeFactory(Protocol):
+    def __call__(self, return_type: object, *argument_types: object) -> _CallbackFactory: ...
 
 
 class MutexHandle(Protocol):
@@ -40,7 +79,7 @@ class WindowsRuntime(Protocol):
 
 @dataclass
 class _NativeMutex:
-    kernel32: Any
+    kernel32: _Kernel32
     handle: int
     _released: bool = False
 
@@ -54,8 +93,8 @@ class _NativeMutex:
 
 @dataclass
 class _NativeConsoleHandler:
-    kernel32: Any
-    callback: Any
+    kernel32: _Kernel32
+    callback: object
     _registered: bool = True
 
     def unregister(self) -> None:
@@ -64,17 +103,30 @@ class _NativeConsoleHandler:
             self._registered = False
 
 
+def _is_windows_runtime() -> bool:
+    return sys.platform == "win32"
+
+
+def _windows_attribute(namespace: object, name: str) -> object:
+    if not _is_windows_runtime():
+        raise RuntimeFailure(ExitCode.UNSUPPORTED_ENVIRONMENT, ReasonCode.UNSUPPORTED_ENVIRONMENT)
+    return getattr(namespace, name)
+
+
 class NativeWindowsRuntime:
     """ctypes implementation; no pywin32 or broad privilege changes."""
 
+    _kernel32: _Kernel32
+    _advapi32: _Advapi32
+
     def __init__(self) -> None:
-        if sys.platform != "win32":
+        if not _is_windows_runtime():
             raise RuntimeFailure(
                 ExitCode.UNSUPPORTED_ENVIRONMENT, ReasonCode.UNSUPPORTED_ENVIRONMENT
             )
-        win_dll = ctypes.WinDLL
-        self._kernel32 = win_dll("kernel32", use_last_error=True)
-        self._advapi32 = win_dll("advapi32", use_last_error=True)
+        win_dll = cast(_WinDllFactory, _windows_attribute(ctypes, "WinDLL"))
+        self._kernel32 = cast(_Kernel32, win_dll("kernel32", use_last_error=True))
+        self._advapi32 = cast(_Advapi32, win_dll("advapi32", use_last_error=True))
         self._configure_signatures()
 
     def _configure_signatures(self) -> None:
@@ -117,7 +169,11 @@ class NativeWindowsRuntime:
 
     def validate_environment(self) -> None:
         machine = platform.machine().lower()
-        windows = sys.getwindowsversion()
+        get_windows_version = cast(
+            Callable[[], _WindowsVersion],
+            _windows_attribute(sys, "getwindowsversion"),
+        )
+        windows = get_windows_version()
         if windows.major < 10 or machine not in {"amd64", "x86_64"} or self._is_elevated():
             raise RuntimeFailure(
                 ExitCode.UNSUPPORTED_ENVIRONMENT, ReasonCode.UNSUPPORTED_ENVIRONMENT
@@ -211,11 +267,15 @@ class NativeWindowsRuntime:
 
         attributes = SecurityAttributes(ctypes.sizeof(SecurityAttributes), descriptor, False)
         try:
-            ctypes.set_last_error(0)
+            set_last_error = cast(
+                Callable[[int], None], _windows_attribute(ctypes, "set_last_error")
+            )
+            get_last_error = cast(Callable[[], int], _windows_attribute(ctypes, "get_last_error"))
+            set_last_error(0)
             handle = self._kernel32.CreateMutexW(
                 ctypes.byref(attributes), True, f"{_MUTEX_IDENTITY}.{sid}"
             )
-            last_error = ctypes.get_last_error()
+            last_error = get_last_error()
             if not handle:
                 raise RuntimeFailure(
                     ExitCode.UNSUPPORTED_ENVIRONMENT, ReasonCode.UNSUPPORTED_ENVIRONMENT
@@ -230,7 +290,8 @@ class NativeWindowsRuntime:
             self._kernel32.LocalFree(descriptor)
 
     def register_console_handler(self, stop_event: threading.Event) -> ConsoleHandler:
-        handler_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.DWORD)
+        win_function_type = cast(_WinFunctionTypeFactory, _windows_attribute(ctypes, "WINFUNCTYPE"))
+        handler_type = win_function_type(wintypes.BOOL, wintypes.DWORD)
 
         def handle_console_event(event: int) -> bool:
             if event in _CONSOLE_EVENTS:
