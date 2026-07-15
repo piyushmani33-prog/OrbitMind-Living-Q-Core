@@ -76,3 +76,10 @@ Thumbs.db
 # --- Tooling ---
 .python-version
 node_modules/
+
+# --- U5.0B1 local packaging spike outputs (source inputs remain tracked) ---
+/build/u5.0b1/
+/dist/u5.0b1/
+/.packaging-venv/
+/.packaging-wheelhouse/
+/packaging-evidence-raw/

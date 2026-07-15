@@ -8,6 +8,7 @@ network access (SR-12).
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 from orbitmind.core.checksums import sha256_file
@@ -19,11 +20,21 @@ from orbitmind.space.models import OrbitalSourceRecord
 DEFAULT_SAMPLES_DIR = PROJECT_ROOT / "data" / "samples"
 
 
+def _default_samples_dir() -> Path:
+    if not getattr(sys, "frozen", False):
+        return DEFAULT_SAMPLES_DIR
+
+    bundle_root = getattr(sys, "_MEIPASS", None)
+    if not isinstance(bundle_root, str) or not Path(bundle_root).is_dir():
+        raise StorageError("sample catalog is missing")
+    return Path(bundle_root) / "data" / "samples"
+
+
 class SourceRegistry:
     """Reads and validates bundled orbital fixtures."""
 
-    def __init__(self, samples_dir: Path = DEFAULT_SAMPLES_DIR) -> None:
-        self._dir = samples_dir
+    def __init__(self, samples_dir: Path | None = None) -> None:
+        self._dir = _default_samples_dir() if samples_dir is None else samples_dir
         self._records: dict[str, OrbitalSourceRecord] = {}
         self._files: dict[str, Path] = {}
         self._load_catalog()
