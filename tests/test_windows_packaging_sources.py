@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -30,6 +31,17 @@ MIGRATION_NORMAL_ANALYSIS_IMPORTS = {
 VERIFIER = PROJECT_ROOT / "scripts" / "verify_windows_poc.ps1"
 BUILD_SCRIPT = PROJECT_ROOT / "scripts" / "build_windows_poc.ps1"
 EXPECTED_SPEC_HASH = "463c3623086ee887016852fc9ddee1ce51c5db7f2e55bba2e7e2a423456e4612"
+POWERSHELL_PARSER_SKIP_REASON = (
+    "PowerShell parser validation requires powershell.exe or pwsh on the test host."
+)
+
+
+def _powershell_executable() -> str:
+    for command in ("powershell.exe", "pwsh"):
+        executable = shutil.which(command)
+        if executable is not None:
+            return executable
+    pytest.skip(POWERSHELL_PARSER_SKIP_REASON)
 
 
 def _evaluate_spec_paths(spec_dir: Path) -> dict[str, Path]:
@@ -221,7 +233,14 @@ $ast = [System.Management.Automation.Language.Parser]::ParseFile(
     environment = os.environ.copy()
     environment["ORBITMIND_TEST_VERIFIER_PATH"] = str(path)
     completed = subprocess.run(
-        ["pwsh", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command],
+        [
+            _powershell_executable(),
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            command,
+        ],
         cwd=PROJECT_ROOT,
         check=True,
         capture_output=True,
@@ -246,7 +265,14 @@ ConvertTo-Json -InputObject @($errors | ForEach-Object { $_.Message }) -Compress
     environment = os.environ.copy()
     environment["ORBITMIND_TEST_SCRIPT_PATH"] = str(path)
     completed = subprocess.run(
-        ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command],
+        [
+            _powershell_executable(),
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            command,
+        ],
         cwd=PROJECT_ROOT,
         check=True,
         capture_output=True,
@@ -302,9 +328,7 @@ try {
     $historicalCandidate = Get-CanonicalPath `
         -Path (Join-Path $historicalDist "OrbitMind") `
         -Label "Historical candidate"
-    $localAppData = Get-CanonicalPath `
-        -Path ([Environment]::GetFolderPath("LocalApplicationData")) `
-        -Label "LocalAppData"
+    $localAppData = Get-CanonicalPath -Path $env:LOCALAPPDATA -Label "LocalAppData"
     $historicalInstaller = Get-CanonicalPath `
         -Path (Join-Path $localAppData "OrbitMindBuild\U5.0I0") `
         -Label "Historical installer"
@@ -361,7 +385,14 @@ catch {
         }
     )
     completed = subprocess.run(
-        ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command],
+        [
+            _powershell_executable(),
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            command,
+        ],
         cwd=PROJECT_ROOT,
         check=True,
         capture_output=True,
@@ -537,9 +568,24 @@ def test_build_script_parses_without_execution() -> None:
     assert _powershell_parse_errors(BUILD_SCRIPT) == []
 
 
-def test_build_script_derives_all_packaging_paths_from_external_root(tmp_path: Path) -> None:
+def test_powershell_parser_capability_skip_is_narrow(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(shutil, "which", lambda _command: None)
+    with pytest.raises(pytest.skip.Exception, match="PowerShell parser validation requires"):
+        _powershell_executable()
+
+
+def test_build_script_derives_all_packaging_paths_from_external_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     external_root = tmp_path / "U5.0I2D"
     external_root.mkdir()
+    local_app_data = tmp_path / "LocalAppData"
+    local_app_data.mkdir()
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
+    monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))
     result = _evaluate_build_path_contract(
         str(external_root),
         str(tmp_path / "approved-wheelhouse"),
@@ -563,8 +609,14 @@ def test_build_script_derives_all_packaging_paths_from_external_root(tmp_path: P
     )
 
 
-def test_build_script_rejects_protected_and_unsafe_external_roots(tmp_path: Path) -> None:
-    local_app_data = Path(os.environ["LOCALAPPDATA"])
+def test_build_script_rejects_protected_and_unsafe_external_roots(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    local_app_data = tmp_path / "LocalAppData"
+    local_app_data.mkdir()
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
+    monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))
     wheelhouse = str(tmp_path / "approved-wheelhouse")
     invalid_roots = (
         "",

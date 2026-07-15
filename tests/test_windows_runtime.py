@@ -25,6 +25,7 @@ from alembic.script import ScriptDirectory
 from orbitmind.core.errors import StorageError
 from orbitmind.runtime import database as runtime_database
 from orbitmind.runtime import launcher as runtime_launcher
+from orbitmind.runtime import windows as runtime_windows
 from orbitmind.runtime.configuration import (
     LauncherArguments,
     PortConfigurationSource,
@@ -410,14 +411,26 @@ def test_platform_gate_rejects_os_architecture_and_elevation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     native = object.__new__(NativeWindowsRuntime)
-    monkeypatch.setattr(sys, "getwindowsversion", lambda: SimpleNamespace(major=9))
+    monkeypatch.setattr(runtime_windows, "_is_windows_runtime", lambda: True)
+    monkeypatch.delattr(sys, "getwindowsversion", raising=False)
+    monkeypatch.setattr(
+        sys,
+        "getwindowsversion",
+        lambda: SimpleNamespace(major=9),
+        raising=False,
+    )
     monkeypatch.setattr("platform.machine", lambda: "AMD64")
     monkeypatch.setattr(native, "_is_elevated", lambda: False)
     with pytest.raises(RuntimeFailure) as old_os:
         native.validate_environment()
     assert old_os.value.code is ExitCode.UNSUPPORTED_ENVIRONMENT
 
-    monkeypatch.setattr(sys, "getwindowsversion", lambda: SimpleNamespace(major=10))
+    monkeypatch.setattr(
+        sys,
+        "getwindowsversion",
+        lambda: SimpleNamespace(major=10),
+        raising=False,
+    )
     monkeypatch.setattr("platform.machine", lambda: "ARM64")
     with pytest.raises(RuntimeFailure):
         native.validate_environment()
@@ -472,8 +485,37 @@ def _native_with_fake_apis(kernel: _FakeKernel32) -> NativeWindowsRuntime:
     return native
 
 
-def test_sid_mutex_name_release_and_native_resource_cleanup() -> None:
+def _enable_complete_fake_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    last_error = 0
+
+    def set_last_error(value: int) -> None:
+        nonlocal last_error
+        last_error = value
+
+    def get_last_error() -> int:
+        return last_error
+
+    monkeypatch.setattr(runtime_windows, "_is_windows_runtime", lambda: True)
+    monkeypatch.setattr(ctypes, "set_last_error", set_last_error, raising=False)
+    monkeypatch.setattr(ctypes, "get_last_error", get_last_error, raising=False)
+
+
+def test_incomplete_fake_windows_environment_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     kernel = _FakeKernel32()
+    monkeypatch.setattr(runtime_windows, "_is_windows_runtime", lambda: False)
+    with pytest.raises(RuntimeFailure) as caught:
+        _native_with_fake_apis(kernel).acquire_mutex()
+    assert caught.value.code is ExitCode.UNSUPPORTED_ENVIRONMENT
+    assert kernel.created_name is None
+
+
+def test_sid_mutex_name_release_and_native_resource_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    kernel = _FakeKernel32()
+    _enable_complete_fake_windows(monkeypatch)
     mutex = _native_with_fake_apis(kernel).acquire_mutex()
     assert kernel.created_name == "Global\\OrbitMind.U5.0B0.Runtime.v1.S-1-5-21-test"
     assert kernel.local_freed == 1
@@ -483,8 +525,11 @@ def test_sid_mutex_name_release_and_native_resource_cleanup() -> None:
     assert kernel.closed == [456]
 
 
-def test_sid_mutex_duplicate_closes_handle_and_exits_20() -> None:
+def test_sid_mutex_duplicate_closes_handle_and_exits_20(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     kernel = _FakeKernel32(already_exists=True)
+    _enable_complete_fake_windows(monkeypatch)
     with pytest.raises(RuntimeFailure) as caught:
         _native_with_fake_apis(kernel).acquire_mutex()
     assert caught.value.code is ExitCode.SINGLE_INSTANCE_CONFLICT
