@@ -9,7 +9,7 @@ import os
 import re
 import shutil
 import subprocess
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 import pytest
 
@@ -34,6 +34,7 @@ EXPECTED_SPEC_HASH = "463c3623086ee887016852fc9ddee1ce51c5db7f2e55bba2e7e2a42345
 POWERSHELL_PARSER_SKIP_REASON = (
     "PowerShell parser validation requires powershell.exe or pwsh on the test host."
 )
+PHYSICAL_WINDOWS_PATH_SKIP_REASON = "Physical Windows path semantics require a Windows host."
 
 
 def _powershell_executable() -> str:
@@ -404,6 +405,69 @@ catch {
     return result
 
 
+def _evaluate_canonical_path_rejection(path: str, label: str) -> dict[str, object]:
+    command = r"""
+$tokens = $null
+$errors = $null
+$scriptPath = [Environment]::GetEnvironmentVariable("ORBITMIND_TEST_SCRIPT_PATH", "Process")
+$ast = [System.Management.Automation.Language.Parser]::ParseFile(
+    $scriptPath, [ref]$tokens, [ref]$errors
+)
+if (@($errors).Count -ne 0) { throw "Build script has parser errors." }
+$definition = $ast.FindAll(
+    {
+        param($node)
+        $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq "Get-CanonicalPath"
+    },
+    $true
+) | Select-Object -First 1
+if ($null -eq $definition) { throw "Missing path-contract function: Get-CanonicalPath" }
+Invoke-Expression $definition.Extent.Text
+try {
+    $canonical = Get-CanonicalPath `
+        -Path $env:ORBITMIND_TEST_PATH_INPUT `
+        -Label $env:ORBITMIND_TEST_PATH_LABEL
+    [ordered]@{
+        success = $true
+        canonical = $canonical
+    } | ConvertTo-Json -Compress
+}
+catch {
+    [ordered]@{
+        success = $false
+        error = $_.Exception.Message
+    } | ConvertTo-Json -Compress
+}
+"""
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "ORBITMIND_TEST_SCRIPT_PATH": str(BUILD_SCRIPT),
+            "ORBITMIND_TEST_PATH_INPUT": path,
+            "ORBITMIND_TEST_PATH_LABEL": label,
+        }
+    )
+    completed = subprocess.run(
+        [
+            _powershell_executable(),
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            command,
+        ],
+        cwd=PROJECT_ROOT,
+        check=True,
+        capture_output=True,
+        env=environment,
+        text=True,
+    )
+    result = json.loads(completed.stdout)
+    assert isinstance(result, dict)
+    return result
+
+
 def test_lock_identity_and_shape() -> None:
     content = LOCK.read_bytes()
     text = content.decode("utf-8")
@@ -576,6 +640,42 @@ def test_powershell_parser_capability_skip_is_narrow(
         _powershell_executable()
 
 
+def test_build_path_contract_rejects_posix_repository_path() -> None:
+    result = _evaluate_canonical_path_rejection(
+        str(PurePosixPath("/home/runner/work/orbitmind")),
+        "Repository",
+    )
+
+    assert result["success"] is False
+    assert "fully qualified Windows path" in str(result["error"])
+
+
+@pytest.mark.parametrize(
+    ("invalid_root", "error_fragment"),
+    (
+        (str(PurePosixPath("/tmp/orbitmind-build")), "fully qualified Windows path"),
+        (r"relative\output", "fully qualified Windows path"),
+        (r"C:\safe\..\escaped", "relative path segments"),
+        ("", "nonempty absolute Windows path"),
+    ),
+)
+def test_build_path_contract_rejects_portable_unsafe_roots_before_mutation(
+    invalid_root: str,
+    error_fragment: str,
+    tmp_path: Path,
+) -> None:
+    before = tuple(tmp_path.rglob("*"))
+
+    result = _evaluate_canonical_path_rejection(invalid_root, "ExternalBuildRoot")
+
+    assert result["success"] is False
+    assert error_fragment in str(result["error"])
+    assert tuple(tmp_path.rglob("*")) == before
+    for forbidden_leaf in (".venv-build-offline", "build", "candidate"):
+        assert not (tmp_path / forbidden_leaf).exists()
+
+
+@pytest.mark.skipif(os.name != "nt", reason=PHYSICAL_WINDOWS_PATH_SKIP_REASON)
 def test_build_script_derives_all_packaging_paths_from_external_root(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -592,11 +692,18 @@ def test_build_script_derives_all_packaging_paths_from_external_root(
     )
 
     assert result["success"] is True
-    assert Path(str(result["external_root"])) == external_root.resolve()
-    assert Path(str(result["build_venv"])) == external_root / ".venv-build-offline"
-    assert Path(str(result["work_path"])) == external_root / "build"
-    assert Path(str(result["dist_path"])) == external_root / "candidate"
-    assert Path(str(result["candidate_path"])) == external_root / "candidate" / "OrbitMind"
+    assert external_root.is_absolute()
+    assert external_root.drive
+    assert not external_root.is_relative_to(PROJECT_ROOT)
+    assert not external_root.is_symlink()
+    expected_root = PureWindowsPath(external_root.resolve())
+    assert PureWindowsPath(str(result["external_root"])) == expected_root
+    assert PureWindowsPath(str(result["build_venv"])) == expected_root / ".venv-build-offline"
+    assert PureWindowsPath(str(result["work_path"])) == expected_root / "build"
+    assert PureWindowsPath(str(result["dist_path"])) == expected_root / "candidate"
+    assert PureWindowsPath(str(result["candidate_path"])) == (
+        expected_root / "candidate" / "OrbitMind"
+    )
     assert (
         len(
             {
@@ -609,7 +716,8 @@ def test_build_script_derives_all_packaging_paths_from_external_root(
     )
 
 
-def test_build_script_rejects_protected_and_unsafe_external_roots(
+@pytest.mark.skipif(os.name != "nt", reason=PHYSICAL_WINDOWS_PATH_SKIP_REASON)
+def test_build_script_rejects_protected_windows_external_roots(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -619,9 +727,6 @@ def test_build_script_rejects_protected_and_unsafe_external_roots(
     monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))
     wheelhouse = str(tmp_path / "approved-wheelhouse")
     invalid_roots = (
-        "",
-        r"relative\output",
-        str(tmp_path / "safe" / ".." / "escaped"),
         str(PROJECT_ROOT) + ".",
         rf"\\?\{PROJECT_ROOT}",
         PROJECT_ROOT.anchor,
@@ -675,6 +780,10 @@ def test_build_script_revalidates_only_bounded_cleanup_targets() -> None:
 def test_build_script_propagates_external_paths_and_preserves_packaging_contract() -> None:
     text = BUILD_SCRIPT.read_text(encoding="utf-8")
 
+    assert re.search(
+        r"\[Parameter\(Mandatory\s*=\s*\$true\)\]\s*\[string\]\$ExternalBuildRoot",
+        text,
+    )
     assert re.search(r"\$BuildVenv\s*=\s*Assert-SafeExternalChildPath", text)
     assert re.search(r"\$BuildPath\s*=\s*Assert-SafeExternalChildPath", text)
     assert re.search(r"\$DistPath\s*=\s*Assert-SafeExternalChildPath", text)
@@ -684,6 +793,11 @@ def test_build_script_propagates_external_paths_and_preserves_packaging_contract
     assert 'Join-Path $RepositoryRoot "dist\\u5.0b1"' in text
     assert not re.search(r"\$BuildPath\s*=.*\$RepositoryRoot", text)
     assert not re.search(r"\$DistPath\s*=.*\$RepositoryRoot", text)
+    path_validation = text.index("$ExternalRoot = Assert-ExternalBuildRoot")
+    bounded_cleanup = text.index("foreach ($generated in @(")
+    package_install = text.index("& $venvPython @installArgs")
+    pyinstaller = text.index("& $venvPython -m PyInstaller")
+    assert path_validation < bounded_cleanup < package_install < pyinstaller
     for required in (
         '$ExpectedPython = "3.12.10"',
         "--no-index",
