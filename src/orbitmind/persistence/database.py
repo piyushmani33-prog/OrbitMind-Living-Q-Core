@@ -87,3 +87,8 @@ class Database:
         except Exception:
             return False
         return True
+
+    def dispose(self) -> None:
+        """Release pooled database resources owned by this instance."""
+
+        self.engine.dispose()

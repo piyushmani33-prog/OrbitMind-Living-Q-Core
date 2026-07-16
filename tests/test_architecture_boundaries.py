@@ -35,7 +35,10 @@ _ALLOWED_QUANTUM_CONSUMERS = ("quantum", "optimization", "observability")
 # composition roots may import the API layer to wire the existing app container and
 # DTO projections for an executable local flow. This does not permit domain, core,
 # orbital, or arbitrary future modules to import ``orbitmind.api``.
-_API_IMPORT_ENTRYPOINT_EXCEPTIONS = {_SOURCE_ROOT / "sample.py"}
+_API_IMPORT_ENTRYPOINT_EXCEPTIONS = {
+    _SOURCE_ROOT / "sample.py",
+    _SOURCE_ROOT / "runtime" / "launcher.py",
+}
 
 
 def _imported_modules(source: str) -> set[str]:

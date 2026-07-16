@@ -59,7 +59,14 @@ class SqlAlchemySourceRepository:
         self._s = session
 
     def sync_definition(self, definition: SourceDefinition) -> None:
-        now = utcnow()
+        now: datetime | None = None
+
+        def sync_time() -> datetime:
+            nonlocal now
+            if now is None:
+                now = utcnow()
+            return now
+
         row = self._s.get(SourceDefinitionRow, definition.source_id)
         if row is None:
             self._s.add(
@@ -69,15 +76,25 @@ class SqlAlchemySourceRepository:
                     kind=definition.kind.value,
                     description=definition.description,
                     enabled=definition.enabled,
-                    updated_at=now,
+                    updated_at=sync_time(),
                 )
             )
         else:
-            row.name = definition.name
-            row.kind = definition.kind.value
-            row.description = definition.description
-            row.enabled = definition.enabled
-            row.updated_at = now
+            definition_changed = False
+            if row.name != definition.name:
+                row.name = definition.name
+                definition_changed = True
+            if row.kind != definition.kind.value:
+                row.kind = definition.kind.value
+                definition_changed = True
+            if row.description != definition.description:
+                row.description = definition.description
+                definition_changed = True
+            if row.enabled != definition.enabled:
+                row.enabled = definition.enabled
+                definition_changed = True
+            if definition_changed:
+                row.updated_at = sync_time()
 
         policy = definition.policy
         existing = (
@@ -99,17 +116,31 @@ class SqlAlchemySourceRepository:
                     schema_version=policy.schema_version,
                     network_enabled=policy.network_enabled,
                     snapshot=snapshot,
-                    recorded_at=now,
+                    recorded_at=sync_time(),
                 )
             )
         else:
-            existing.policy_version = policy.policy_version
-            existing.base_url = policy.base_url
-            existing.schema_format = policy.schema_format.value
-            existing.schema_version = policy.schema_version
-            existing.network_enabled = policy.network_enabled
-            existing.snapshot = snapshot
-            existing.recorded_at = now
+            policy_changed = False
+            if existing.policy_version != policy.policy_version:
+                existing.policy_version = policy.policy_version
+                policy_changed = True
+            if existing.base_url != policy.base_url:
+                existing.base_url = policy.base_url
+                policy_changed = True
+            if existing.schema_format != policy.schema_format.value:
+                existing.schema_format = policy.schema_format.value
+                policy_changed = True
+            if existing.schema_version != policy.schema_version:
+                existing.schema_version = policy.schema_version
+                policy_changed = True
+            if existing.network_enabled != policy.network_enabled:
+                existing.network_enabled = policy.network_enabled
+                policy_changed = True
+            if existing.snapshot != snapshot:
+                existing.snapshot = snapshot
+                policy_changed = True
+            if policy_changed:
+                existing.recorded_at = sync_time()
 
     def add_fetch(self, record: SourceFetchRecord) -> None:
         self._s.add(

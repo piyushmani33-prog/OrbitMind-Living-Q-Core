@@ -219,7 +219,8 @@ class AppContainer:
             session.commit()
 
     def shutdown(self) -> None:
-        """Clear process-local sensitive state owned by this container."""
+        """Release process-local sensitive state and database resources."""
 
         if self.custom_tle_handoff_store is not None:
             self.custom_tle_handoff_store.clear()
+        self.database.dispose()

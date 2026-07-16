@@ -166,6 +166,12 @@ implementation and clean-machine/parity/security/resource evidence remain U5.0B 
 and external distribution remains blocked. See
 [WINDOWS_PACKAGING_KICKOFF_DECISIONS.md](WINDOWS_PACKAGING_KICKOFF_DECISIONS.md).
 
+**U5.0B1 Windows packaging source implementation:** the bounded launcher, packaged-runtime
+preflight, one-folder spec, offline build/verification script sources, tests, and operator record
+are prepared for review. No PyInstaller invocation or frozen bundle is authorized or claimed;
+clean-machine, parity, performance, antivirus, and distribution gates remain open. See
+[U5_0B_WINDOWS_PACKAGING_SPIKE.md](../operations/U5_0B_WINDOWS_PACKAGING_SPIKE.md).
+
 ### Further optimization (planned / deferred)
 Larger instances / additional solvers, still classical-baseline-first and bounded.
 
