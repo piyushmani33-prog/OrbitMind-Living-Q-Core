@@ -24,6 +24,7 @@ dependencies = [
     "sgp4>=2.23,<3.0",
     "matplotlib>=3.9,<4.0",
     "numpy>=2.0,<3.0",
+    "Pillow>=12.3,<13",
     "structlog>=24.1",
     # Phase 2: a small, well-established async/sync HTTP client (already present via
     # the FastAPI test stack) for the CelesTrak connector. No large SDK is used.

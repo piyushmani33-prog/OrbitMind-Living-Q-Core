@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import json
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -16,6 +17,7 @@ from sgp4.api import Satrec
 
 from orbitmind.api.app import create_app
 from orbitmind.api.container import AppContainer
+from orbitmind.camera.runtime import CameraMediaRuntimeContext
 from orbitmind.core.config import Settings
 from orbitmind.mission.models import MissionRequest, OutputType
 from orbitmind.persistence.database import Database
@@ -111,12 +113,41 @@ def settings(tmp_path: Path) -> Settings:
     )
 
 
+def _camera_test_secret_generator(domain: bytes) -> Callable[[], bytes]:
+    counter = 0
+
+    def generate() -> bytes:
+        nonlocal counter
+        counter += 1
+        return hashlib.sha256(domain + counter.to_bytes(8, "big")).digest()
+
+    return generate
+
+
 @pytest.fixture
-def container(settings: Settings) -> AppContainer:
+def container(settings: Settings, tmp_path: Path) -> AppContainer:
     """A fully wired application container backed by the temp database."""
-    c = AppContainer(settings=settings)
+    runtime_temp_dir = tmp_path / "camera-runtime-temp"
+    camera_runtime_context = CameraMediaRuntimeContext(
+        runtime_temp_dir=runtime_temp_dir,
+        media_root=runtime_temp_dir / "camera-sessions",
+        utcnow=lambda: _TEST_START,
+        page_session_id_generator=_camera_test_secret_generator(b"camera-page-session"),
+        csrf_token_generator=_camera_test_secret_generator(b"camera-csrf-token"),
+        media_session_id_generator=_camera_test_secret_generator(b"camera-media-session"),
+        media_capability_generator=_camera_test_secret_generator(b"camera-media-capability"),
+        process_binding_key=hashlib.sha256(b"camera-process-binding").digest(),
+    )
+    c = AppContainer(
+        settings=settings,
+        camera_runtime_context=camera_runtime_context,
+        caller_owns_lifecycle=True,
+    )
     c.init_storage()
-    return c
+    try:
+        yield c
+    finally:
+        c.shutdown()
 
 
 @pytest.fixture
