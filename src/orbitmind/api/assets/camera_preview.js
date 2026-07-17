@@ -747,7 +747,7 @@
     }
     const normalized = value.replace(/\r\n?/g, "\n").normalize("NFC").trim();
     if (
-      /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/.test(normalized) ||
+      /[\u0000-\u0009\u000b\u000c\u000e-\u001f\u007f-\u009f]/.test(normalized) ||
       Array.from(normalized).length > MAX_PROPOSAL_CONTEXT_CODEPOINTS
     ) {
       return null;
@@ -1195,7 +1195,17 @@
   });
 
   proposalContext.addEventListener("input", function () {
-    if (state === "proposal_failed" && hasPrivateServerSession() && !privateProposal) {
+    if (!hasPrivateServerSession() || privateProposal || destroyed) {
+      return;
+    }
+    if (
+      PROPOSAL_GOALS.includes(proposalGoal.value) &&
+      !hasValidProposalSelection()
+    ) {
+      setState("proposal_failed", messages.camera_proposal_context_invalid, true);
+      return;
+    }
+    if (state === "proposal_failed") {
       setState("selecting_goal", "Select optional context, then create one inert temporary proposal.", false);
       return;
     }
