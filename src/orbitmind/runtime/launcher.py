@@ -72,8 +72,19 @@ def _build_application(configuration: RuntimeConfiguration) -> FastAPI:
     # constructing the source-mode module-level app before packaged settings exist.
     from orbitmind.api.app import create_app
     from orbitmind.api.container import AppContainer
+    from orbitmind.camera.runtime import CameraMediaRuntimeContext
 
-    return create_app(AppContainer(settings=configuration.settings))
+    camera_runtime_context = (
+        CameraMediaRuntimeContext.production(configuration.runtime_paths.temp_dir)
+        if configuration.runtime_paths is not None
+        else None
+    )
+    return create_app(
+        AppContainer(
+            settings=configuration.settings,
+            camera_runtime_context=camera_runtime_context,
+        )
+    )
 
 
 def run_launcher(

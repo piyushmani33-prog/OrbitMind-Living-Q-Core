@@ -37,6 +37,13 @@ from orbitmind.api.transient_handoff import (
     TransientCustomTleHandoffRecord,
     TransientHandoffInput,
 )
+from orbitmind.camera.csrf import (
+    CAMERA_CSRF_META_NAME,
+    CAMERA_PAGE_SESSION_COOKIE_NAME,
+    CAMERA_PAGE_SESSION_COOKIE_PATH,
+    CAMERA_PAGE_SESSION_TTL_SECONDS,
+    CameraPageSessionUnavailableError,
+)
 from orbitmind.core.errors import OrbitMindError
 from orbitmind.mission_windows.models import (
     MissionWindowEvent,
@@ -69,6 +76,26 @@ MAX_HANDOFF_BODY_BYTES = 512
 WORKBENCH_COARSE_STEP_SECONDS = 60
 MAX_REPLAY_HTML_BYTES = 1_000_000
 REPLAY_CONTROLLER_ASSET_PATH = "/assets/trajectory-replay.js"
+CAMERA_PREVIEW_ASSET_PATH = "/assets/camera-preview.js"
+CAMERA_PREVIEW_PERMISSIONS_POLICY = (
+    "geolocation=(), microphone=(), camera=(self), payment=(), usb=(), "
+    "magnetometer=(), gyroscope=(), accelerometer=()"
+)
+CAMERA_PREVIEW_CONTENT_SECURITY_POLICY = (
+    "default-src 'none'; "
+    "script-src 'self'; "
+    "style-src 'unsafe-inline'; "
+    "img-src 'self' blob:; "
+    "font-src 'none'; "
+    "connect-src 'self'; "
+    "object-src 'none'; "
+    "base-uri 'none'; "
+    "frame-ancestors 'none'; "
+    "form-action 'self'; "
+    "worker-src 'none'; "
+    "media-src 'none'; "
+    "manifest-src 'none'"
+)
 _WORKBENCH_SOURCE_MODES = frozenset({"catalog", "custom"})
 _WORKBENCH_FORM_FIELDS = frozenset(
     {
@@ -292,6 +319,118 @@ WORKBENCH_CSS = (
 """
 )
 
+CAMERA_PREVIEW_CSS = (
+    WORKBENCH_CSS
+    + """
+    .camera-shell { display: grid; gap: 18px; }
+    .privacy-note {
+      background: var(--panel-soft);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 18px;
+    }
+    .camera-stage {
+      background: #101820;
+      border: 2px solid #33485a;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .camera-stage video {
+      aspect-ratio: 16 / 9;
+      display: block;
+      min-height: 220px;
+      object-fit: contain;
+      width: 100%;
+    }
+    .camera-controls { align-items: end; display: grid; gap: 14px; }
+    .camera-controls select { min-width: min(100%, 280px); }
+    .camera-capture-controls {
+      align-items: end;
+      display: grid;
+      gap: 14px;
+      grid-template-columns: minmax(180px, 280px) minmax(180px, max-content);
+    }
+    .camera-capture-controls label { display: grid; gap: 6px; font-weight: 700; }
+    .camera-captured-panel { display: grid; gap: 16px; }
+    .camera-server-panel {
+      background: var(--panel-soft);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      display: grid;
+      gap: 16px;
+      padding: 18px;
+    }
+    .camera-proposal-controls { display: grid; gap: 14px; }
+    .camera-proposal-controls label { display: grid; gap: 6px; font-weight: 700; }
+    .camera-proposal-context { min-height: 96px; resize: vertical; }
+    .camera-captured-image {
+      background: #101820;
+      border: 2px solid #33485a;
+      border-radius: 8px;
+      display: block;
+      max-height: 70vh;
+      max-width: 100%;
+      object-fit: contain;
+    }
+    .camera-capture-metadata {
+      display: grid;
+      gap: 6px 16px;
+      grid-template-columns: max-content minmax(0, 1fr);
+      margin: 0;
+    }
+    .camera-capture-metadata dt { color: var(--muted); font-weight: 700; }
+    .camera-capture-metadata dd { margin: 0; overflow-wrap: anywhere; }
+    .camera-captured-actions { display: flex; flex-wrap: wrap; gap: 12px; }
+    .camera-active-indicator {
+      align-items: center;
+      background: var(--good-bg);
+      border: 2px solid var(--good-ink);
+      border-radius: 8px;
+      color: var(--good-ink);
+      display: flex;
+      font-weight: 800;
+      gap: 10px;
+      padding: 12px 16px;
+    }
+    .camera-active-indicator::before {
+      background: currentColor;
+      border-radius: 50%;
+      content: "";
+      height: 12px;
+      width: 12px;
+    }
+    .camera-status {
+      border-left: 4px solid var(--accent);
+      min-height: 48px;
+      padding: 10px 14px;
+    }
+    .camera-status.error {
+      background: #fff1f0;
+      border-color: #7a231d;
+      color: #7a231d;
+    }
+    .camera-label { color: var(--muted); font-weight: 700; }
+    .camera-stop {
+      background: #8a2d24;
+      min-height: 52px;
+      min-width: 180px;
+      padding: 14px 22px;
+    }
+    .camera-stop:hover { background: #682018; }
+    button:disabled { cursor: not-allowed; opacity: 0.55; }
+    [hidden] { display: none !important; }
+    @media (max-width: 700px) {
+      .camera-stage video { min-height: 180px; }
+      .camera-capture-controls { grid-template-columns: 1fr; }
+      .camera-controls .button { width: 100%; }
+      .camera-captured-actions .button { width: 100%; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
+    }
+"""
+)
+
 
 @dataclass(frozen=True)
 class WorkbenchForm:
@@ -360,6 +499,30 @@ def trajectory_replay_controller_asset() -> Response:
     )
 
 
+@router.get("/assets/camera-preview.js", include_in_schema=False)
+def camera_preview_controller_asset() -> Response:
+    """Serve the reviewed local camera-preview controller asset."""
+
+    try:
+        script = (
+            resources.files("orbitmind.api.assets")
+            .joinpath("camera_preview.js")
+            .read_text(encoding="utf-8")
+        )
+    except (FileNotFoundError, ModuleNotFoundError, OSError):
+        return Response(
+            "Camera preview asset unavailable.",
+            status_code=500,
+            media_type="text/plain; charset=utf-8",
+            headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"},
+        )
+    return Response(
+        script,
+        media_type="application/javascript; charset=utf-8",
+        headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"},
+    )
+
+
 @router.get("/workbench", response_class=HTMLResponse)
 def mission_workbench_home(container: ContainerDep) -> HTMLResponse:
     """Render the offline Mission Workbench form."""
@@ -380,6 +543,183 @@ def mission_workbench_home(container: ContainerDep) -> HTMLResponse:
       <p class="footer-link"><a href="/review">Back to reviewer sandbox</a></p>
     """
     return HTMLResponse(_workbench_page("OrbitMind Mission Workbench", body))
+
+
+def camera_preview_sandbox() -> HTMLResponse:
+    """Render the inactive, browser-local camera preview sandbox."""
+
+    return _camera_preview_response(csrf_token=None)
+
+
+@router.get("/workbench/camera", response_class=HTMLResponse)
+def _camera_preview_route(request: Request, container: ContainerDep) -> HTMLResponse:
+    """Issue one camera page session and render its inert CSRF token."""
+
+    try:
+        registry = container.require_camera_page_csrf_registry()
+        issued = registry.issue(request.cookies.get(CAMERA_PAGE_SESSION_COOKIE_NAME))
+    except CameraPageSessionUnavailableError:
+        return HTMLResponse(
+            "Camera preview is temporarily unavailable.",
+            status_code=503,
+            headers={"Cache-Control": "no-store"},
+        )
+
+    response = _camera_preview_response(csrf_token=issued.csrf_token)
+    response.set_cookie(
+        key=CAMERA_PAGE_SESSION_COOKIE_NAME,
+        value=issued.page_session_id,
+        max_age=CAMERA_PAGE_SESSION_TTL_SECONDS,
+        path=CAMERA_PAGE_SESSION_COOKIE_PATH,
+        secure=False,
+        httponly=True,
+        samesite="strict",
+    )
+    return response
+
+
+def _camera_preview_response(*, csrf_token: str | None) -> HTMLResponse:
+    """Render the camera preview and its inert page-scoped authority."""
+
+    body = f"""
+      <section class="hero">
+        <p class="eyebrow">Browser-local preview sandbox</p>
+        <h1>Local camera preview</h1>
+        <p>The camera stays off until <strong>Enable camera</strong> is selected.</p>
+      </section>
+      <section class="camera-shell card" aria-labelledby="camera-preview-heading">
+        <h2 id="camera-preview-heading">Private preview</h2>
+        <div class="privacy-note" id="camera-privacy-note">
+          <p>Preview remains local in this browser. Any explicitly captured frame is held only
+          in browser memory. Submission occurs only after <strong>Create temporary session</strong>
+          is selected.</p>
+          <p>A submitted temporary server copy expires after 15 minutes. It is not analyzed in
+          this slice and can be explicitly discarded.</p>
+          <p><strong>Microphone is not used.</strong> OrbitMind requests camera video only.</p>
+        </div>
+        <p id="camera-support-status" role="status" aria-live="polite">
+          Checking camera-preview support. Camera is inactive.
+        </p>
+        <div class="camera-controls">
+          <button class="button" id="camera-enable" type="button">Enable camera</button>
+          <label id="camera-device-field" for="camera-device" hidden>
+            Camera
+            <select id="camera-device" disabled></select>
+          </label>
+          <div class="camera-active-indicator" id="camera-active-indicator" hidden>
+            CAMERA ACTIVE
+          </div>
+          <p class="camera-label" id="camera-active-label" hidden></p>
+        </div>
+        <div class="camera-stage">
+          <video id="camera-preview" autoplay muted playsinline
+            aria-describedby="camera-privacy-note camera-status"></video>
+        </div>
+        <div class="camera-capture-controls">
+          <label for="camera-capture-format">
+            Captured image format
+            <select id="camera-capture-format">
+              <option value="image/jpeg">JPEG</option>
+              <option value="image/png">PNG</option>
+            </select>
+          </label>
+          <button class="button" id="camera-capture" type="button" disabled>
+            Capture frame
+          </button>
+        </div>
+        <button class="button camera-stop" id="camera-stop" type="button" disabled>
+          Stop camera
+        </button>
+        <section class="camera-captured-panel" id="camera-captured-panel"
+          aria-labelledby="camera-captured-heading" hidden>
+          <h3 id="camera-captured-heading">Captured frame</h3>
+          <img class="camera-captured-image" id="camera-captured-image"
+            alt="Captured still-frame preview" hidden>
+          <dl class="camera-capture-metadata" id="camera-capture-metadata" hidden>
+            <dt>Media type</dt><dd id="camera-capture-media-type"></dd>
+            <dt>Width</dt><dd id="camera-capture-width"></dd>
+            <dt>Height</dt><dd id="camera-capture-height"></dd>
+            <dt>Encoded byte size</dt><dd id="camera-capture-size"></dd>
+          </dl>
+          <div class="camera-captured-actions">
+            <button class="button" id="camera-retake" type="button" hidden>Retake</button>
+            <button class="button camera-stop" id="camera-discard" type="button" hidden>
+              Discard
+            </button>
+            <button class="button" id="camera-create-session" type="button" disabled>
+              Create temporary session
+            </button>
+          </div>
+        </section>
+        <section class="camera-server-panel" id="camera-server-session-panel"
+          aria-labelledby="camera-server-session-heading" hidden>
+          <h3 id="camera-server-session-heading">Temporary server frame</h3>
+          <dl class="camera-capture-metadata" id="camera-server-metadata">
+            <dt>Media type</dt><dd id="camera-server-media-type"></dd>
+            <dt>Width</dt><dd id="camera-server-width"></dd>
+            <dt>Height</dt><dd id="camera-server-height"></dd>
+            <dt>Encoded byte size</dt><dd id="camera-server-size"></dd>
+            <dt>Expires</dt><dd id="camera-server-expires"></dd>
+            <dt>Retention</dt><dd id="camera-server-retention"></dd>
+          </dl>
+          <div class="camera-proposal-controls" id="camera-proposal-controls" hidden>
+            <label for="camera-proposal-goal">
+              Creation goal
+              <select id="camera-proposal-goal" disabled>
+                <option value="">Select a goal</option>
+                <option value="visual_reference">Use as a visual reference</option>
+                <option value="documentation">Prepare documentation</option>
+                <option value="transformation_request">Prepare a transformation request</option>
+                <option value="explanation_request">Prepare an explanation request</option>
+                <option value="other">Other</option>
+              </select>
+            </label>
+            <label for="camera-proposal-context">
+              Optional user context
+              <textarea class="camera-proposal-context" id="camera-proposal-context" maxlength="500"
+                spellcheck="true" disabled></textarea>
+            </label>
+            <p>This creates an inert temporary proposal only. It does not analyze the image or
+            perform an action.</p>
+            <button class="button" id="camera-create-proposal" type="button" disabled>
+              Create proposal
+            </button>
+          </div>
+          <section class="camera-proposal-controls" id="camera-proposal-panel"
+            aria-labelledby="camera-proposal-heading" hidden>
+            <h4 id="camera-proposal-heading">Temporary proposal</h4>
+            <dl class="camera-capture-metadata">
+              <dt>Goal</dt><dd id="camera-proposal-goal-value"></dd>
+              <dt>User context</dt><dd id="camera-proposal-context-value"></dd>
+              <dt>Proposal state</dt><dd id="camera-proposal-state"></dd>
+              <dt>Execution</dt><dd id="camera-proposal-execution"></dd>
+              <dt>Analysis</dt><dd id="camera-proposal-analysis"></dd>
+              <dt>Expires</dt><dd id="camera-proposal-expires"></dd>
+              <dt>Human approval</dt><dd id="camera-proposal-approval"></dd>
+            </dl>
+          </section>
+          <button class="button camera-stop" id="camera-server-discard" type="button" hidden>
+            Discard temporary server frame
+          </button>
+        </section>
+        <p class="camera-status" id="camera-status" role="status" aria-live="polite"
+          aria-atomic="true">Camera is inactive.</p>
+        <noscript>
+          <p class="noscript-note">Camera preview requires local JavaScript. The camera remains
+          off while JavaScript is unavailable.</p>
+        </noscript>
+      </section>
+      <p class="footer-link"><a href="/workbench">Back to Workbench</a></p>
+      <script src="{CAMERA_PREVIEW_ASSET_PATH}" defer></script>
+    """
+    return HTMLResponse(
+        _camera_preview_page("OrbitMind Local Camera Preview", body, csrf_token=csrf_token),
+        headers={
+            "Cache-Control": "no-store",
+            "Content-Security-Policy": CAMERA_PREVIEW_CONTENT_SECURITY_POLICY,
+            "Permissions-Policy": CAMERA_PREVIEW_PERMISSIONS_POLICY,
+        },
+    )
 
 
 @router.post("/workbench/run", response_class=HTMLResponse)
@@ -1722,6 +2062,29 @@ def _workbench_page(title: str, body: str) -> str:
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{escape(title)}</title>
   <style>{WORKBENCH_CSS}</style>
+</head>
+<body>
+  <main>{body}</main>
+</body>
+</html>
+"""
+
+
+def _camera_preview_page(title: str, body: str, *, csrf_token: str | None = None) -> str:
+    csrf_meta = (
+        ""
+        if csrf_token is None
+        else (
+            f'  <meta name="{CAMERA_CSRF_META_NAME}" content="{escape(csrf_token, quote=True)}">\n'
+        )
+    )
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+{csrf_meta}  <title>{escape(title)}</title>
+  <style>{CAMERA_PREVIEW_CSS}</style>
 </head>
 <body>
   <main>{body}</main>

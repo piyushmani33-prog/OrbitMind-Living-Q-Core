@@ -12,6 +12,10 @@ from collections.abc import Callable
 import httpx
 
 from orbitmind.api.transient_handoff import CustomTleTransientHandoffStore
+from orbitmind.camera.csrf import CameraPageCsrfRegistry, CameraPageSessionUnavailableError
+from orbitmind.camera.media import CameraMediaError
+from orbitmind.camera.runtime import CameraMediaRuntimeContext
+from orbitmind.camera.service import CameraMediaService, CameraMediaShutdownReport
 from orbitmind.core.config import Settings, get_settings
 from orbitmind.memory.service import MemoryService
 from orbitmind.mission_windows.service import MissionWindowService
@@ -113,7 +117,7 @@ def _build_evidence_signers(
 
 
 class AppContainer:
-    """Owns long-lived services for the application lifetime."""
+    """Owns long-lived services with explicit application-lifespan ownership."""
 
     def __init__(
         self,
@@ -124,8 +128,28 @@ class AppContainer:
         jpl_transport: httpx.BaseTransport | None = None,
         jpl_sleep: Callable[[float], None] = time.sleep,
         custom_tle_handoff_store: CustomTleTransientHandoffStore | None = None,
+        camera_runtime_context: CameraMediaRuntimeContext | None = None,
+        caller_owns_lifecycle: bool = False,
     ) -> None:
         self.settings = settings or get_settings()
+        self.caller_owns_lifecycle = caller_owns_lifecycle
+        self.camera_runtime_context = camera_runtime_context
+        self.camera_page_csrf_registry = (
+            CameraPageCsrfRegistry(
+                clock=camera_runtime_context.utcnow,
+                page_session_id_generator=camera_runtime_context.page_session_id_generator,
+                csrf_token_generator=camera_runtime_context.csrf_token_generator,
+                process_binding_key=camera_runtime_context.process_binding_key,
+            )
+            if camera_runtime_context is not None
+            else None
+        )
+        self.camera_media_service = (
+            CameraMediaService(camera_runtime_context)
+            if camera_runtime_context is not None
+            else None
+        )
+        self.camera_media_shutdown_report: CameraMediaShutdownReport | None = None
         if custom_tle_handoff_store is not None and not self.settings.custom_tle_handoff_enabled:
             raise ValueError("custom-TLE handoff store requires explicit feature enablement")
         self.custom_tle_handoff_store = (
@@ -217,10 +241,30 @@ class AppContainer:
             for definition in self.catalog.list():
                 source_repo.sync_definition(definition)
             session.commit()
+        if self.camera_media_service is not None:
+            self.camera_media_service.start()
+
+    def require_camera_page_csrf_registry(self) -> CameraPageCsrfRegistry:
+        """Return this application's camera CSRF authority or fail closed."""
+
+        if self.camera_page_csrf_registry is None:
+            raise CameraPageSessionUnavailableError
+        return self.camera_page_csrf_registry
+
+    def require_camera_media_service(self) -> CameraMediaService:
+        """Return this application's media service or fail without a path fallback."""
+
+        if self.camera_media_service is None:
+            raise CameraMediaError("camera_invalid_state", 409)
+        return self.camera_media_service
 
     def shutdown(self) -> None:
         """Release process-local sensitive state and database resources."""
 
+        if self.camera_media_service is not None:
+            self.camera_media_shutdown_report = self.camera_media_service.close()
+        if self.camera_page_csrf_registry is not None:
+            self.camera_page_csrf_registry.close()
         if self.custom_tle_handoff_store is not None:
             self.custom_tle_handoff_store.clear()
         self.database.dispose()

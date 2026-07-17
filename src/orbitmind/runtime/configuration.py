@@ -126,6 +126,7 @@ class RuntimeConfiguration:
     port: int
     port_source: PortConfigurationSource
     open_browser: bool
+    runtime_paths: RuntimePaths | None = None
 
     @property
     def workbench_url(self) -> str:
@@ -261,4 +262,5 @@ def build_runtime_configuration(
         port=port,
         port_source=port_source,
         open_browser=open_browser,
+        runtime_paths=paths,
     )

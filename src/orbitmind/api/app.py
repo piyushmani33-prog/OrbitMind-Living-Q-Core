@@ -17,6 +17,7 @@ from starlette.responses import Response
 from orbitmind import __version__
 from orbitmind.api.container import AppContainer
 from orbitmind.api.errors import register_exception_handlers
+from orbitmind.api.routers.camera_media import router as camera_media_router
 from orbitmind.api.routers.map_orbit_contexts import router as map_orbit_contexts_router
 from orbitmind.api.routers.memory import router as memory_router
 from orbitmind.api.routers.missions import router as missions_router
@@ -67,21 +68,24 @@ SECURITY_HEADERS = {
     ),
 }
 WORKBENCH_REFERRER_POLICY = "same-origin"
+CAMERA_MEDIA_API_PREFIX = "/workbench/camera/api/"
 
 
 def create_app(container: AppContainer | None = None) -> FastAPI:
-    """Create the FastAPI app, optionally with an injected container (for tests)."""
+    """Create the FastAPI app with the container's explicit lifecycle ownership."""
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        active = container or AppContainer()
+        active = AppContainer() if container is None else container
+        active_is_application_owned = not active.caller_owns_lifecycle
         configure_logging(level=active.settings.log_level, json_output=active.settings.log_json)
         active.init_storage()
         app.state.container = active
         try:
             yield
         finally:
-            active.shutdown()
+            if active_is_application_owned:
+                active.shutdown()
 
     app = FastAPI(
         title="OrbitMind Living Q-Core",
@@ -96,17 +100,21 @@ def create_app(container: AppContainer | None = None) -> FastAPI:
         call_next: Callable[[Request], Awaitable[Response]],
     ) -> Response:
         response = await call_next(request)
+        request_path = request.scope.get("path")
         content_type = (
             response.headers.get("content-type", "").split(";", maxsplit=1)[0].strip().lower()
         )
         if content_type == "text/html":
             for name, value in SECURITY_HEADERS.items():
                 response.headers.setdefault(name, value)
-            request_path = request.scope.get("path")
             if request_path == "/workbench" or (
                 isinstance(request_path, str) and request_path.startswith("/workbench/")
             ):
                 response.headers["Referrer-Policy"] = WORKBENCH_REFERRER_POLICY
+        if isinstance(request_path, str) and request_path.startswith(CAMERA_MEDIA_API_PREFIX):
+            for name, value in SECURITY_HEADERS.items():
+                response.headers.setdefault(name, value)
+            response.headers["Cache-Control"] = "no-store"
         return response
 
     register_exception_handlers(app)
@@ -127,6 +135,7 @@ def create_app(container: AppContainer | None = None) -> FastAPI:
     app.include_router(map_orbit_contexts_router)
     app.include_router(product_summaries_router)
     app.include_router(review_router)
+    app.include_router(camera_media_router)
     app.include_router(workbench_router)
     return app
 
