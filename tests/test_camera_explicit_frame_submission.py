@@ -209,6 +209,7 @@ def test_camera_script_creates_one_explicit_inert_proposal_with_strict_response_
     assert '"other"' in script
     assert "function normalizedProposalContext(value)" in script
     assert '.normalize("NFC")' in script
+    assert r"/[\u0000-\u0009\u000b\u000c\u000e-\u001f\u007f-\u009f]/" in script
     assert "Array.from(normalized).length > MAX_PROPOSAL_CONTEXT_CODEPOINTS" in script
     assert "function isApprovedProposalResponse(body, goal, userContext)" in script
     assert 'body.state === "proposal_only"' in script
@@ -239,6 +240,24 @@ def test_camera_script_creates_one_explicit_inert_proposal_with_strict_response_
     assert 'createProposalButton.addEventListener("click"' in script
     assert "setInterval" not in script
     assert "setTimeout" not in script
+
+
+def test_camera_script_reports_rejected_context_through_the_existing_live_status() -> None:
+    script = _script()
+    context_input = _function(
+        script,
+        '  proposalContext.addEventListener("input", function () {',
+        '\n\n  createProposalButton.addEventListener("click"',
+    )
+
+    assert "!hasValidProposalSelection()" in context_input
+    assert (
+        'setState("proposal_failed", messages.camera_proposal_context_invalid, true);'
+        in context_input
+    )
+    assert "clearCsrfAuthority" not in context_input
+    assert "clearServerSession" not in context_input
+    assert "fetch(" not in context_input
 
 
 def test_camera_script_clears_private_proposal_on_parent_discard_and_navigation() -> None:

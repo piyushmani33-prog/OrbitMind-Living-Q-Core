@@ -295,6 +295,18 @@ def test_creation_proposal_contract_is_closed_normalized_and_independent(
         ).user_context
         == ""
     )
+    assert (
+        CameraCreationProposalRequest.from_json_object(
+            {"goal": "documentation", "user_context": "\thello\t"}
+        ).user_context
+        == "hello"
+    )
+    assert (
+        CameraCreationProposalRequest.from_json_object(
+            {"goal": "documentation", "user_context": "\t"}
+        ).user_context
+        == ""
+    )
     accepted = "x" * CAMERA_PROPOSAL_CONTEXT_MAX_CODEPOINTS
     assert (
         CameraCreationProposalRequest.from_json_object(
@@ -313,6 +325,10 @@ def test_creation_proposal_contract_is_closed_normalized_and_independent(
         ),
         (
             {"goal": "documentation", "user_context": "bad\tvalue"},
+            "camera_proposal_context_invalid",
+        ),
+        (
+            {"goal": "other", "user_context": "\t"},
             "camera_proposal_context_invalid",
         ),
         ({"goal": "documentation"}, "camera_proposal_request_invalid"),
