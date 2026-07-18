@@ -30,6 +30,7 @@ created merely for appearance.
 | `trajectory_replay` | U4.2B1 offline projection | bounded deterministic geodetic replay samples and dateline-safe track segments over pinned orbital elements; no API, rendering, persistence, or network | observation_geometry, space, governance, core |
 | `research` | U4.0B durable structured memory | typed inputs, evidence, gaps, claims, and learning plus an owner-scoped PostgreSQL repository with atomic cycle persistence; no raw evidence vault, API wiring, network adapter, or runtime open-research activation | governance, core |
 | `laboratory` | U6 catalog foundation | versioned immutable laboratory manifests, capability declarations (never grants), deterministic in-process registry, built-in Development Laboratory metadata; no execution, plugin loading, persistence, agents, or permission system | core (+ bare `orbitmind` for `__version__`) |
+| `authority` | U7.0 pure contracts | strict immutable authority contracts (approval request/decision, scoped expiring capability grants, revocation, evaluation) with deterministic side-effect-free evaluation and stable reason codes; caller-supplied ids/times, no clock, no persistence, no API/UI, no execution surface, delegation prohibited in v1 | core |
 | `tool_forge` | **(doc-only, Phase 6)** | generated-tool lifecycle (untrusted) | — |
 | `approvals` | **(modeled, governance)** | human review/approval queues | governance |
 
