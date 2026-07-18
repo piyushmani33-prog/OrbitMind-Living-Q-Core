@@ -13,7 +13,11 @@ has no execute, activate or grant surface at all.
 from __future__ import annotations
 
 from orbitmind.core.errors import NotFoundError, ValidationError
-from orbitmind.laboratory.contracts import LaboratoryManifest
+from orbitmind.laboratory.contracts import (
+    LABORATORY_FRAMEWORK_CONTRACT_VERSION,
+    LaboratoryManifest,
+    is_supported_laboratory_manifest_schema_version,
+)
 
 
 class DuplicateLaboratoryError(ValidationError):
@@ -21,6 +25,18 @@ class DuplicateLaboratoryError(ValidationError):
 
     code = "duplicate_laboratory"
     http_status = 409
+
+
+class UnsupportedLaboratoryManifestSchemaError(ValidationError):
+    """A manifest uses a schema version this registry does not support."""
+
+    code = "unsupported_laboratory_manifest_schema"
+
+
+class IncompatibleLaboratoryFrameworkError(ValidationError):
+    """A manifest does not declare support for the current framework contract."""
+
+    code = "incompatible_laboratory_framework"
 
 
 class UnknownLaboratoryError(NotFoundError):
@@ -39,6 +55,14 @@ class LaboratoryRegistry:
         """Register one validated, immutable manifest. Duplicates are rejected."""
         if not isinstance(manifest, LaboratoryManifest):
             raise ValidationError("only LaboratoryManifest instances can be registered")
+        if not is_supported_laboratory_manifest_schema_version(manifest.schema_version):
+            raise UnsupportedLaboratoryManifestSchemaError(
+                "laboratory manifest schema version is not supported"
+            )
+        if not manifest.framework_compatibility.contains(LABORATORY_FRAMEWORK_CONTRACT_VERSION):
+            raise IncompatibleLaboratoryFrameworkError(
+                "laboratory manifest is incompatible with this Laboratory Framework"
+            )
         if manifest.laboratory_id in self._manifests:
             raise DuplicateLaboratoryError(
                 f"laboratory '{manifest.laboratory_id}' is already registered"

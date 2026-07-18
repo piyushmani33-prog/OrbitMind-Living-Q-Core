@@ -16,11 +16,15 @@ from orbitmind.laboratory.capabilities import (
     LabCapability,
 )
 from orbitmind.laboratory.contracts import (
+    LABORATORY_FRAMEWORK_CONTRACT_VERSION,
     LABORATORY_MANIFEST_SCHEMA_VERSION,
+    LABORATORY_SUPPORTED_MANIFEST_SCHEMA_VERSIONS,
     ApprovalGate,
     CompatibilityInfo,
+    FrameworkCompatibilityRange,
     HardwarePosture,
     LaboratoryDomain,
+    LaboratoryFrameworkVersion,
     LaboratoryImplementationStatus,
     LaboratoryManifest,
     NetworkPosture,
@@ -69,6 +73,10 @@ def _manifest_kwargs(**overrides: Any) -> dict[str, Any]:
             platform_version_baseline="0.1.0",
             mission_contract="Reuses the Mission aggregate.",
         ),
+        "framework_compatibility": FrameworkCompatibilityRange(
+            minimum_inclusive="1.0.0",
+            maximum_exclusive="2.0.0",
+        ),
         "limitations": ("Nothing executes in this contract-test manifest.",),
     }
     base.update(overrides)
@@ -85,13 +93,117 @@ def _manifest(**overrides: Any) -> LaboratoryManifest:
 def test_manifest_pins_schema_version() -> None:
     manifest = _manifest()
     assert manifest.schema_version == LABORATORY_MANIFEST_SCHEMA_VERSION
+    assert (
+        frozenset({LABORATORY_MANIFEST_SCHEMA_VERSION})
+        == LABORATORY_SUPPORTED_MANIFEST_SCHEMA_VERSIONS
+    )
+    with pytest.raises(ValidationError):
+        _manifest(schema_version="laboratory-manifest-v0")
     with pytest.raises(ValidationError):
         _manifest(schema_version="laboratory-manifest-v999")
+    with pytest.raises(ValidationError):
+        _manifest(schema_version=1)
+    with pytest.raises(ValidationError):
+        _manifest(schema_version=True)
 
 
 def test_manifest_rejects_unknown_fields() -> None:
     with pytest.raises(ValidationError):
         _manifest(surprise_field="not allowed")
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "0.0.0",
+        "1.0.0",
+        "1.9.9",
+        "1000000.1000000.1000000",
+    ],
+)
+def test_framework_version_accepts_only_canonical_bounded_values(value: str) -> None:
+    assert str(LaboratoryFrameworkVersion.parse(value)) == value
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        " 1.0.0",
+        "1.0.0 ",
+        "+1.0.0",
+        "-1.0.0",
+        "1.0",
+        "1.0.0.0",
+        "01.0.0",
+        "1.00.0",
+        "1.0.00",
+        "1.0.0-rc1",
+        "1.0.0+build",
+        "1.*.0",
+        "^1.0.0",
+        "~1.0.0",
+        "1000001.0.0",
+        "10000000.10000000.10000000",
+        1,
+        True,
+    ],
+)
+def test_framework_version_rejects_noncanonical_or_coerced_values(value: object) -> None:
+    with pytest.raises(ValueError):
+        LaboratoryFrameworkVersion.parse(value)
+
+
+def test_framework_version_is_ordered_and_immutable() -> None:
+    assert LaboratoryFrameworkVersion.parse("1.0.0") < LaboratoryFrameworkVersion.parse("1.0.1")
+    assert LaboratoryFrameworkVersion.parse("1.0.1") < LaboratoryFrameworkVersion.parse("1.1.0")
+    assert LaboratoryFrameworkVersion.parse("1.1.0") < LaboratoryFrameworkVersion.parse("2.0.0")
+    with pytest.raises(AttributeError):
+        LABORATORY_FRAMEWORK_CONTRACT_VERSION.major = 9  # type: ignore[misc]
+
+
+def test_framework_compatibility_range_is_strict_immutable_and_deterministic() -> None:
+    compatibility = FrameworkCompatibilityRange(
+        minimum_inclusive="1.0.0",
+        maximum_exclusive="2.0.0",
+    )
+    assert compatibility.contains("1.0.0")
+    assert compatibility.contains("1.9.9")
+    assert not compatibility.contains("0.9.9")
+    assert not compatibility.contains("2.0.0")
+    assert (
+        compatibility.model_dump_json()
+        == FrameworkCompatibilityRange(
+            minimum_inclusive="1.0.0",
+            maximum_exclusive="2.0.0",
+        ).model_dump_json()
+    )
+    with pytest.raises(ValidationError):
+        FrameworkCompatibilityRange(minimum_inclusive="2.0.0", maximum_exclusive="1.0.0")
+    with pytest.raises(ValidationError):
+        FrameworkCompatibilityRange(minimum_inclusive="1.0.0", maximum_exclusive="1.0.0")
+    with pytest.raises(ValidationError):
+        FrameworkCompatibilityRange(
+            minimum_inclusive="1.0.0",
+            maximum_exclusive="2.0.0",
+            surprise="not allowed",
+        )
+    with pytest.raises(ValidationError):
+        FrameworkCompatibilityRange(minimum_inclusive=1, maximum_exclusive="2.0.0")
+    with pytest.raises(ValidationError):
+        FrameworkCompatibilityRange(minimum_inclusive="1.0.0", maximum_exclusive="2.0.0 ")
+    with pytest.raises(ValidationError):
+        compatibility.minimum_inclusive = "0.0.0"  # type: ignore[misc]
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["orbitmind.module", "../escape", "run-command", "C:/secret", "token=secret"],
+)
+def test_framework_compatibility_fields_cannot_contain_nonversion_values(value: str) -> None:
+    with pytest.raises(ValidationError):
+        FrameworkCompatibilityRange(minimum_inclusive=value, maximum_exclusive="2.0.0")
+    with pytest.raises(ValidationError):
+        FrameworkCompatibilityRange(minimum_inclusive="1.0.0", maximum_exclusive=value)
 
 
 @pytest.mark.parametrize(
@@ -114,6 +226,21 @@ def test_manifest_rejects_unbounded_strings_and_collections() -> None:
         _manifest(limitations=())  # limitations are mandatory honesty
     with pytest.raises(ValidationError):
         _manifest(verification_requirements=())
+
+
+def test_manifest_requires_a_strict_framework_compatibility_declaration() -> None:
+    values = _manifest_kwargs()
+    values.pop("framework_compatibility")
+    with pytest.raises(ValidationError):
+        LaboratoryManifest(**values)
+    with pytest.raises(ValidationError):
+        _manifest(
+            framework_compatibility={
+                "minimum_inclusive": "1.0.0",
+                "maximum_exclusive": "2.0.0",
+                "path": "E:/not-allowed",
+            }
+        )
 
 
 def test_manifest_rejects_pathlike_category_tokens() -> None:
@@ -210,6 +337,8 @@ def test_manifest_serialization_is_stable() -> None:
     assert ordered.canonical_json() == ordered.canonical_json()
     round_trip = LaboratoryManifest.model_validate_json(ordered.canonical_json())
     assert round_trip == ordered
+    assert '"schema_version":"laboratory-manifest-v1"' in ordered.canonical_json()
+    assert '"framework_compatibility"' in ordered.canonical_json()
 
 
 def test_manifest_carries_no_executable_references() -> None:
