@@ -221,6 +221,19 @@ interactive charts, maps (Leaflet), CesiumJS orbit view, D3 provenance graph,
 dashboards, reports, rendering/export, live data/provider behavior, frontend,
 and Quantum Studio remain deferred.
 
+**U6 Laboratory Foundation v1 (implemented):** versioned immutable Laboratory
+Manifest contracts, a capability-declaration model (declaration is never
+permission), a deterministic in-process registry, one truthful Development
+Laboratory catalog entry, a read-only catalog API and the visual Laboratory
+Workbench at `/workbench/laboratory` — offline, accessible, served from the
+same registry projection the API returns. Research/Quantum/Robotics/Space/
+Manufacturing laboratories appear only as labelled
+"planned — no runtime implementation" roadmap nodes. No agent runtime, AI
+provider, plugin loading, execution authority, persistence migration, hardware
+or cloud integration exists. See
+[LABORATORY_FRAMEWORK.md](LABORATORY_FRAMEWORK.md) and
+[ADR-0031](decisions/ADR-0031-laboratory-foundation-core-primitive.md).
+
 ## Phase 6 — Tool Forge
 Manifests, dependency policy, static analysis, test generation, sandbox execution,
 quarantine, human approval, rollback. **No generated code executed before this

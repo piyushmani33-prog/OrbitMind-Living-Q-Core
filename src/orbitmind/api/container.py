@@ -17,6 +17,7 @@ from orbitmind.camera.media import CameraMediaError
 from orbitmind.camera.runtime import CameraMediaRuntimeContext
 from orbitmind.camera.service import CameraMediaService, CameraMediaShutdownReport
 from orbitmind.core.config import Settings, get_settings
+from orbitmind.laboratory.catalog import build_default_registry
 from orbitmind.memory.service import MemoryService
 from orbitmind.mission_windows.service import MissionWindowService
 from orbitmind.observability.service import ObservabilityService
@@ -158,6 +159,8 @@ class AppContainer:
             else None
         )
         self.database = Database(self.settings.database_url)
+        # U6: deterministic, non-executing laboratory catalog (explicit registration).
+        self.laboratory_registry = build_default_registry()
         self.registry = SourceRegistry()
         self.catalog = SourceCatalog(self.settings)
         self.cache_store = SourceCacheStore(self.settings.resolved_cache_dir())

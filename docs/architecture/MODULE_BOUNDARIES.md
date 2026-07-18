@@ -29,6 +29,7 @@ created merely for appearance.
 | `mission_windows` | U4.1A offline engine | bounded deterministic Earth-observer geometric windows over pinned orbital elements; no API, persistence, network, optical visibility, or operational claims | observation_geometry, space, governance, core |
 | `trajectory_replay` | U4.2B1 offline projection | bounded deterministic geodetic replay samples and dateline-safe track segments over pinned orbital elements; no API, rendering, persistence, or network | observation_geometry, space, governance, core |
 | `research` | U4.0B durable structured memory | typed inputs, evidence, gaps, claims, and learning plus an owner-scoped PostgreSQL repository with atomic cycle persistence; no raw evidence vault, API wiring, network adapter, or runtime open-research activation | governance, core |
+| `laboratory` | U6 catalog foundation | versioned immutable laboratory manifests, capability declarations (never grants), deterministic in-process registry, built-in Development Laboratory metadata; no execution, plugin loading, persistence, agents, or permission system | core (+ bare `orbitmind` for `__version__`) |
 | `tool_forge` | **(doc-only, Phase 6)** | generated-tool lifecycle (untrusted) | — |
 | `approvals` | **(modeled, governance)** | human review/approval queues | governance |
 

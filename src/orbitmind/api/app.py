@@ -18,6 +18,7 @@ from orbitmind import __version__
 from orbitmind.api.container import AppContainer
 from orbitmind.api.errors import register_exception_handlers
 from orbitmind.api.routers.camera_media import router as camera_media_router
+from orbitmind.api.routers.laboratory import router as laboratory_router
 from orbitmind.api.routers.map_orbit_contexts import router as map_orbit_contexts_router
 from orbitmind.api.routers.memory import router as memory_router
 from orbitmind.api.routers.missions import router as missions_router
@@ -136,6 +137,7 @@ def create_app(container: AppContainer | None = None) -> FastAPI:
     app.include_router(product_summaries_router)
     app.include_router(review_router)
     app.include_router(camera_media_router)
+    app.include_router(laboratory_router)
     app.include_router(workbench_router)
     return app
 
