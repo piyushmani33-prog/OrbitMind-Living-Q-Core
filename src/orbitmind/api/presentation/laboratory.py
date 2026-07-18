@@ -10,6 +10,7 @@ one reviewed same-origin controller script.
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 from html import escape
 
 from orbitmind.api.presentation.trajectory_replay import script_safe_json
@@ -22,6 +23,14 @@ from orbitmind.laboratory.contracts import LaboratoryManifest
 
 LABORATORY_ASSET_PATH = "/assets/laboratory.js"
 LABORATORY_DATA_NODE_ID = "laboratory-data"
+LABORATORY_FAVICON_DATA_URI = (
+    "data:image/svg+xml,%3Csvg%20xmlns=%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22"
+    "%20viewBox=%220%200%2064%2064%22%3E%3Crect%20width=%2264%22%20height=%2264%22"
+    "%20rx=%2212%22%20fill=%22%23060b16%22%2F%3E%3Ccircle%20cx=%2232%22%20cy=%2232%22"
+    "%20r=%2220%22%20fill=%22%232f8fb0%22%20stroke=%22%236fd7ea%22%20stroke-width=%224%22"
+    "%2F%3E%3Cpath%20d=%22M20%2032h24M32%2020v24%22%20stroke=%22%23e9f1fc%22"
+    "%20stroke-width=%224%22%20stroke-linecap=%22round%22%2F%3E%3C%2Fsvg%3E"
+)
 
 _SVG_WIDTH = 1200
 _SVG_HEIGHT = 640
@@ -41,6 +50,51 @@ _OUTER_ANGLES = {
     "space-laboratory": 90.0,
     "manufacturing-laboratory": -63.0,
 }
+
+
+@dataclass(frozen=True)
+class _OfflineBoundaryContent:
+    """Named presentation roles for the existing offline-boundary statements."""
+
+    offline_local_work: str
+    connected_window: str
+    credential_isolation: str
+    external_call_receipts: str
+
+
+@dataclass(frozen=True)
+class _ConstellationSemantics:
+    """Shared, non-execution semantics for both constellation presentations."""
+
+    implemented_foundation: str
+    registered_non_executing: str
+    planned_architecture: str
+    approval_gated: str
+
+
+_CONSTELLATION_SEMANTICS = _ConstellationSemantics(
+    implemented_foundation="Implemented foundation — merged catalog foundation",
+    registered_non_executing=(
+        "Registered, non-executing laboratory — no Agent Runtime, autonomous development, "
+        "or execution authority"
+    ),
+    planned_architecture=(
+        "Planned architecture-only laboratory — non-operational; no runtime implementation"
+    ),
+    approval_gated="Approval-gated capability — declared metadata; no automatic permission",
+)
+
+
+def _attribute(value: object) -> str:
+    """Escape a value for insertion into a quoted HTML or SVG attribute."""
+
+    return escape(str(value), quote=True)
+
+
+def _numeric_attribute(value: float) -> str:
+    """Format a deterministic SVG coordinate for a quoted attribute."""
+
+    return _attribute(f"{value:.1f}")
 
 
 def _humanize(token: str) -> str:
@@ -71,7 +125,11 @@ def _starfield() -> str:
         y = round(values[1] * _SVG_HEIGHT, 1)
         r = round(0.5 + values[2] * 1.1, 2)
         opacity = round(0.16 + values[2] * 0.38, 2)
-        stars.append(f'<circle class="star" cx="{x}" cy="{y}" r="{r}" opacity="{opacity}"/>')
+        stars.append(
+            f'<circle class="star" cx="{_numeric_attribute(x)}" '
+            f'cy="{_numeric_attribute(y)}" r="{_attribute(r)}" '
+            f'opacity="{_attribute(opacity)}"/>'
+        )
     return "".join(stars)
 
 
@@ -80,34 +138,67 @@ def build_laboratory_payload_json(projection: LaboratoryCatalogProjection) -> st
     return script_safe_json(projection.model_dump(mode="json"))
 
 
+def _registered_non_execution_state(manifest: LaboratoryManifest) -> str:
+    """Derive the registered node state from the manifest's current authority facts."""
+
+    if any(
+        declaration.grants_permission or declaration.execution_authority.value != "none"
+        for declaration in manifest.capabilities
+    ):
+        raise ValueError("Laboratory manifest cannot be rendered as non-executing")
+    return "registered / non-executing"
+
+
 def _constellation_node_implemented(manifest: LaboratoryManifest) -> str:
     x, y = _node_position(manifest.laboratory_id)
+    x_value = _numeric_attribute(x)
+    y_value = _numeric_attribute(y)
+    label_y = _numeric_attribute(y + 66)
+    status_y = _numeric_attribute(y + 86)
+    state_y = _numeric_attribute(y + 105)
     label = escape(manifest.display_name)
     status = escape(manifest.implementation_status.value)
+    laboratory_id = _attribute(manifest.laboratory_id)
+    registration_state = _registered_non_execution_state(manifest)
+    accessible_label = _attribute(
+        f"{manifest.display_name} — implemented catalog foundation; "
+        f"{registration_state}. View details."
+    )
     return f"""
-    <a href="#lab-panel-{escape(manifest.laboratory_id, quote=True)}"
-       class="lab-node implemented" data-lab="{escape(manifest.laboratory_id, quote=True)}"
-       aria-label="{label} — implemented catalog foundation. View details.">
+    <a href="#lab-panel-{laboratory_id}"
+       class="lab-node implemented" data-lab="{laboratory_id}"
+       aria-label="{accessible_label}">
       <g>
-        <circle class="node-halo" cx="{x:.1f}" cy="{y:.1f}" r="46"/>
-        <circle class="node-core" cx="{x:.1f}" cy="{y:.1f}" r="30"/>
-        <text class="node-label" x="{x:.1f}" y="{y + 66:.1f}" text-anchor="middle">{label}</text>
-        <text class="node-tag" x="{x:.1f}" y="{y + 86:.1f}" text-anchor="middle">{status}</text>
+        <circle class="node-halo" cx="{x_value}" cy="{y_value}" r="46"/>
+        <circle class="node-core" cx="{x_value}" cy="{y_value}" r="30"/>
+        <text class="node-label" x="{x_value}" y="{label_y}" text-anchor="middle">{label}</text>
+        <text class="node-tag" x="{x_value}" y="{status_y}" text-anchor="middle">{status}</text>
+        <text class="node-state" x="{x_value}" y="{state_y}"
+              text-anchor="middle">{escape(registration_state)}</text>
       </g>
     </a>"""
 
 
 def _constellation_node_planned(planned: PlannedLaboratoryProjection) -> str:
     x, y = _node_position(planned.laboratory_id)
+    x_value = _numeric_attribute(x)
+    y_value = _numeric_attribute(y)
+    label_y = _numeric_attribute(y + 48)
+    status_y = _numeric_attribute(y + 66)
     label = escape(planned.display_name)
+    laboratory_id = _attribute(planned.laboratory_id)
+    accessible_label = _attribute(
+        f"{planned.display_name} — planned architecture-only laboratory; "
+        "non-operational; no runtime implementation. View details."
+    )
     return f"""
-    <a href="#lab-panel-{escape(planned.laboratory_id, quote=True)}"
-       class="lab-node planned" data-lab="{escape(planned.laboratory_id, quote=True)}"
-       aria-label="{label} — planned, no runtime implementation. View details.">
+    <a href="#lab-panel-{laboratory_id}"
+       class="lab-node planned" data-lab="{laboratory_id}"
+       aria-label="{accessible_label}">
       <g>
-        <circle class="node-core" cx="{x:.1f}" cy="{y:.1f}" r="22"/>
-        <text class="node-label" x="{x:.1f}" y="{y + 48:.1f}" text-anchor="middle">{label}</text>
-        <text class="node-tag" x="{x:.1f}" y="{y + 66:.1f}" text-anchor="middle">planned</text>
+        <circle class="node-core" cx="{x_value}" cy="{y_value}" r="22"/>
+        <text class="node-label" x="{x_value}" y="{label_y}" text-anchor="middle">{label}</text>
+        <text class="node-tag" x="{x_value}" y="{status_y}" text-anchor="middle">planned</text>
       </g>
     </a>"""
 
@@ -116,11 +207,99 @@ def _connector(laboratory_id: str, *, planned: bool) -> str:
     x, y = _node_position(laboratory_id)
     css = "link-planned" if planned else "link-implemented"
     return (
-        f'<line class="{css}" x1="{_CENTER_X:.1f}" y1="{_CENTER_Y:.1f}" x2="{x:.1f}" y2="{y:.1f}"/>'
+        f'<line class="{_attribute(css)}" x1="{_numeric_attribute(_CENTER_X)}" '
+        f'y1="{_numeric_attribute(_CENTER_Y)}" x2="{_numeric_attribute(x)}" '
+        f'y2="{_numeric_attribute(y)}"/>'
     )
 
 
+def _mobile_constellation(projection: LaboratoryCatalogProjection) -> str:
+    """Render the mobile constellation from the same projection as the desktop SVG."""
+
+    semantics = _CONSTELLATION_SEMANTICS
+    implemented = "".join(
+        _mobile_constellation_implemented_card(manifest, semantics=semantics)
+        for manifest in projection.laboratories
+    )
+    planned = "".join(
+        _mobile_constellation_planned_card(item, semantics=semantics)
+        for item in projection.planned_laboratories
+    )
+    return f"""
+    <ol class="mobile-constellation" aria-label="Mobile laboratory constellation">
+      <li class="mobile-constellation-card core">
+        <span class="mobile-constellation-marker core" aria-hidden="true">O</span>
+        <span class="mobile-constellation-copy">
+          <strong>OrbitMind Core</strong>
+          <span class="mobile-constellation-state">implemented foundation</span>
+          <span>{escape(semantics.implemented_foundation)}</span>
+        </span>
+      </li>
+      {implemented}
+      {planned}
+      <li class="mobile-constellation-card approval">
+        <span class="mobile-constellation-marker approval" aria-hidden="true">!</span>
+        <span class="mobile-constellation-copy">
+          <strong>Approval-gated capability</strong>
+          <span class="mobile-constellation-state">declared, never automatic</span>
+          <span>{escape(semantics.approval_gated)}</span>
+        </span>
+      </li>
+    </ol>"""
+
+
+def _mobile_constellation_implemented_card(
+    manifest: LaboratoryManifest, *, semantics: _ConstellationSemantics
+) -> str:
+    registration_state = _registered_non_execution_state(manifest)
+    laboratory_id = _attribute(manifest.laboratory_id)
+    accessible_label = _attribute(
+        f"{manifest.display_name} — {semantics.implemented_foundation}; "
+        f"{registration_state}. View details."
+    )
+    return f"""
+      <a class="mobile-constellation-card lab-node implemented"
+         href="#lab-panel-{laboratory_id}" data-lab="{laboratory_id}"
+         aria-label="{accessible_label}">
+        <span class="mobile-constellation-marker foundation" aria-hidden="true"></span>
+        <span class="mobile-constellation-copy">
+          <strong>{escape(manifest.display_name)}</strong>
+          <span class="mobile-constellation-state">{escape(registration_state)}</span>
+          <span>{escape(semantics.implemented_foundation)}</span>
+        </span>
+      </a>"""
+
+
+def _mobile_constellation_planned_card(
+    planned: PlannedLaboratoryProjection, *, semantics: _ConstellationSemantics
+) -> str:
+    laboratory_id = _attribute(planned.laboratory_id)
+    accessible_label = _attribute(
+        f"{planned.display_name} — {semantics.planned_architecture}. View details."
+    )
+    return f"""
+      <a class="mobile-constellation-card lab-node planned"
+         href="#lab-panel-{laboratory_id}" data-lab="{laboratory_id}"
+         aria-label="{accessible_label}">
+        <span class="mobile-constellation-marker planned" aria-hidden="true"></span>
+        <span class="mobile-constellation-copy">
+          <strong>{escape(planned.display_name)}</strong>
+          <span class="mobile-constellation-state">planned / non-operational</span>
+          <span>{escape(semantics.planned_architecture)}</span>
+        </span>
+      </a>"""
+
+
 def _constellation(projection: LaboratoryCatalogProjection) -> str:
+    center_x = _numeric_attribute(_CENTER_X)
+    center_y = _numeric_attribute(_CENTER_Y)
+    inner_rx = _numeric_attribute(_INNER_RX)
+    inner_ry = _numeric_attribute(_INNER_RY)
+    outer_rx = _numeric_attribute(_OUTER_RX)
+    outer_ry = _numeric_attribute(_OUTER_RY)
+    core_label_y = _numeric_attribute(_CENTER_Y - 2)
+    core_sublabel_y = _numeric_attribute(_CENTER_Y + 16)
+    semantics = _CONSTELLATION_SEMANTICS
     connectors = "".join(
         _connector(manifest.laboratory_id, planned=False) for manifest in projection.laboratories
     ) + "".join(
@@ -131,23 +310,25 @@ def _constellation(projection: LaboratoryCatalogProjection) -> str:
         _constellation_node_implemented(manifest) for manifest in projection.laboratories
     ) + "".join(_constellation_node_planned(planned) for planned in projection.planned_laboratories)
     strip_buttons = "".join(
-        f'<button type="button" class="lab-select" data-lab="{escape(m.laboratory_id, quote=True)}"'
+        f'<button type="button" class="lab-select" data-lab="{_attribute(m.laboratory_id)}"'
         f' aria-pressed="false">{escape(m.display_name)}'
         f'<span class="strip-tag ok">foundation</span></button>'
         for m in projection.laboratories
     ) + "".join(
-        f'<button type="button" class="lab-select" data-lab="{escape(p.laboratory_id, quote=True)}"'
+        f'<button type="button" class="lab-select" data-lab="{_attribute(p.laboratory_id)}"'
         f' aria-pressed="false">{escape(p.display_name)}'
         f'<span class="strip-tag warn">planned</span></button>'
         for p in projection.planned_laboratories
     )
+    view_box = _attribute(f"0 0 {_SVG_WIDTH} {_SVG_HEIGHT}")
+    mobile_constellation = _mobile_constellation(projection)
     return f"""
   <section class="panel constellation" aria-labelledby="constellation-heading">
     <h2 id="constellation-heading">Laboratory constellation</h2>
     <p class="section-note">A map of the OrbitMind Core and its laboratories. Only the
     Development Laboratory is registered (catalog foundation). Dashed nodes are planned
     concepts with <strong>no runtime implementation</strong> — they are not executable.</p>
-    <svg viewBox="0 0 {_SVG_WIDTH} {_SVG_HEIGHT}" role="group"
+    <svg viewBox="{view_box}" role="group"
          aria-labelledby="constellation-svg-title constellation-svg-desc">
       <title id="constellation-svg-title">Laboratory constellation map</title>
       <desc id="constellation-svg-desc">OrbitMind Core at the center; the implemented
@@ -166,24 +347,31 @@ def _constellation(projection: LaboratoryCatalogProjection) -> str:
         </radialGradient>
       </defs>
       {_starfield()}
-      <ellipse class="orbit" cx="{_CENTER_X}" cy="{_CENTER_Y}" rx="{_INNER_RX}" ry="{_INNER_RY}"/>
-      <ellipse class="orbit" cx="{_CENTER_X}" cy="{_CENTER_Y}" rx="{_OUTER_RX}" ry="{_OUTER_RY}"/>
+      <ellipse class="orbit" cx="{center_x}" cy="{center_y}"
+               rx="{inner_rx}" ry="{inner_ry}"/>
+      <ellipse class="orbit" cx="{center_x}" cy="{center_y}"
+               rx="{outer_rx}" ry="{outer_ry}"/>
       {connectors}
       <g class="core-node" aria-hidden="true">
-        <circle class="core-halo" cx="{_CENTER_X}" cy="{_CENTER_Y}" r="64"/>
-        <circle class="core-body" cx="{_CENTER_X}" cy="{_CENTER_Y}" r="44"/>
-        <text class="core-label" x="{_CENTER_X}" y="{_CENTER_Y - 2:.1f}"
+        <circle class="core-halo" cx="{center_x}" cy="{center_y}" r="64"/>
+        <circle class="core-body" cx="{center_x}" cy="{center_y}" r="44"/>
+        <text class="core-label" x="{center_x}" y="{core_label_y}"
               text-anchor="middle">OrbitMind</text>
-        <text class="core-sublabel" x="{_CENTER_X}" y="{_CENTER_Y + 16:.1f}"
+        <text class="core-sublabel" x="{center_x}" y="{core_sublabel_y}"
               text-anchor="middle">Core</text>
       </g>
       {nodes}
     </svg>
+    {mobile_constellation}
     <div class="legend" aria-label="Constellation legend">
-      <span class="legend-item"><span class="swatch solid" aria-hidden="true"></span>
-        Implemented catalog foundation</span>
-      <span class="legend-item"><span class="swatch dashed" aria-hidden="true"></span>
-        Planned — no runtime implementation</span>
+      <span class="legend-item"><span class="legend-marker foundation" aria-hidden="true"></span>
+        {escape(semantics.implemented_foundation)}</span>
+      <span class="legend-item"><span class="legend-marker registered" aria-hidden="true">R</span>
+        {escape(semantics.registered_non_executing)}</span>
+      <span class="legend-item"><span class="legend-marker planned" aria-hidden="true"></span>
+        {escape(semantics.planned_architecture)}</span>
+      <span class="legend-item"><span class="legend-marker approval" aria-hidden="true">!</span>
+        {escape(semantics.approval_gated)}</span>
     </div>
     <div class="lab-strip" role="group" aria-label="Select a laboratory">{strip_buttons}</div>
     <p class="focus-status" id="lab-focus-status" role="status" aria-live="polite"></p>
@@ -211,7 +399,7 @@ def _capability_chips(capabilities: tuple[CapabilityDeclaration, ...]) -> str:
 
 
 def _manifest_panel(manifest: LaboratoryManifest) -> str:
-    lab_id = escape(manifest.laboratory_id, quote=True)
+    lab_id = _attribute(manifest.laboratory_id)
     limitations = "".join(f"<li>{escape(statement)}</li>" for statement in manifest.limitations)
     verification = "".join(
         f"<li>{escape(statement)}</li>" for statement in manifest.verification_requirements
@@ -275,7 +463,12 @@ def _manifest_panel(manifest: LaboratoryManifest) -> str:
 
 
 def _planned_panel(planned: PlannedLaboratoryProjection) -> str:
-    lab_id = escape(planned.laboratory_id, quote=True)
+    lab_id = _attribute(planned.laboratory_id)
+    non_execution_note = (
+        "Roadmap concept only: non-operational, not registered in the runtime registry, "
+        "not executable, and it grants nothing. A future slice must bring a real reviewed "
+        "manifest before this laboratory exists."
+    )
     return f"""
     <article class="lab-panel planned" id="lab-panel-{lab_id}" tabindex="-1"
              aria-labelledby="lab-title-{lab_id}">
@@ -285,9 +478,7 @@ def _planned_panel(planned: PlannedLaboratoryProjection) -> str:
         <span class="tag">{escape(_humanize(planned.domain.value))}</span>
       </header>
       <p class="panel-desc">{escape(planned.summary)}</p>
-      <p class="panel-note">Roadmap concept only: not registered in the runtime registry,
-      not executable, and it grants nothing. A future slice must bring a real reviewed
-      manifest before this laboratory exists.</p>
+      <p class="panel-note">{non_execution_note}</p>
     </article>"""
 
 
@@ -411,10 +602,39 @@ def _safety_plane(projection: LaboratoryCatalogProjection) -> str:
   </section>"""
 
 
+def _offline_boundary_content(statements: tuple[str, ...]) -> _OfflineBoundaryContent:
+    """Resolve the current catalog statements by semantic role, not tuple position."""
+
+    def statement_for(*, prefix: str, role: str) -> str:
+        matches = tuple(statement for statement in statements if statement.startswith(prefix))
+        if len(matches) != 1:
+            raise ValueError(f"Expected exactly one offline-boundary statement for {role}")
+        return matches[0]
+
+    return _OfflineBoundaryContent(
+        offline_local_work=statement_for(
+            prefix="Deterministic local work", role="offline_local_work"
+        ),
+        connected_window=statement_for(prefix="Network sources", role="connected_window"),
+        credential_isolation=statement_for(
+            prefix="Credentials are never stored", role="credential_isolation"
+        ),
+        external_call_receipts=statement_for(
+            prefix="When a connected window", role="external_call_receipts"
+        ),
+    )
+
+
 def _offline_boundary(projection: LaboratoryCatalogProjection) -> str:
-    statements = projection.offline_boundary_statements
-    offline_items = "".join(f"<li>{escape(s)}</li>" for s in (statements[0], statements[2]))
-    connected_items = "".join(f"<li>{escape(s)}</li>" for s in (statements[1], statements[3]))
+    content = _offline_boundary_content(projection.offline_boundary_statements)
+    offline_items = "".join(
+        f"<li>{escape(statement)}</li>"
+        for statement in (content.offline_local_work, content.credential_isolation)
+    )
+    connected_items = "".join(
+        f"<li>{escape(statement)}</li>"
+        for statement in (content.connected_window, content.external_call_receipts)
+    )
     return f"""
   <section class="panel" aria-labelledby="boundary-heading">
     <h2 id="boundary-heading">Offline / connected boundary</h2>
@@ -463,13 +683,14 @@ def render_laboratory_page(projection: LaboratoryCatalogProjection, *, version: 
     <p class="footer-link"><a href="/workbench">Mission Workbench</a> ·
       <a href="/review">Reviewer sandbox</a></p>
   </footer>
-  <template id="{LABORATORY_DATA_NODE_ID}">{payload_json}</template>
-  <script src="{LABORATORY_ASSET_PATH}" defer></script>"""
+  <template id="{_attribute(LABORATORY_DATA_NODE_ID)}">{payload_json}</template>
+  <script src="{_attribute(LABORATORY_ASSET_PATH)}" defer></script>"""
     return f"""<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" type="image/svg+xml" href="{_attribute(LABORATORY_FAVICON_DATA_URI)}">
   <title>OrbitMind Laboratory</title>
   <style>{LABORATORY_CSS}</style>
 </head>
@@ -565,6 +786,7 @@ LABORATORY_CSS = """
     .section-note { max-width: 84ch; font-size: 0.95rem; }
     /* --- Constellation ------------------------------------------------- */
     .constellation svg { display: block; width: 100%; height: auto; margin-top: 14px; }
+    .mobile-constellation { display: none; }
     .star { fill: #cfe4ff; }
     .orbit { fill: none; stroke: var(--line-soft); stroke-dasharray: 3 7; }
     .link-implemented { stroke: rgba(111, 215, 234, 0.5); stroke-width: 1.6; }
@@ -578,7 +800,9 @@ LABORATORY_CSS = """
     .lab-node { cursor: pointer; }
     .lab-node .node-label { fill: var(--ink); font-size: 15px; font-weight: 700; }
     .lab-node .node-tag { fill: var(--muted); font-size: 11.5px; letter-spacing: 0.08em;
-                          text-transform: uppercase; }
+                           text-transform: uppercase; }
+    .lab-node .node-state { fill: var(--ok); font-size: 10px; font-weight: 800;
+                             letter-spacing: 0.05em; text-transform: uppercase; }
     .lab-node.implemented .node-halo { fill: rgba(111, 220, 174, 0.12); }
     .lab-node.implemented .node-core {
       fill: url(#dev-gradient);
@@ -601,11 +825,58 @@ LABORATORY_CSS = """
     .lab-node:focus-visible .node-core { stroke: var(--accent); }
     .legend { display: flex; flex-wrap: wrap; gap: 18px; margin-top: 10px;
               color: var(--muted); font-size: 0.88rem; }
-    .legend-item { display: inline-flex; align-items: center; gap: 8px; }
-    .swatch { width: 18px; height: 18px; border-radius: 50%; display: inline-block; }
-    .swatch.solid { background: rgba(111, 220, 174, 0.35);
-                    border: 2px solid rgba(143, 240, 208, 0.8); }
-    .swatch.dashed { border: 2px dashed rgba(169, 187, 214, 0.65); }
+    .legend-item { display: inline-flex; align-items: center; gap: 8px; max-width: 34ch; }
+    .legend-marker { width: 20px; height: 20px; display: inline-grid; place-items: center;
+                     flex: 0 0 auto; color: var(--ink); font-size: 0.74rem; font-weight: 900; }
+    .legend-marker.foundation { border: 2px solid rgba(143, 240, 208, 0.8);
+                                border-radius: 50%; background: rgba(111, 220, 174, 0.35); }
+    .legend-marker.registered { border: 2px solid var(--accent); border-radius: 4px; }
+    .legend-marker.planned { border: 2px dashed rgba(169, 187, 214, 0.8); border-radius: 50%; }
+    .legend-marker.approval { border: 2px solid var(--warn); border-radius: 50%;
+                              color: var(--warn); }
+    .mobile-constellation-card {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: rgba(10, 21, 40, 0.55);
+      color: var(--ink);
+      gap: 12px;
+      text-decoration: none;
+    }
+    .mobile-constellation-card.core { border-color: rgba(111, 215, 234, 0.55); }
+    .mobile-constellation-card.implemented { border-color: rgba(111, 220, 174, 0.55); }
+    .mobile-constellation-card.planned { border-style: dashed; }
+    .mobile-constellation-card.approval { border-color: rgba(240, 178, 92, 0.6); }
+    .mobile-constellation-marker {
+      width: 28px;
+      height: 28px;
+      display: inline-grid;
+      place-items: center;
+      flex: 0 0 auto;
+      border: 2px solid var(--line);
+      color: var(--ink);
+      font-size: 0.875rem;
+      font-weight: 900;
+    }
+    .mobile-constellation-marker.core { border-color: var(--accent); border-radius: 50%; }
+    .mobile-constellation-marker.foundation {
+      border-color: var(--ok);
+      border-radius: 50%;
+      background: rgba(111, 220, 174, 0.25);
+    }
+    .mobile-constellation-marker.planned { border-style: dashed; border-radius: 50%; }
+    .mobile-constellation-marker.approval { border-color: var(--warn); border-radius: 50%; }
+    .mobile-constellation-copy { display: grid; gap: 2px; min-width: 0; }
+    .mobile-constellation-copy strong { font-size: 1rem; line-height: 1.25; }
+    .mobile-constellation-copy > span { color: var(--muted); font-size: 0.875rem; }
+    .mobile-constellation-copy .mobile-constellation-state {
+      color: var(--ok);
+      font-size: 0.875rem;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    .mobile-constellation-card.planned .mobile-constellation-state,
+    .mobile-constellation-card.approval .mobile-constellation-state { color: var(--warn); }
     .lab-strip { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
     .lab-select {
       appearance: none;
@@ -819,7 +1090,15 @@ LABORATORY_CSS = """
       .fact-grid { grid-template-columns: 1fr; gap: 2px 0; }
       .fact-grid dd { margin-bottom: 8px; }
       .flow-rail, .chain, .gate-grid { grid-template-columns: 1fr; }
-      .constellation svg { min-height: 300px; }
+      .constellation svg { display: none; }
+      .mobile-constellation {
+        display: grid;
+        gap: 10px;
+        list-style: none;
+        margin: 16px 0 0;
+        padding: 0;
+      }
+      .mobile-constellation-card { display: flex; align-items: flex-start; padding: 13px 14px; }
     }
     @media (prefers-reduced-motion: reduce) {
       *, *::before, *::after {

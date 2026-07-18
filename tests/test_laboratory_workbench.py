@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import re
+from html import unescape
 
+import pytest
 from fastapi.testclient import TestClient
+
+from orbitmind.api.presentation import laboratory as laboratory_presentation
+from orbitmind.laboratory.catalog import build_catalog_projection, build_default_registry
 
 _PAGE_PATH = "/workbench/laboratory"
 _ASSET_PATH = "/assets/laboratory.js"
@@ -70,6 +76,113 @@ def test_implemented_and_planned_laboratories_are_visually_distinct(
     # Planned panels must state non-executability in plain text.
     assert "not registered in the runtime registry" in page.lower()
     assert "not executable" in page.lower()
+
+
+def test_constellation_legend_uses_text_and_non_color_state_markers(client: TestClient) -> None:
+    page = _page(client)
+
+    for marker, label in (
+        ("foundation", "Implemented foundation"),
+        ("registered", "Registered, non-executing laboratory"),
+        ("planned", "Planned architecture-only laboratory"),
+        ("approval", "Approval-gated capability"),
+    ):
+        assert f'class="legend-marker {marker}"' in page
+        assert label in page
+
+    assert "registered / non-executing" in page
+    assert re.search(r"no Agent Runtime,\s+autonomous development, or execution authority", page)
+    assert "non-operational; no runtime implementation" in page
+    assert "declared metadata; no automatic permission" in page
+
+
+def test_mobile_constellation_is_a_readable_projection_of_the_catalog(client: TestClient) -> None:
+    page = _page(client)
+    projection = build_catalog_projection(build_default_registry())
+    mobile = laboratory_presentation._mobile_constellation(projection)
+
+    assert 'class="mobile-constellation"' in page
+    assert 'aria-label="Mobile laboratory constellation"' in page
+    assert mobile in page
+    assert "font-size: 1rem;" in laboratory_presentation.LABORATORY_CSS
+    assert laboratory_presentation.LABORATORY_CSS.count("font-size: 0.875rem;") >= 3
+    assert ".constellation svg { display: none; }" in laboratory_presentation.LABORATORY_CSS
+    assert page.count('class="mobile-constellation-card lab-node implemented"') == 1
+    assert page.count('class="mobile-constellation-card lab-node planned"') == 5
+    assert "OrbitMind Core" in mobile
+    assert "registered / non-executing" in mobile
+    assert "planned / non-operational" in mobile
+    assert "Approval-gated capability" in mobile
+    for manifest in projection.laboratories:
+        assert manifest.laboratory_id in mobile
+        assert manifest.display_name in mobile
+    for planned in projection.planned_laboratories:
+        assert planned.laboratory_id in mobile
+        assert planned.display_name in mobile
+
+
+def test_page_declares_a_deterministic_inline_favicon_without_a_route_dependency(
+    client: TestClient,
+) -> None:
+    page = _page(client)
+    favicon = re.search(r'<link rel="icon" type="image/svg\+xml" href="([^"]+)">', page)
+
+    assert favicon is not None
+    assert favicon.group(1).startswith("data:image/svg+xml,")
+    assert "/favicon.ico" not in page
+    assert "http://" not in favicon.group(1)
+    assert "https://" not in favicon.group(1)
+    assert "document.createElement" not in page
+    assert unescape(favicon.group(1)) == laboratory_presentation.LABORATORY_FAVICON_DATA_URI
+
+
+def test_svg_attribute_values_are_quote_aware_while_text_nodes_remain_text_escaped() -> None:
+    projection = build_catalog_projection(build_default_registry())
+    manifest = projection.laboratories[0].model_copy(
+        update={"display_name": 'Development "Lab" & <Review>'}
+    )
+
+    node = laboratory_presentation._constellation_node_implemented(manifest)
+    accessible_name = re.search(r'aria-label="([^"]+)"', node)
+
+    assert accessible_name is not None
+    assert "&quot;" in accessible_name.group(1)
+    assert "&amp;" in accessible_name.group(1)
+    assert "&lt;Review&gt;" in accessible_name.group(1)
+    assert "<Review>" not in accessible_name.group(1)
+    assert unescape(accessible_name.group(1)) == (
+        'Development "Lab" & <Review> — implemented catalog foundation; '
+        "registered / non-executing. View details."
+    )
+    assert ">Development &quot;Lab&quot; &amp; &lt;Review&gt;</text>" in node
+    assert 'aria-label="Development "Lab"' not in node
+
+
+def test_offline_boundary_uses_named_immutable_roles_without_order_dependence() -> None:
+    projection = build_catalog_projection(build_default_registry())
+    source = inspect.getsource(laboratory_presentation._offline_boundary)
+    content = laboratory_presentation._offline_boundary_content(
+        projection.offline_boundary_statements
+    )
+    reordered_projection = projection.model_copy(
+        update={
+            "offline_boundary_statements": tuple(reversed(projection.offline_boundary_statements))
+        }
+    )
+
+    assert "statements[" not in source
+    assert laboratory_presentation._OfflineBoundaryContent.__dataclass_params__.frozen
+    assert content.offline_local_work.startswith("Deterministic local work")
+    assert content.connected_window.startswith("Network sources")
+    assert content.credential_isolation.startswith("Credentials are never stored")
+    assert content.external_call_receipts.startswith("When a connected window")
+    assert laboratory_presentation._offline_boundary(reordered_projection) == (
+        laboratory_presentation._offline_boundary(projection)
+    )
+    with pytest.raises(ValueError, match="external_call_receipts"):
+        laboratory_presentation._offline_boundary_content(
+            projection.offline_boundary_statements[:-1]
+        )
 
 
 def test_no_operational_overclaim_labels(client: TestClient) -> None:
