@@ -7,6 +7,7 @@ automatically. These tests add the laboratory-specific guarantees:
 - pure contracts stay framework-independent (no FastAPI/Starlette/persistence);
 - no dynamic loading, subprocess, network or filesystem execution surface;
 - no agent/provider/quantum/camera/hardware dependency enters the core contracts.
+- catalog compatibility and digest logic remain a pure domain concern.
 """
 
 from __future__ import annotations
@@ -22,7 +23,9 @@ _LABORATORY_ROOT = Path(orbitmind.laboratory.__file__).resolve().parent
 # bare ``orbitmind`` package (exact match only, solely for ``__version__``).
 _ALLOWED_IMPORT_PREFIXES = (
     "__future__",
+    "dataclasses",
     "enum",
+    "json",
     "math",
     "re",
     "typing",

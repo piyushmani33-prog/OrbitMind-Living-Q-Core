@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 from orbitmind.api.routers.laboratory import router as laboratory_router
+from orbitmind.laboratory.catalog import build_catalog_projection, build_default_registry
 
 _LIST_PATH = "/api/v1/laboratories"
 _DETAIL_PATH = "/api/v1/laboratories/development-laboratory"
@@ -18,6 +19,9 @@ def test_list_is_deterministic_and_registry_backed(client: TestClient) -> None:
     payload = first.json()
     assert payload["schema_version"] == "laboratory-catalog-v1"
     assert payload["generated_from"] == "deterministic-laboratory-registry"
+    assert payload["catalog_digest"] == build_catalog_projection(
+        build_default_registry()
+    ).catalog_digest.model_dump(mode="json")
     assert [lab["laboratory_id"] for lab in payload["laboratories"]] == ["development-laboratory"]
     assert "does not grant permission" in payload["capability_principle"]
     for planned in payload["planned_laboratories"]:
@@ -30,6 +34,7 @@ def test_list_exact_top_level_schema(client: TestClient) -> None:
         "schema_version",
         "generated_from",
         "capability_principle",
+        "catalog_digest",
         "laboratories",
         "planned_laboratories",
         "mission_flow",
@@ -64,6 +69,7 @@ def test_detail_exact_manifest_schema(client: TestClient) -> None:
         "replay_support",
         "verification_requirements",
         "resource_boundaries",
+        "framework_compatibility",
         "compatibility",
         "limitations",
         "deprecation_state",

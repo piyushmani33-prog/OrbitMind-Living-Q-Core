@@ -10,11 +10,13 @@ free of runtime measurement — no fake telemetry, health or activity.
 
 from __future__ import annotations
 
+import json
 from typing import Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from orbitmind import __version__
+from orbitmind.core.checksums import sha256_bytes
 from orbitmind.laboratory.capabilities import (
     CAPABILITY_IS_NOT_PERMISSION,
     ApprovalPosture,
@@ -23,8 +25,11 @@ from orbitmind.laboratory.capabilities import (
     LabCapability,
 )
 from orbitmind.laboratory.contracts import (
+    LABORATORY_FRAMEWORK_CONTRACT_VERSION,
+    LABORATORY_SUPPORTED_MANIFEST_SCHEMA_VERSIONS,
     ApprovalGate,
     CompatibilityInfo,
+    FrameworkCompatibilityRange,
     HardwarePosture,
     LaboratoryDomain,
     LaboratoryImplementationStatus,
@@ -37,6 +42,8 @@ from orbitmind.laboratory.contracts import (
 from orbitmind.laboratory.registry import LaboratoryRegistry
 
 LABORATORY_CATALOG_SCHEMA_VERSION: Final = "laboratory-catalog-v1"
+LABORATORY_CATALOG_DIGEST_FORMAT_VERSION: Final = "laboratory-catalog-digest-v1"
+LABORATORY_CATALOG_DIGEST_DOMAIN_SEPARATOR: Final = b"orbitmind.laboratory.catalog.v1\0"
 PLANNED_STATUS_LABEL: Final = "planned — no runtime implementation"
 
 
@@ -141,6 +148,10 @@ def build_development_laboratory_manifest() -> LaboratoryManifest:
                 "Declared bounds for future governed work; nothing executes "
                 "in this catalog-foundation slice."
             ),
+        ),
+        framework_compatibility=FrameworkCompatibilityRange(
+            minimum_inclusive="1.0.0",
+            maximum_exclusive="2.0.0",
         ),
         compatibility=CompatibilityInfo(
             platform_version_baseline=__version__,
@@ -431,6 +442,18 @@ OFFLINE_BOUNDARY_STATEMENTS: tuple[str, ...] = (
 )
 
 
+class LaboratoryCatalogDigest(BaseModel):
+    """Immutable catalog identity, never a signature, trust decision, or approval."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    format_version: Literal["laboratory-catalog-digest-v1"] = (
+        LABORATORY_CATALOG_DIGEST_FORMAT_VERSION
+    )
+    algorithm: Literal["sha256"] = "sha256"
+    value: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
 class LaboratoryCatalogProjection(BaseModel):
     """The single deterministic projection consumed by both API and Workbench."""
 
@@ -441,12 +464,49 @@ class LaboratoryCatalogProjection(BaseModel):
         "deterministic-laboratory-registry"
     )
     capability_principle: str = CAPABILITY_IS_NOT_PERMISSION
+    catalog_digest: LaboratoryCatalogDigest
     laboratories: tuple[LaboratoryManifest, ...]
     planned_laboratories: tuple[PlannedLaboratoryProjection, ...]
     mission_flow: tuple[MissionFlowStage, ...]
     evidence_chain: tuple[EvidenceChainLink, ...]
     safety_boundaries: tuple[SafetyBoundary, ...]
     offline_boundary_statements: tuple[str, ...]
+
+
+def canonical_catalog_payload(
+    manifests: tuple[LaboratoryManifest, ...],
+) -> dict[str, object]:
+    """Canonical JSON-compatible catalog semantics, independent of registration order."""
+
+    ordered_manifests = tuple(sorted(manifests, key=lambda manifest: manifest.laboratory_id))
+    return {
+        "catalog_digest_format_version": LABORATORY_CATALOG_DIGEST_FORMAT_VERSION,
+        "catalog_schema_version": LABORATORY_CATALOG_SCHEMA_VERSION,
+        "framework_contract_version": str(LABORATORY_FRAMEWORK_CONTRACT_VERSION),
+        "supported_manifest_schema_versions": sorted(LABORATORY_SUPPORTED_MANIFEST_SCHEMA_VERSIONS),
+        "laboratories": [manifest.model_dump(mode="json") for manifest in ordered_manifests],
+    }
+
+
+def canonical_catalog_json(manifests: tuple[LaboratoryManifest, ...]) -> str:
+    """Compact UTF-8 JSON source for the catalog digest after domain separation."""
+
+    return json.dumps(
+        canonical_catalog_payload(manifests),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+
+
+def build_catalog_digest(manifests: tuple[LaboratoryManifest, ...]) -> LaboratoryCatalogDigest:
+    """SHA-256 identity for catalog semantics; calculation is pure and side-effect free."""
+
+    canonical_bytes = canonical_catalog_json(manifests).encode("utf-8")
+    return LaboratoryCatalogDigest(
+        value=sha256_bytes(LABORATORY_CATALOG_DIGEST_DOMAIN_SEPARATOR + canonical_bytes)
+    )
 
 
 def build_default_registry() -> LaboratoryRegistry:
@@ -458,8 +518,10 @@ def build_default_registry() -> LaboratoryRegistry:
 
 def build_catalog_projection(registry: LaboratoryRegistry) -> LaboratoryCatalogProjection:
     """Deterministic catalog projection from registry data + labelled static metadata."""
+    manifests = registry.list_manifests()
     return LaboratoryCatalogProjection(
-        laboratories=registry.list_manifests(),
+        catalog_digest=build_catalog_digest(manifests),
+        laboratories=manifests,
         planned_laboratories=PLANNED_LABORATORIES,
         mission_flow=GOVERNED_MISSION_FLOW,
         evidence_chain=EVIDENCE_CHAIN,
