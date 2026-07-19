@@ -180,3 +180,63 @@ Related: [ADR-0034](decisions/ADR-0034-authority-persistence-and-append-only-rec
 Persistence is storage only: it implements no lifecycle service, API, UI, or
 runtime enforcement (those are U7.2+). The pure `orbitmind.authority` package
 still imports nothing from persistence (enforced by test).
+
+## 6. Lifecycle application services (U7.2)
+
+`orbitmind.orchestration.authority_lifecycle` is the owner-scoped application
+boundary above the frozen U7.0 contracts and the U7.1 append-only repository.
+It accepts strict immutable commands, opens exactly one transaction for each
+explicit mutation, and returns only persisted authority evidence. It has no
+API route, authentication middleware, runtime enforcement, provider, tool,
+agent, subprocess, filesystem-discovery, or operation-execution surface.
+
+The command sequence is deliberately explicit and non-automatic:
+
+1. `CreateApprovalRequestCommand` stores a request, which is never authority.
+2. `RecordApprovalDecisionCommand` stores one attributable terminal decision.
+   The v1 policy is exactly one terminal decision per request; an identical
+   replay returns that record and a different second decision fails closed.
+   PostgreSQL serializes that check by locking the exact owner-scoped approval
+   request row for the service transaction.
+3. `IssueCapabilityGrantCommand` requires an existing approved decision and
+   reconstructs subject, capability, scope, purpose, policy, and validity from
+   stored authority truth. It does not accept those widening-sensitive values
+   from the caller.
+4. `RevokeCapabilityGrantCommand` appends revocation evidence and never mutates
+   the grant. The earliest effective stored revocation governs later explicit
+   evaluations.
+5. `EvaluateAuthorityCommand` may evaluate only an existing owner-scoped grant
+   that exactly links its stored request and approved decision. The pure U7.0
+   evaluator determines the result; U7.1 persists allowed and denied
+   grant-backed evaluation evidence atomically.
+
+### Rejection and pre-grant semantics
+
+An `ApprovalDecision(outcome="rejected")` is itself durable, attributable,
+append-only denial evidence. It cannot produce a `CapabilityGrant`, and the
+lifecycle service fails closed with `authority_decision_rejected` before any
+evaluation is constructed or persisted. There is no nullable, synthetic,
+placeholder, or fabricated grant chain.
+
+Likewise, an approved decision without an explicitly issued grant is not
+execution authority. Evaluation fails closed with `authority_grant_not_found`
+and creates no `AuthorityEvaluation` row. Only an existing persisted grant may
+be evaluated. A future generalized command-refusal receipt belongs to a later
+operation-admission/receipt phase, not authority persistence.
+
+This preserves the U7.1 invariant that `AuthorityEvaluationRequest` is
+strictly grant-backed and that evaluation persistence requires an approved,
+exact stored chain. The original U7.2 draft requested a denied evaluation for
+rejected decisions; that conflict was resolved by treating the rejected
+`ApprovalDecision` as the durable denial evidence, with no migration and no
+causality weakening.
+
+### Read and replay model
+
+`AuthorityChainReadModel` returns stored request, decision, grant, revocation,
+and evaluation tuples in deterministic repository order. It stores no mutable
+status: pending, rejected, approved-ungranted, and granted are truthful
+projections of the records. Owner-qualified not-found behavior is
+non-disclosing, corrupt evidence fails closed, and every command receives
+explicit identifiers, actors, policy versions, and UTC-normalized event times.
+No service reads a clock or generates an identity.

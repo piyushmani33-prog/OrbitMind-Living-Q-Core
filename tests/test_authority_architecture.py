@@ -170,9 +170,10 @@ def test_authority_has_no_module_level_mutable_state() -> None:
 
 
 # Sanctioned consumers of orbitmind.authority. U7.1 adds the persistence
-# adapter; API/runtime/agent/tool consumers remain forbidden until their own
-# reviewed slices. Any new top-level package added here must be a conscious edit.
-_SANCTIONED_AUTHORITY_CONSUMER_PACKAGES = ("persistence",)
+# adapter and U7.2 adds the orchestration-layer lifecycle services; API/runtime/
+# agent/tool consumers remain forbidden until their own reviewed slices. Any new
+# top-level package added here must be a conscious edit.
+_SANCTIONED_AUTHORITY_CONSUMER_PACKAGES = ("orchestration", "persistence")
 _FORBIDDEN_AUTHORITY_CONSUMER_PACKAGES = (
     "api",
     "runtime",
@@ -180,16 +181,16 @@ _FORBIDDEN_AUTHORITY_CONSUMER_PACKAGES = (
     "quantum",
     "laboratory",
     "sources",
-    "orchestration",
 )
 
 
 def test_authority_is_only_consumed_by_sanctioned_layers() -> None:
     """Only sanctioned layers import ``orbitmind.authority``.
 
-    U7.0 introduced the pure contracts with no consumers; U7.1 adds exactly one
-    sanctioned consumer — the persistence adapter. API/UI/runtime/agent layers
-    must not import authority until their own reviewed slices.
+    U7.0 introduced the pure contracts with no consumers; U7.1 adds the
+    persistence adapter and U7.2 adds reviewed orchestration lifecycle
+    services. API/UI/runtime/agent layers must not import authority until
+    their own reviewed slices.
     """
     source_root = _AUTHORITY_ROOT.parent
     consumers: set[str] = set()

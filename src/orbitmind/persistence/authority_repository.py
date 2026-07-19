@@ -155,6 +155,26 @@ class SqlAlchemyAuthorityRepository:
         row = self._existing_request_by_id(owner_id, request_id)
         return None if row is None else self._request_to_domain(row)
 
+    def read_approval_request_for_update(
+        self, *, owner_id: str, request_id: str
+    ) -> ApprovalRequest | None:
+        """Read one request while holding its PostgreSQL row lock when supported.
+
+        U7.2 uses this narrow persistence primitive to serialize one terminal
+        decision per request. SQLite accepts the same statement as its local
+        test/store behavior without claiming PostgreSQL row-lock semantics.
+        """
+
+        row = self._s.scalar(
+            select(AuthorityApprovalRequestRow)
+            .where(
+                AuthorityApprovalRequestRow.owner_id == owner_id,
+                AuthorityApprovalRequestRow.id == request_id,
+            )
+            .with_for_update()
+        )
+        return None if row is None else self._request_to_domain(row)
+
     def list_approval_requests(self, *, owner_id: str) -> tuple[ApprovalRequest, ...]:
         rows = self._s.scalars(
             select(AuthorityApprovalRequestRow)
