@@ -113,3 +113,70 @@ the roadmap, each behind its own gates.
   (request → decision → grant → revocations → evaluations) from which U7.1
   builds append-only persisted chains; nothing here mutates, deletes, or
   summarizes evidence.
+
+## 5. Durable persistence (U7.1)
+
+`orbitmind.persistence.authority_models` + `authority_repository` add
+PostgreSQL-first (SQLite-supported) durable storage for the five authority
+records as **immutable, append-only, owner-scoped evidence**. Persistence adds
+no domain semantics: it stores and reads the U7.0 contracts unchanged.
+Related: [ADR-0034](decisions/ADR-0034-authority-persistence-and-append-only-records.md).
+
+- **Tables** (one per record): `authority_approval_requests`,
+  `authority_approval_decisions`, `authority_capability_grants`,
+  `authority_revocations`, `authority_evaluations`. Alembic head
+  `9313833e1f07` (revises `n9c0d1e2f3g4`); the migration creates only these
+  tables.
+- **Owner scoping.** Composite primary key `(id, owner_id)` on every table, so
+  identifiers are unique *per owner* — one owner can never collide with, or
+  probe the existence of, another owner's ids. Owner-qualified composite
+  foreign keys (`RESTRICT`) make cross-owner links impossible; every read and
+  write is owner-scoped, and a not-found result is indistinguishable from
+  another owner's record (both `None`).
+- **Append-only / immutable.** The repository exposes only `append_*` /
+  `get_*` / `list_*` / `read_authority_chain`; there is no update, delete,
+  approve, reject, issue, evaluate, or execute method. No mutable status is
+  stored — *expired* and *revoked* are derived by U7.0 evaluation from explicit
+  timestamps and revocation evidence, never persisted as truth. `RESTRICT`
+  foreign keys mean no cascade can erase evidence.
+- **Canonical identity.** Each row stores the full canonical domain JSON plus a
+  domain-separated SHA-256 `record_identity` (identity, not signature). Reads
+  re-parse the payload through the frozen contract and recompute the identity,
+  so tampered or unknown-enum rows fail closed (`AuthorityRecordCorruptError`).
+  No column stores a secret, credential, token, command, import path, or
+  filesystem path.
+- **Causality** (validated at the mapping boundary, with FKs as defense in
+  depth): a decision must echo an existing same-owner request; a grant must
+  reference an existing same-owner **approved** decision and match it exactly;
+  a revocation must reference an existing same-owner grant; an evaluation must
+  reference the exact same-owner chain and its stored result must equal
+  `evaluate_authority(request)`. Orphaned or mismatched records raise
+  `AuthorityCausalityError` and the transaction rolls back.
+- **Idempotency.** Each append takes an explicit `idempotency_key`; a replay
+  with the same `(owner_id, key)` and identical canonical payload returns the
+  stored record, and a conflicting payload (or a reused record id with
+  different content) fails closed with `IdempotencyConflictError`. Different
+  owners may reuse the same external key. Detection is by deterministic
+  pre-check (never by relying on a database constraint to fire), so a single
+  SQLite transaction is never poisoned; PostgreSQL additionally recovers from a
+  concurrent-insert race via a savepoint.
+- **Transactions.** Writes are transactional; a failed or orphaned append
+  leaves no partial record and preserves prior truth.
+- **Per-grant serialization.** PostgreSQL serializes revocation and evaluation
+  appends by taking the same owner-qualified capability-grant row lock for the
+  caller's active transaction. That lock is the persistence linearization
+  point: an evaluation uses the complete committed revocation set when it
+  acquires the lock, and a later revocation never rewrites earlier append-only
+  evaluation evidence or compensates an already completed action. SQLite keeps
+  the same repository behavior for local/offline use but does not prove the
+  PostgreSQL row-blocking guarantee.
+- **Evaluation projections.** The canonical request and decision payloads are
+  semantic truth. Every duplicated evaluation scalar (owner, identifiers,
+  schema version, time, capability, policy version, result, reason, and
+  relevant revocation identity) is recomputed or compared on every read.
+  Projection mismatches fail closed; the idempotency key is storage metadata,
+  not a semantic payload projection.
+
+Persistence is storage only: it implements no lifecycle service, API, UI, or
+runtime enforcement (those are U7.2+). The pure `orbitmind.authority` package
+still imports nothing from persistence (enforced by test).

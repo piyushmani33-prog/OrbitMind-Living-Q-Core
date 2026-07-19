@@ -10,6 +10,7 @@ from __future__ import annotations
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
+import orbitmind.persistence.authority_models
 import orbitmind.persistence.memory_models
 import orbitmind.persistence.models
 import orbitmind.persistence.observation_geometry_models
