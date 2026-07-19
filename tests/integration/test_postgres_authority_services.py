@@ -136,10 +136,16 @@ def _grant(owner: str = OWNER_A) -> IssueCapabilityGrantCommand:
     )
 
 
-def _evaluation(owner: str = OWNER_A) -> EvaluateAuthorityCommand:
+def _evaluation(
+    owner: str = OWNER_A,
+    *,
+    evaluation_id: str = "eval-00000001",
+    evaluation_time: datetime = T0 + timedelta(days=1),
+    idempotency_key: str = "evaluation-key1",
+) -> EvaluateAuthorityCommand:
     return EvaluateAuthorityCommand(
         owner_id=owner,
-        evaluation_id="eval-00000001",
+        evaluation_id=evaluation_id,
         request_id="req-00000001",
         decision_id="dec-00000001",
         grant_id="grant-00000001",
@@ -148,8 +154,8 @@ def _evaluation(owner: str = OWNER_A) -> EvaluateAuthorityCommand:
         scope=SCOPE,
         purpose="Read one bounded PostgreSQL revision.",
         policy_version=POLICY,
-        evaluation_time=T0 + timedelta(days=1),
-        idempotency_key="evaluation-key1",
+        evaluation_time=evaluation_time,
+        idempotency_key=idempotency_key,
     )
 
 
