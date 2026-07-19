@@ -21,6 +21,7 @@ SPEC_PATH_NAMES = {"SPEC_DIR", "ROOT", "SOURCE", "MIGRATIONS", "SAMPLES", "LAUNC
 MIGRATION_HIDDEN_IMPORTS = {"orbitmind.persistence.research_models"}
 MIGRATION_NORMAL_ANALYSIS_IMPORTS = {
     "orbitmind.core.config",
+    "orbitmind.persistence.authority_models",
     "orbitmind.persistence.database",
     "orbitmind.persistence.memory_models",
     "orbitmind.persistence.models",

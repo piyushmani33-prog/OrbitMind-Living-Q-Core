@@ -169,19 +169,42 @@ def test_authority_has_no_module_level_mutable_state() -> None:
             del targets
 
 
-def test_authority_does_not_leak_into_forbidden_layers() -> None:
-    """No module outside authority/, its tests, or future sanctioned layers
-    imports orbitmind.authority yet (U7.0 introduces the contracts only)."""
+# Sanctioned consumers of orbitmind.authority. U7.1 adds the persistence
+# adapter; API/runtime/agent/tool consumers remain forbidden until their own
+# reviewed slices. Any new top-level package added here must be a conscious edit.
+_SANCTIONED_AUTHORITY_CONSUMER_PACKAGES = ("persistence",)
+_FORBIDDEN_AUTHORITY_CONSUMER_PACKAGES = (
+    "api",
+    "runtime",
+    "camera",
+    "quantum",
+    "laboratory",
+    "sources",
+    "orchestration",
+)
+
+
+def test_authority_is_only_consumed_by_sanctioned_layers() -> None:
+    """Only sanctioned layers import ``orbitmind.authority``.
+
+    U7.0 introduced the pure contracts with no consumers; U7.1 adds exactly one
+    sanctioned consumer — the persistence adapter. API/UI/runtime/agent layers
+    must not import authority until their own reviewed slices.
+    """
     source_root = _AUTHORITY_ROOT.parent
-    offenders: list[str] = []
+    consumers: set[str] = set()
     for py_file in source_root.rglob("*.py"):
         if _AUTHORITY_ROOT in py_file.parents:
             continue
         tree = ast.parse(py_file.read_text(encoding="utf-8"))
         for module in _imports(tree):
             if module == "orbitmind.authority" or module.startswith("orbitmind.authority."):
-                offenders.append(str(py_file))
-    assert offenders == [], f"unexpected authority consumers in U7.0: {offenders}"
+                consumers.add(py_file.relative_to(source_root).parts[0])
+    assert not (consumers - set(_SANCTIONED_AUTHORITY_CONSUMER_PACKAGES)), (
+        f"unexpected authority consumers: {sorted(consumers)}"
+    )
+    for forbidden in _FORBIDDEN_AUTHORITY_CONSUMER_PACKAGES:
+        assert forbidden not in consumers, f"{forbidden} must not import orbitmind.authority yet"
 
 
 def test_evaluation_module_is_pure_of_pydantic_construction_side_effects() -> None:

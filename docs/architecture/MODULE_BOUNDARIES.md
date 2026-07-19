@@ -31,6 +31,7 @@ created merely for appearance.
 | `research` | U4.0B durable structured memory | typed inputs, evidence, gaps, claims, and learning plus an owner-scoped PostgreSQL repository with atomic cycle persistence; no raw evidence vault, API wiring, network adapter, or runtime open-research activation | governance, core |
 | `laboratory` | U6 catalog foundation | versioned immutable laboratory manifests, capability declarations (never grants), deterministic in-process registry, built-in Development Laboratory metadata; no execution, plugin loading, persistence, agents, or permission system | core (+ bare `orbitmind` for `__version__`) |
 | `authority` | U7.0 pure contracts | strict immutable authority contracts (approval request/decision, scoped expiring capability grants, revocation, evaluation) with deterministic side-effect-free evaluation and stable reason codes; caller-supplied ids/times, no clock, no persistence, no API/UI, no execution surface, delegation prohibited in v1 | core |
+| `persistence/authority_*` | U7.1 durable evidence | append-only, owner-scoped SQLAlchemy rows + repository for the U7.0 authority records (composite `(id, owner_id)` PK, `RESTRICT` FKs, canonical-payload + SHA-256 identity, fail-closed reads, idempotency); storage only — no lifecycle service, API, UI, or runtime enforcement | authority, core |
 | `tool_forge` | **(doc-only, Phase 6)** | generated-tool lifecycle (untrusted) | — |
 | `approvals` | **(modeled, governance)** | human review/approval queues | governance |
 
