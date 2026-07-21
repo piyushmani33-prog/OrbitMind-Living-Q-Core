@@ -716,7 +716,7 @@ def test_migrated_postgres_schema_has_owner_scoped_integrity_constraints(
 ) -> None:
     with pg_db.engine.connect() as connection:
         assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == (
-            "9313833e1f07"
+            "a1f4c7e9b230"
         )
     inspector = inspect(pg_db.engine)
     evidence_uniques = {

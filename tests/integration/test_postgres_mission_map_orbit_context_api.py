@@ -196,4 +196,4 @@ def test_postgres_mission_map_orbit_context_http_boundary(
 
 def test_postgres_mission_map_orbit_context_alembic_head_is_current() -> None:
     script = ScriptDirectory.from_config(Config("alembic.ini"))
-    assert tuple(script.get_heads()) == ("9313833e1f07",)
+    assert tuple(script.get_heads()) == ("a1f4c7e9b230",)
