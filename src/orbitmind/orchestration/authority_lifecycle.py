@@ -416,9 +416,7 @@ def evaluate_authority_command(
             approval_request=request,
             approval_decision=decision,
             grant=grant,
-            revocations=repository.list_revocations_for_grant(
-                owner_id=command.owner_id, grant_id=grant.grant_id
-            ),
+            revocations=_all_revocations_for_grant(repository, command.owner_id, grant.grant_id),
         )
         decision_result = evaluate_authority(evaluation_request)
         return repository.append_evaluation_record(
@@ -439,43 +437,41 @@ def read_authority_chain(
         request = repository.get_approval_request(owner_id=owner_id, request_id=request_id)
         if request is None:
             return None
-        decisions = _decisions_for_request(repository, owner_id, request_id)
-        if len(decisions) > 1:
-            raise AuthorityChainMismatchError("stored request has multiple terminal decisions")
-        grants = tuple(
-            grant
-            for grant in repository.list_capability_grants(owner_id=owner_id)
-            if grant.request_id == request_id
-        )
-        if decisions:
-            decision = decisions[0]
-            _require_decision_for_request(decision, request)
-            for grant in grants:
-                _require_grant_for_decision(grant, request, decision)
-        elif grants:
-            raise AuthorityChainMismatchError("stored grants have no terminal decision")
-        revocations = tuple(
-            revocation
-            for grant in grants
-            for revocation in repository.list_revocations_for_grant(
-                owner_id=owner_id, grant_id=grant.grant_id
-            )
-        )
-        evaluations = tuple(
-            evaluation
-            for grant in grants
-            for evaluation in repository.list_evaluations(
-                owner_id=owner_id, grant_id=grant.grant_id
-            )
-        )
-        return AuthorityChainReadModel(
-            owner_id=owner_id,
-            approval_request=request,
-            approval_decisions=decisions,
-            capability_grants=grants,
-            revocations=revocations,
-            evaluations=evaluations,
-        )
+        return _read_exact_request_chain(repository, owner_id, request)
+
+    return _read(session, operation)
+
+
+def read_authority_chain_for_decision(
+    *, session: Session, owner_id: str, decision_id: str
+) -> AuthorityChainReadModel:
+    """Read the exact owner-scoped chain containing one stored decision."""
+
+    def operation(repository: SqlAlchemyAuthorityRepository) -> AuthorityChainReadModel:
+        decision = _require_decision(repository, owner_id, decision_id)
+        request = _require_request(repository, owner_id, decision.request_id)
+        chain = _read_exact_request_chain(repository, owner_id, request)
+        if decision not in chain.approval_decisions:
+            raise AuthorityChainMismatchError("stored decision is absent from its authority chain")
+        return chain
+
+    return _read(session, operation)
+
+
+def read_approval_request_for_decision(
+    *, session: Session, owner_id: str, decision_id: str
+) -> ApprovalRequest:
+    """Read only the request bound to one exact stored decision.
+
+    Grant issuance needs the request identity and validity window to construct
+    its command. It does not need a complete evidence-chain projection, which
+    is deliberately bounded for read views and may therefore reject an
+    otherwise valid idempotent replay with extensive later evidence.
+    """
+
+    def operation(repository: SqlAlchemyAuthorityRepository) -> ApprovalRequest:
+        decision = _require_decision(repository, owner_id, decision_id)
+        return _require_request(repository, owner_id, decision.request_id)
 
     return _read(session, operation)
 
@@ -511,6 +507,48 @@ def list_revocations_for_grant(
     )
 
 
+def list_revocations_for_grant_bounded(
+    *, session: Session, owner_id: str, grant_id: str, limit: int = 25
+) -> tuple[RevocationRecord, ...]:
+    """Same-owner revocations for one exact grant, bounded in the database.
+
+    The internal bound admits one additional row only for an operator-page probe,
+    never an unbounded collection.
+    """
+
+    bounded = _bounded_limit(limit, allow_overfetch=True)
+    return _read(
+        session,
+        lambda repository: repository.list_revocations_for_grant_bounded(
+            owner_id=owner_id, grant_id=grant_id, limit=bounded
+        ),
+    )
+
+
+def read_revocation_count_for_grant(*, session: Session, owner_id: str, grant_id: str) -> int:
+    """Return the exact count for one owner-scoped grant without loading revocation rows."""
+
+    return _read(
+        session,
+        lambda repository: repository.read_revocation_count_for_grant(
+            owner_id=owner_id, grant_id=grant_id
+        ),
+    )
+
+
+def read_revocation_for_grant(
+    *, session: Session, owner_id: str, grant_id: str, revocation_id: str
+) -> RevocationRecord | None:
+    """Read one exact same-owner revocation without scanning a bounded list."""
+
+    return _read(
+        session,
+        lambda repository: repository.read_revocation_for_grant(
+            owner_id=owner_id, grant_id=grant_id, revocation_id=revocation_id
+        ),
+    )
+
+
 def list_evaluations_for_grant(
     *, session: Session, owner_id: str, grant_id: str
 ) -> tuple[AuthorityEvaluationDecision, ...]:
@@ -519,6 +557,150 @@ def list_evaluations_for_grant(
     return _read(
         session,
         lambda repository: repository.list_evaluations(owner_id=owner_id, grant_id=grant_id),
+    )
+
+
+# -- U7.3 bounded operator reads -----------------------------------------
+# These thin wrappers exist so the operator API/Workbench applies the hard
+# page-size cap at the database rather than loading owner-wide rows. They
+# delegate to the new bounded repository methods and reuse the same fresh-
+# session, fail-closed, append-only persistence invariants as U7.2. They do
+# not change any U7.2 lifecycle command semantics.
+
+DEFAULT_OPERATOR_PAGE_SIZE = 25
+MAX_OPERATOR_PAGE_SIZE = 50
+
+
+def _bounded_limit(limit: int, *, allow_overfetch: bool = False) -> int:
+    """Clamp an operator page size into the allowed range."""
+
+    if not isinstance(limit, int) or limit <= 0:
+        raise AuthorityLifecycleError("authority operator page size must be positive")
+    maximum = MAX_OPERATOR_PAGE_SIZE + 1 if allow_overfetch else MAX_OPERATOR_PAGE_SIZE
+    return min(limit, maximum)
+
+
+def list_approval_requests_bounded(
+    *, session: Session, owner_id: str, limit: int = DEFAULT_OPERATOR_PAGE_SIZE
+) -> tuple[ApprovalRequest, ...]:
+    """Bounded same-owner approval-request list for operator display."""
+
+    bounded = _bounded_limit(limit, allow_overfetch=True)
+    return _read(
+        session,
+        lambda repository: repository.list_approval_requests_bounded(
+            owner_id=owner_id, limit=bounded
+        ),
+    )
+
+
+def list_capability_grants_bounded(
+    *, session: Session, owner_id: str, limit: int = DEFAULT_OPERATOR_PAGE_SIZE
+) -> tuple[CapabilityGrant, ...]:
+    """Bounded same-owner capability-grant list for operator display."""
+
+    bounded = _bounded_limit(limit, allow_overfetch=True)
+    return _read(
+        session,
+        lambda repository: repository.list_capability_grants_bounded(
+            owner_id=owner_id, limit=bounded
+        ),
+    )
+
+
+def list_approval_decisions_for_request(
+    *, session: Session, owner_id: str, request_id: str, limit: int = 5
+) -> tuple[ApprovalDecision, ...]:
+    """Same-owner terminal decisions for one exact request, bounded."""
+
+    bounded = _bounded_limit(limit)
+    return _read(
+        session,
+        lambda repository: repository.list_decisions_for_request(
+            owner_id=owner_id, request_id=request_id, limit=bounded
+        ),
+    )
+
+
+def list_capability_grants_for_request(
+    *, session: Session, owner_id: str, request_id: str, limit: int = 5
+) -> tuple[CapabilityGrant, ...]:
+    """Same-owner grants for one exact request, bounded."""
+
+    bounded = _bounded_limit(limit)
+    return _read(
+        session,
+        lambda repository: repository.list_grants_for_request(
+            owner_id=owner_id, request_id=request_id, limit=bounded
+        ),
+    )
+
+
+def list_evaluations_for_grant_bounded(
+    *, session: Session, owner_id: str, grant_id: str, limit: int = 25
+) -> tuple[AuthorityEvaluationDecision, ...]:
+    """Same-owner evaluations for one exact grant, bounded.
+
+    The internal bound admits one additional row only for an operator-page probe,
+    never an unbounded collection.
+    """
+
+    bounded = _bounded_limit(limit, allow_overfetch=True)
+    return _read(
+        session,
+        lambda repository: repository.list_evaluations_for_grant_bounded(
+            owner_id=owner_id, grant_id=grant_id, limit=bounded
+        ),
+    )
+
+
+def read_latest_evaluation_for_grant(
+    *, session: Session, owner_id: str, grant_id: str
+) -> AuthorityEvaluationDecision | None:
+    """Read one exact grant's newest evaluation deterministically in the database."""
+
+    return _read(
+        session,
+        lambda repository: repository.read_latest_evaluation_for_grant(
+            owner_id=owner_id, grant_id=grant_id
+        ),
+    )
+
+
+def read_evaluation_for_grant(
+    *, session: Session, owner_id: str, grant_id: str, evaluation_id: str
+) -> AuthorityEvaluationDecision | None:
+    """Read one exact same-owner evaluation without scanning a bounded list."""
+
+    return _read(
+        session,
+        lambda repository: repository.read_evaluation_for_grant(
+            owner_id=owner_id, grant_id=grant_id, evaluation_id=evaluation_id
+        ),
+    )
+
+
+def read_approval_request(
+    *, session: Session, owner_id: str, request_id: str
+) -> ApprovalRequest | None:
+    """Same-owner approval-request read by exact id (None when absent/foreign)."""
+
+    return _read(
+        session,
+        lambda repository: repository.get_approval_request(
+            owner_id=owner_id, request_id=request_id
+        ),
+    )
+
+
+def read_capability_grant(
+    *, session: Session, owner_id: str, grant_id: str
+) -> CapabilityGrant | None:
+    """Same-owner capability-grant read by exact id (None when absent/foreign)."""
+
+    return _read(
+        session,
+        lambda repository: repository.get_capability_grant(owner_id=owner_id, grant_id=grant_id),
     )
 
 
@@ -643,3 +825,67 @@ def _decisions_for_request(
         for decision in repository.list_approval_decisions(owner_id=owner_id)
         if decision.request_id == request_id
     )
+
+
+def _read_exact_request_chain(
+    repository: SqlAlchemyAuthorityRepository, owner_id: str, request: ApprovalRequest
+) -> AuthorityChainReadModel:
+    """Assemble one exact chain through bounded owner-and-parent database reads."""
+
+    decisions = repository.list_decisions_for_request(
+        owner_id=owner_id, request_id=request.request_id, limit=2
+    )
+    if len(decisions) > 1:
+        raise AuthorityChainMismatchError("stored request has multiple terminal decisions")
+    grants = repository.list_grants_for_request(
+        owner_id=owner_id, request_id=request.request_id, limit=MAX_OPERATOR_PAGE_SIZE + 1
+    )
+    if len(grants) > MAX_OPERATOR_PAGE_SIZE:
+        raise AuthorityChainMismatchError("stored request has too many capability grants")
+    if decisions:
+        decision = decisions[0]
+        _require_decision_for_request(decision, request)
+        for grant in grants:
+            _require_grant_for_decision(grant, request, decision)
+    elif grants:
+        raise AuthorityChainMismatchError("stored grants have no terminal decision")
+    revocations = tuple(
+        revocation
+        for grant in grants
+        for revocation in _all_revocations_for_grant(repository, owner_id, grant.grant_id)
+    )
+    evaluations = tuple(
+        evaluation
+        for grant in grants
+        for evaluation in _all_evaluations_for_grant(repository, owner_id, grant.grant_id)
+    )
+    return AuthorityChainReadModel(
+        owner_id=owner_id,
+        approval_request=request,
+        approval_decisions=decisions,
+        capability_grants=grants,
+        revocations=revocations,
+        evaluations=evaluations,
+    )
+
+
+def _all_revocations_for_grant(
+    repository: SqlAlchemyAuthorityRepository, owner_id: str, grant_id: str
+) -> tuple[RevocationRecord, ...]:
+    rows = repository.list_revocations_for_grant_bounded(
+        owner_id=owner_id, grant_id=grant_id, limit=MAX_OPERATOR_PAGE_SIZE + 1
+    )
+    if len(rows) > MAX_OPERATOR_PAGE_SIZE:
+        raise AuthorityChainMismatchError("stored grant has too many revocations")
+    return rows
+
+
+def _all_evaluations_for_grant(
+    repository: SqlAlchemyAuthorityRepository, owner_id: str, grant_id: str
+) -> tuple[AuthorityEvaluationDecision, ...]:
+    rows = repository.list_evaluations_for_grant_bounded(
+        owner_id=owner_id, grant_id=grant_id, limit=MAX_OPERATOR_PAGE_SIZE + 1
+    )
+    if len(rows) > MAX_OPERATOR_PAGE_SIZE:
+        raise AuthorityChainMismatchError("stored grant has too many evaluations")
+    return rows

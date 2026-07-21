@@ -18,8 +18,13 @@ from typing import cast
 import pytest
 from fastapi.testclient import TestClient
 
+from orbitmind.api.app import SECURITY_HEADERS, WORKBENCH_REFERRER_POLICY
 from orbitmind.api.container import AppContainer
-from orbitmind.api.routers.workbench import CAMERA_PREVIEW_ASSET_PATH
+from orbitmind.api.routers.workbench import (
+    CAMERA_PREVIEW_ASSET_PATH,
+    CAMERA_PREVIEW_CONTENT_SECURITY_POLICY,
+    CAMERA_PREVIEW_PERMISSIONS_POLICY,
+)
 from orbitmind.camera import csrf as camera_csrf
 from orbitmind.camera.csrf import (
     CAMERA_CSRF_ERROR_CODE,
@@ -669,6 +674,11 @@ def test_camera_page_issues_exact_cookie_meta_and_no_store(client: TestClient) -
 
     assert response.status_code == 200
     assert response.headers["cache-control"] == "no-store"
+    assert response.headers["content-security-policy"] == CAMERA_PREVIEW_CONTENT_SECURITY_POLICY
+    assert response.headers["permissions-policy"] == CAMERA_PREVIEW_PERMISSIONS_POLICY
+    assert response.headers["referrer-policy"] == WORKBENCH_REFERRER_POLICY
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.headers["x-frame-options"] == "DENY"
     assert len(cookies) == 1
     assert set(parsed) == {CAMERA_PAGE_SESSION_COOKIE_NAME}
     assert _SECRET_PATTERN.fullmatch(morsel.value)
@@ -725,14 +735,30 @@ def test_camera_page_capacity_failure_issues_no_cookie_or_token(
     client: TestClient, container: AppContainer
 ) -> None:
     registry = container.require_camera_page_csrf_registry()
-    for _ in range(CAMERA_PAGE_SESSION_MAX_ACTIVE):
+    available = client.get("/workbench/camera")
+    for _ in range(CAMERA_PAGE_SESSION_MAX_ACTIVE - 1):
         registry.issue()
     client.cookies.clear()
 
     response = client.get("/workbench/camera")
 
     assert response.status_code == 503
+    assert response.headers["content-type"] == "text/html; charset=utf-8"
     assert response.text == "Camera preview is temporarily unavailable."
     assert response.headers["cache-control"] == "no-store"
+    assert response.headers["content-security-policy"] == CAMERA_PREVIEW_CONTENT_SECURITY_POLICY
+    assert (
+        response.headers["content-security-policy"] == available.headers["content-security-policy"]
+    )
+    assert response.headers["referrer-policy"] == WORKBENCH_REFERRER_POLICY
+    assert response.headers["permissions-policy"] == SECURITY_HEADERS["Permissions-Policy"]
+    assert response.headers["x-content-type-options"] == SECURITY_HEADERS["X-Content-Type-Options"]
+    assert response.headers["x-frame-options"] == SECURITY_HEADERS["X-Frame-Options"]
+    lowered = response.text.casefold()
+    assert "traceback" not in lowered
+    assert "exception" not in lowered
+    assert "getusermedia" not in lowered
+    assert "microphone" not in lowered
+    assert "record" not in lowered
     assert "set-cookie" not in response.headers
     assert CAMERA_CSRF_META_NAME not in response.text

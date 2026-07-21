@@ -12,11 +12,13 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from starlette.responses import Response
 
 from orbitmind import __version__
 from orbitmind.api.container import AppContainer
 from orbitmind.api.errors import register_exception_handlers
+from orbitmind.api.routers.authority import router as authority_router
 from orbitmind.api.routers.camera_media import router as camera_media_router
 from orbitmind.api.routers.laboratory import router as laboratory_router
 from orbitmind.api.routers.map_orbit_contexts import router as map_orbit_contexts_router
@@ -36,7 +38,9 @@ from orbitmind.api.routers.static_reports import router as static_reports_router
 from orbitmind.api.routers.system import system_router, v1_system_router
 from orbitmind.api.routers.visual_manifests import router as visual_manifests_router
 from orbitmind.api.routers.workbench import router as workbench_router
+from orbitmind.api.schemas import ErrorResponse
 from orbitmind.core.logging import configure_logging
+from orbitmind.orchestration.authority_lifecycle import AuthorityRequestAlreadyDecidedError
 
 API_DESCRIPTION = (
     "OrbitMind Living Q-Core — Phase 0/1 orbital vertical slice. Deterministic SGP4 "
@@ -108,8 +112,9 @@ def create_app(container: AppContainer | None = None) -> FastAPI:
         if content_type == "text/html":
             for name, value in SECURITY_HEADERS.items():
                 response.headers.setdefault(name, value)
-            if request_path == "/workbench" or (
-                isinstance(request_path, str) and request_path.startswith("/workbench/")
+            if request_path in ("/workbench", "/authority/workbench") or (
+                isinstance(request_path, str)
+                and request_path.startswith(("/workbench/", "/authority/workbench/"))
             ):
                 response.headers["Referrer-Policy"] = WORKBENCH_REFERRER_POLICY
         if isinstance(request_path, str) and request_path.startswith(CAMERA_MEDIA_API_PREFIX):
@@ -119,6 +124,18 @@ def create_app(container: AppContainer | None = None) -> FastAPI:
         return response
 
     register_exception_handlers(app)
+
+    @app.exception_handler(AuthorityRequestAlreadyDecidedError)
+    async def handle_authority_request_already_decided(
+        request: Request, error: AuthorityRequestAlreadyDecidedError
+    ) -> JSONResponse:
+        """Map the lifecycle's typed immutable-decision conflict at the API boundary."""
+
+        return JSONResponse(
+            status_code=409,
+            content=ErrorResponse(code=error.code, message=error.message).model_dump(),
+        )
+
     app.include_router(system_router)
     app.include_router(v1_system_router)
     app.include_router(missions_router)
@@ -139,6 +156,7 @@ def create_app(container: AppContainer | None = None) -> FastAPI:
     app.include_router(camera_media_router)
     app.include_router(laboratory_router)
     app.include_router(workbench_router)
+    app.include_router(authority_router)
     return app
 
 

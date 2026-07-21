@@ -562,7 +562,10 @@ def _camera_preview_route(request: Request, container: ContainerDep) -> HTMLResp
         return HTMLResponse(
             "Camera preview is temporarily unavailable.",
             status_code=503,
-            headers={"Cache-Control": "no-store"},
+            headers={
+                "Cache-Control": "no-store",
+                "Content-Security-Policy": CAMERA_PREVIEW_CONTENT_SECURITY_POLICY,
+            },
         )
 
     response = _camera_preview_response(csrf_token=issued.csrf_token)

@@ -31,7 +31,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -351,6 +351,49 @@ class SqlAlchemyAuthorityRepository:
         ).all()
         return tuple(self._revocation_to_domain(row) for row in rows)
 
+    def list_revocations_for_grant_bounded(
+        self, *, owner_id: str, grant_id: str, limit: int
+    ) -> tuple[RevocationRecord, ...]:
+        """Same-owner revocations for one exact grant, with a database limit."""
+
+        rows = self._s.scalars(
+            select(AuthorityRevocationRow)
+            .where(
+                AuthorityRevocationRow.owner_id == owner_id,
+                AuthorityRevocationRow.grant_id == grant_id,
+            )
+            .order_by(AuthorityRevocationRow.effective_at, AuthorityRevocationRow.id)
+            .limit(limit)
+        ).all()
+        return tuple(self._revocation_to_domain(row) for row in rows)
+
+    def read_revocation_count_for_grant(self, *, owner_id: str, grant_id: str) -> int:
+        """Return the exact same-owner revocation count without materializing rows."""
+
+        count = self._s.scalar(
+            select(func.count())
+            .select_from(AuthorityRevocationRow)
+            .where(
+                AuthorityRevocationRow.owner_id == owner_id,
+                AuthorityRevocationRow.grant_id == grant_id,
+            )
+        )
+        return int(count or 0)
+
+    def read_revocation_for_grant(
+        self, *, owner_id: str, grant_id: str, revocation_id: str
+    ) -> RevocationRecord | None:
+        """Read one exact owner- and grant-scoped revocation by its public id."""
+
+        row = self._s.scalars(
+            select(AuthorityRevocationRow).where(
+                AuthorityRevocationRow.owner_id == owner_id,
+                AuthorityRevocationRow.grant_id == grant_id,
+                AuthorityRevocationRow.id == revocation_id,
+            )
+        ).one_or_none()
+        return self._revocation_to_domain(row) if row is not None else None
+
     # -- authority evaluation records ----------------------------------------
 
     def append_evaluation_record(
@@ -423,6 +466,123 @@ class SqlAlchemyAuthorityRepository:
         decisions = tuple(self._evaluation_to_domain(row) for row in rows)
         return tuple(decision for decision in decisions if decision.grant_id == grant_id)
 
+    # -- U7.3 bounded database-side reads (no migration; no new index) -------
+    # These narrow methods exist so the operator API/Workbench never performs
+    # unbounded owner-wide scans. Each applies an exact same-owner filter in the
+    # database and a hard LIMIT, preserving the existing ORDER BY determinism and
+    # the fail-closed row-to-domain re-parse. They do not change U7.1 semantics.
+
+    def list_decisions_for_request(
+        self, *, owner_id: str, request_id: str, limit: int
+    ) -> tuple[ApprovalDecision, ...]:
+        """Same-owner decisions for one exact request, bounded by ``limit``."""
+
+        rows = self._s.scalars(
+            select(AuthorityApprovalDecisionRow)
+            .where(
+                AuthorityApprovalDecisionRow.owner_id == owner_id,
+                AuthorityApprovalDecisionRow.request_id == request_id,
+            )
+            .order_by(AuthorityApprovalDecisionRow.decided_at, AuthorityApprovalDecisionRow.id)
+            .limit(limit)
+        ).all()
+        return tuple(self._decision_to_domain(row) for row in rows)
+
+    def list_grants_for_request(
+        self, *, owner_id: str, request_id: str, limit: int
+    ) -> tuple[CapabilityGrant, ...]:
+        """Same-owner grants for one exact request, bounded by ``limit``."""
+
+        rows = self._s.scalars(
+            select(AuthorityCapabilityGrantRow)
+            .where(
+                AuthorityCapabilityGrantRow.owner_id == owner_id,
+                AuthorityCapabilityGrantRow.request_id == request_id,
+            )
+            .order_by(AuthorityCapabilityGrantRow.issued_at, AuthorityCapabilityGrantRow.id)
+            .limit(limit)
+        ).all()
+        return tuple(self._grant_to_domain(row) for row in rows)
+
+    def list_evaluations_for_grant_bounded(
+        self, *, owner_id: str, grant_id: str, limit: int
+    ) -> tuple[AuthorityEvaluationDecision, ...]:
+        """Same-owner evaluations for one exact grant, bounded by ``limit``.
+
+        This is the bounded variant of :meth:`list_evaluations`: it filters by
+        ``grant_id`` in the database rather than in Python. The legacy
+        Python-filtered method is preserved unchanged for existing callers.
+        """
+
+        rows = self._s.scalars(
+            select(AuthorityEvaluationRow)
+            .where(
+                AuthorityEvaluationRow.owner_id == owner_id,
+                AuthorityEvaluationRow.grant_id == grant_id,
+            )
+            .order_by(AuthorityEvaluationRow.evaluation_time, AuthorityEvaluationRow.id)
+            .limit(limit)
+        ).all()
+        return tuple(self._evaluation_to_domain(row) for row in rows)
+
+    def read_latest_evaluation_for_grant(
+        self, *, owner_id: str, grant_id: str
+    ) -> AuthorityEvaluationDecision | None:
+        """Read one exact grant's latest evaluation without an older-page projection."""
+
+        row = self._s.scalars(
+            select(AuthorityEvaluationRow)
+            .where(
+                AuthorityEvaluationRow.owner_id == owner_id,
+                AuthorityEvaluationRow.grant_id == grant_id,
+            )
+            .order_by(
+                AuthorityEvaluationRow.evaluation_time.desc(), AuthorityEvaluationRow.id.desc()
+            )
+            .limit(1)
+        ).first()
+        return self._evaluation_to_domain(row) if row is not None else None
+
+    def read_evaluation_for_grant(
+        self, *, owner_id: str, grant_id: str, evaluation_id: str
+    ) -> AuthorityEvaluationDecision | None:
+        """Read one exact owner- and grant-scoped evaluation by its public id."""
+
+        row = self._s.scalars(
+            select(AuthorityEvaluationRow).where(
+                AuthorityEvaluationRow.owner_id == owner_id,
+                AuthorityEvaluationRow.grant_id == grant_id,
+                AuthorityEvaluationRow.id == evaluation_id,
+            )
+        ).one_or_none()
+        return self._evaluation_to_domain(row) if row is not None else None
+
+    def list_approval_requests_bounded(
+        self, *, owner_id: str, limit: int
+    ) -> tuple[ApprovalRequest, ...]:
+        """Bounded same-owner approval-request list (page size capped in the DB)."""
+
+        rows = self._s.scalars(
+            select(AuthorityApprovalRequestRow)
+            .where(AuthorityApprovalRequestRow.owner_id == owner_id)
+            .order_by(AuthorityApprovalRequestRow.requested_at, AuthorityApprovalRequestRow.id)
+            .limit(limit)
+        ).all()
+        return tuple(self._request_to_domain(row) for row in rows)
+
+    def list_capability_grants_bounded(
+        self, *, owner_id: str, limit: int
+    ) -> tuple[CapabilityGrant, ...]:
+        """Bounded same-owner grant list (page size capped in the DB)."""
+
+        rows = self._s.scalars(
+            select(AuthorityCapabilityGrantRow)
+            .where(AuthorityCapabilityGrantRow.owner_id == owner_id)
+            .order_by(AuthorityCapabilityGrantRow.issued_at, AuthorityCapabilityGrantRow.id)
+            .limit(limit)
+        ).all()
+        return tuple(self._grant_to_domain(row) for row in rows)
+
     def read_authority_chain(
         self, *, owner_id: str, grant_id: str
     ) -> AuthorityChainProjection | None:
@@ -488,9 +648,7 @@ class SqlAlchemyAuthorityRepository:
             approval_request=self._request_to_domain(request_row),
             approval_decision=self._decision_to_domain(decision_row),
             grant=self._grant_to_domain(locked_grant_row),
-            revocations=self.list_revocations_for_grant(
-                owner_id=owner_id, grant_id=locked_grant_row.id
-            ),
+            revocations=self._bounded_revocations_for_evaluation(owner_id, locked_grant_row.id),
         )
         if (
             supplied.approval_request != chain.approval_request
@@ -504,6 +662,18 @@ class SqlAlchemyAuthorityRepository:
         if not _is_complete_persisted_evaluation_chain(owner_id, chain):
             raise AuthorityCausalityError("evaluation authority chain is inconsistent")
         return chain
+
+    def _bounded_revocations_for_evaluation(
+        self, owner_id: str, grant_id: str
+    ) -> tuple[RevocationRecord, ...]:
+        """Load complete exact-grant revocation truth or fail closed at the fixed bound."""
+
+        rows = self.list_revocations_for_grant_bounded(
+            owner_id=owner_id, grant_id=grant_id, limit=51
+        )
+        if len(rows) > 50:
+            raise AuthorityCausalityError("authority grant has too many revocations to evaluate")
+        return rows
 
     # -- idempotency + insert ------------------------------------------------
 
