@@ -94,10 +94,12 @@ decision.
 
 ## 3. What U7.0 deliberately does not contain
 
-Persistence, migrations, APIs, UI, services, idempotency keys, receipts,
-admission, adapters, agents, tools, or any consumer: no other module imports
-`orbitmind.authority` yet (enforced by test). Those arrive as U7.1–U7.5 per
-the roadmap, each behind its own gates.
+U7.0 itself contains no persistence, migrations, API, UI, services,
+idempotency keys, receipts, admission, adapters, agents, or tools. Reviewed
+consumers arrive in later slices: U7.1 persistence, U7.2 lifecycle services,
+and the strictly transport-only U7.3 operator API. The authority-consumer guard
+allows only those reviewed layers; runtime, camera, laboratory, sources, and
+other consumers remain prohibited.
 
 ## 4. Relationship to existing models
 
@@ -240,3 +242,89 @@ projections of the records. Owner-qualified not-found behavior is
 non-disclosing, corrupt evidence fails closed, and every command receives
 explicit identifiers, actors, policy versions, and UTC-normalized event times.
 No service reads a clock or generates an identity.
+
+## 7. Operator API and Approval Workbench (U7.3)
+
+U7.3 exposes the existing lifecycle services through two local-only evidence
+surfaces:
+
+- `/api/authority/*` is a bounded JSON transport surface for owner-scoped
+  requests, decisions, grants, revocations, evaluations, and deterministic
+  evidence reads.
+- `/authority/workbench/*` is a server-rendered Approval Workbench with
+  explicit POST/Redirect/GET forms. It projects stored evidence only; it does
+  not admit an operation, invoke a tool, run an agent, execute a command, or
+  emit an execution receipt.
+
+### Trusted-local limitation
+
+This slice is deliberately **not production authentication or multi-user
+authorization**. The only owner value comes from the established trusted-local
+dependency, and the matching fixed operator actor is supplied by the same
+trusted-local context. JSON bodies, forms, query strings, and route parameters
+cannot select or override either identity. The context is an explicit future
+authentication insertion point, not proof of a human identity or a privilege
+escalation mechanism.
+
+Every Authority route also rejects a direct peer other than `127.0.0.1` before
+it reads or mutates evidence. This is a transport containment guard, not a
+replacement for production authentication: remote binding, proxy forwarding,
+or multi-user access remain outside U7.3 and require a separate threat model.
+
+The API router is a transport adapter only: it parses bounded input, constructs
+strict U7.2 commands, maps typed lifecycle errors to HTTP, and renders bounded
+responses. It does not construct `SqlAlchemyAuthorityRepository`, open a
+repository transaction, evaluate policy, or decide authority. Lifecycle
+services remain the sole boundary that constructs the repository and owns
+transactions. In particular, grant issuance reconstructs its truth from the
+stored decision chain through the lifecycle service, never from a router-side
+repository read.
+
+### Shared page CSRF authority
+
+`orbitmind.core.page_csrf.PageCsrfRegistry` is the one in-memory process owner
+for protected local pages. `AppContainer` creates one process-binding key and
+one registry with static `CAMERA` and `AUTHORITY_WORKBENCH` policies. The Camera
+compatibility adapter delegates to that registry, preserving the existing
+Camera page contract without introducing a second secret or registry. Authority
+has no independent registry, secret, port setting, authentication mechanism,
+or durable session store.
+
+The registry stores only scoped page-session and token digests, compares token
+digests in constant time, bounds active sessions, expires records, and rotates
+a token only after a successful authority check. Authority and Camera scopes
+cannot exchange tokens. Tokens are never placed in URLs or logs. Authority
+forms use a separate `HttpOnly`, `SameSite=Strict`, path-scoped cookie namespace
+under `/authority/workbench`.
+
+For every modifying Authority form, the registry requires exact `http`
+same-origin protocol inputs: `Host` and `Origin` must both match
+`127.0.0.1:<runtime-selected-port>`, `Sec-Fetch-Site` must be `same-origin`,
+and forwarded headers are rejected. The selected port is the established runtime
+`Settings.custom_tle_handoff_port`; U7.3 adds no fixed Authority port. A missing,
+invalid, expired, cross-session, cross-scope, forwarded, or cross-origin token
+fails closed before lifecycle mutation. Each Workbench mutation additionally
+requires an explicit form confirmation. The protocol preflight occurs before
+the bounded form body is consumed, so a cross-origin or forwarded request is
+rejected before form decoding.
+
+### Bounded evidence reads and scope cap
+
+All operator lists are bounded. List projections, including exact-grant
+revocation and evaluation lists, read one bounded probe row so their `truncated`
+marker is truthful at the requested limit. The Workbench independently probes
+its request, grant, revocation, and evaluation summaries, and labels a request
+summary only as recorded until the detail page reads the complete evidence
+chain. Exact-grant projection reads are owner- and grant-filtered in the
+database; the grant projection uses an exact aggregate revocation count and a
+one-row latest-evaluation read rather than mistaking a capped page for complete
+evidence. Grant issuance reads only the stored request and decision required to
+construct its command, so later bounded evidence does not block an otherwise
+valid idempotent grant replay. Revocation and evaluation replays likewise use
+exact owner- and grant-scoped record reads rather than a capped evidence page.
+Complete request chains fail closed when their bounded evidence shape is
+exceeded. The U7.3 remediation is intentionally constrained to nine changed
+production Python paths: shared core CSRF, Camera compatibility, container
+wiring, API schemas, presentation/router transport, lifecycle/repository
+bounded reads, and API error mapping. It makes no migration, dependency, lock,
+runtime-enforcement, or operation-admission change.

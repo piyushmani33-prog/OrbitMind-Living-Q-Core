@@ -6,17 +6,28 @@ dependency wiring so routers depend on interfaces, not construction details.
 
 from __future__ import annotations
 
+import secrets
 import time
 from collections.abc import Callable
+from datetime import UTC, datetime
 
 import httpx
 
 from orbitmind.api.transient_handoff import CustomTleTransientHandoffStore
-from orbitmind.camera.csrf import CameraPageCsrfRegistry, CameraPageSessionUnavailableError
+from orbitmind.camera.csrf import (
+    CAMERA_CSRF_POLICY,
+    CameraPageCsrfRegistry,
+    CameraPageSessionUnavailableError,
+)
 from orbitmind.camera.media import CameraMediaError
 from orbitmind.camera.runtime import CameraMediaRuntimeContext
 from orbitmind.camera.service import CameraMediaService, CameraMediaShutdownReport
 from orbitmind.core.config import Settings, get_settings
+from orbitmind.core.page_csrf import (
+    AUTHORITY_WORKBENCH_CSRF_POLICY,
+    PAGE_CSRF_OPAQUE_SECRET_BYTES,
+    PageCsrfRegistry,
+)
 from orbitmind.laboratory.catalog import build_default_registry
 from orbitmind.memory.service import MemoryService
 from orbitmind.mission_windows.service import MissionWindowService
@@ -135,13 +146,33 @@ class AppContainer:
         self.settings = settings or get_settings()
         self.caller_owns_lifecycle = caller_owns_lifecycle
         self.camera_runtime_context = camera_runtime_context
+        page_csrf_clock = (
+            camera_runtime_context.utcnow if camera_runtime_context is not None else _utc_now
+        )
+        page_session_id_generator = (
+            camera_runtime_context.page_session_id_generator
+            if camera_runtime_context is not None
+            else lambda: secrets.token_bytes(PAGE_CSRF_OPAQUE_SECRET_BYTES)
+        )
+        csrf_token_generator = (
+            camera_runtime_context.csrf_token_generator
+            if camera_runtime_context is not None
+            else lambda: secrets.token_bytes(PAGE_CSRF_OPAQUE_SECRET_BYTES)
+        )
+        process_binding_key = (
+            camera_runtime_context.process_binding_key
+            if camera_runtime_context is not None
+            else secrets.token_bytes(PAGE_CSRF_OPAQUE_SECRET_BYTES)
+        )
+        self.page_csrf_registry = PageCsrfRegistry(
+            clock=page_csrf_clock,
+            page_session_id_generator=page_session_id_generator,
+            csrf_token_generator=csrf_token_generator,
+            process_binding_key=process_binding_key,
+            policies=(CAMERA_CSRF_POLICY, AUTHORITY_WORKBENCH_CSRF_POLICY),
+        )
         self.camera_page_csrf_registry = (
-            CameraPageCsrfRegistry(
-                clock=camera_runtime_context.utcnow,
-                page_session_id_generator=camera_runtime_context.page_session_id_generator,
-                csrf_token_generator=camera_runtime_context.csrf_token_generator,
-                process_binding_key=camera_runtime_context.process_binding_key,
-            )
+            CameraPageCsrfRegistry(shared_registry=self.page_csrf_registry)
             if camera_runtime_context is not None
             else None
         )
@@ -254,6 +285,11 @@ class AppContainer:
             raise CameraPageSessionUnavailableError
         return self.camera_page_csrf_registry
 
+    def require_page_csrf_registry(self) -> PageCsrfRegistry:
+        """Return the shared local page-CSRF registry."""
+
+        return self.page_csrf_registry
+
     def require_camera_media_service(self) -> CameraMediaService:
         """Return this application's media service or fail without a path fallback."""
 
@@ -268,6 +304,14 @@ class AppContainer:
             self.camera_media_shutdown_report = self.camera_media_service.close()
         if self.camera_page_csrf_registry is not None:
             self.camera_page_csrf_registry.close()
+        else:
+            self.page_csrf_registry.close()
         if self.custom_tle_handoff_store is not None:
             self.custom_tle_handoff_store.clear()
         self.database.dispose()
+
+
+def _utc_now() -> datetime:
+    """Timezone-aware UTC clock for the authority CSRF registry."""
+
+    return datetime.now(UTC)
