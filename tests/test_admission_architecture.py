@@ -176,7 +176,7 @@ def test_admission_has_no_module_level_mutable_state() -> None:
                 )
 
 
-_SANCTIONED_ADMISSION_CONSUMER_PACKAGES = ("orchestration", "persistence")
+_SANCTIONED_ADMISSION_CONSUMER_PACKAGES = ("api", "orchestration", "persistence")
 _FORBIDDEN_ADMISSION_CONSUMER_PACKAGES = (
     "authority",
     "runtime",

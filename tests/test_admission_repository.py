@@ -20,6 +20,7 @@ from orbitmind.admission.contracts import (
 from orbitmind.core.errors import IdempotencyConflictError
 from orbitmind.persistence.admission_models import OperationAdmissionRecordRow
 from orbitmind.persistence.admission_repository import (
+    AdmissionDisposition,
     AdmissionRecordCorruptError,
     SqlAlchemyAdmissionRepository,
 )
@@ -71,7 +72,8 @@ def test_append_get_and_list_are_owner_scoped(database: Database) -> None:
     with database.session() as session, session.begin():
         repo = SqlAlchemyAdmissionRepository(session)
         stored = repo.append_admission_record(_record(), idempotency_key="key-1")
-    assert stored.admission_id == "adm-00000001"
+    assert stored.disposition is AdmissionDisposition.CREATED
+    assert stored.record.admission_id == "adm-00000001"
 
     with database.session() as session, session.begin():
         repo = SqlAlchemyAdmissionRepository(session)
@@ -87,10 +89,99 @@ def test_replay_same_fingerprint_returns_stored_record(database: Database) -> No
         repo = SqlAlchemyAdmissionRepository(session)
         first = repo.append_admission_record(_record(), idempotency_key="key-1")
         second = repo.append_admission_record(_record(), idempotency_key="key-1")
-    assert first == second
+    assert first.record == second.record
+    assert first.disposition is AdmissionDisposition.CREATED
+    assert second.disposition is AdmissionDisposition.REPLAYED
     with database.session() as session, session.begin():
         repo = SqlAlchemyAdmissionRepository(session)
         assert len(repo.list_admission_records(owner_id=OWNER)) == 1
+
+
+def test_resolve_historical_replay_returns_validated_record_or_owner_scoped_miss(
+    database: Database,
+) -> None:
+    with database.session() as session, session.begin():
+        repo = SqlAlchemyAdmissionRepository(session)
+        assert (
+            repo.resolve_historical_replay(
+                owner_id=OWNER,
+                idempotency_key="key-1",
+                proposal_fingerprint=HEX,
+            )
+            is None
+        )
+        stored = repo.append_admission_record(_record(), idempotency_key="key-1")
+
+    with database.session() as session, session.begin():
+        repo = SqlAlchemyAdmissionRepository(session)
+        replay = repo.resolve_historical_replay(
+            owner_id=OWNER,
+            idempotency_key="key-1",
+            proposal_fingerprint=HEX,
+        )
+        foreign = repo.resolve_historical_replay(
+            owner_id=OWNER_B,
+            idempotency_key="key-1",
+            proposal_fingerprint=HEX,
+        )
+    assert replay == stored.record
+    assert foreign is None
+
+
+def test_resolve_historical_replay_conflict_is_read_only(database: Database) -> None:
+    _persist(database)
+    with database.session() as session:
+        row = _row(session)
+        original_payload = dict(row.canonical_payload)
+        original_identity = row.record_identity
+
+    with database.session() as session, session.begin():
+        repo = SqlAlchemyAdmissionRepository(session)
+        with pytest.raises(IdempotencyConflictError):
+            repo.resolve_historical_replay(
+                owner_id=OWNER,
+                idempotency_key="key-1",
+                proposal_fingerprint="c" * 64,
+            )
+
+    with database.session() as session:
+        row = _row(session)
+        assert dict(row.canonical_payload) == original_payload
+        assert row.record_identity == original_identity
+
+
+@pytest.mark.parametrize("corruption", ["payload", "identity"])
+def test_resolve_historical_replay_fails_closed_without_repair(
+    database: Database, corruption: str
+) -> None:
+    _persist(database)
+    with database.session() as session, session.begin():
+        row = _row(session)
+        if corruption == "payload":
+            payload = dict(row.canonical_payload)
+            payload["outcome"] = "denied"
+            row.canonical_payload = payload
+        else:
+            row.record_identity = "f" * 64
+
+    with database.session() as session:
+        row = _row(session)
+        corrupted_payload = dict(row.canonical_payload)
+        corrupted_identity = row.record_identity
+
+    with database.session() as session, session.begin():
+        repo = SqlAlchemyAdmissionRepository(session)
+        with pytest.raises(AdmissionRecordCorruptError):
+            repo.resolve_historical_replay(
+                owner_id=OWNER,
+                idempotency_key="key-1",
+                proposal_fingerprint=HEX,
+            )
+
+    with database.session() as session:
+        row = _row(session)
+        assert dict(row.canonical_payload) == corrupted_payload
+        assert row.record_identity == corrupted_identity
 
 
 def test_replay_conflict_on_different_fingerprint(database: Database) -> None:
@@ -241,7 +332,9 @@ def test_replay_and_conflict_behaviour_unchanged_after_identity_verification(
         repo = SqlAlchemyAdmissionRepository(session)
         first = repo.append_admission_record(_record(), idempotency_key="key-1")
         second = repo.append_admission_record(_record(), idempotency_key="key-1")
-        assert first == second
+        assert first.record == second.record
+        assert first.disposition is AdmissionDisposition.CREATED
+        assert second.disposition is AdmissionDisposition.REPLAYED
         with pytest.raises(IdempotencyConflictError):
             repo.append_admission_record(
                 _record(proposal_fingerprint="c" * 64), idempotency_key="key-1"
