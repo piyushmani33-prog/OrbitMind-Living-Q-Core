@@ -25,6 +25,8 @@ from __future__ import annotations
 import hmac
 import json
 from collections.abc import Mapping
+from dataclasses import dataclass
+from enum import StrEnum
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -40,6 +42,21 @@ from orbitmind.core.errors import IdempotencyConflictError, ValidationError
 from orbitmind.persistence.admission_models import OperationAdmissionRecordRow
 
 _ADMISSION_IDENTITY = b"orbitmind-operation-admission-record-identity-v1\x00"
+
+
+class AdmissionDisposition(StrEnum):
+    """Authoritative result of an append attempt."""
+
+    CREATED = "created"
+    REPLAYED = "replayed"
+
+
+@dataclass(frozen=True, slots=True)
+class AdmissionWriteResult:
+    """Stored Admission evidence and its repository-owned disposition."""
+
+    record: AdmissionRecord
+    disposition: AdmissionDisposition
 
 
 class AdmissionRecordCorruptError(ValidationError):
@@ -79,9 +96,29 @@ class SqlAlchemyAdmissionRepository:
         # savepoint recovery on PostgreSQL — mirrors the authority repository.
         self._use_savepoint = session.get_bind().dialect.name != "sqlite"
 
+    def resolve_historical_replay(
+        self, *, owner_id: str, idempotency_key: str, proposal_fingerprint: str
+    ) -> AdmissionRecord | None:
+        """Return validated historical evidence, conflict, or an owner-scoped miss.
+
+        This read-only pre-evaluation operation deliberately returns the immutable
+        stored record rather than an existence flag. A matching row travels through
+        the normal fail-closed integrity verification and domain re-parser; a
+        different fingerprint reveals no stored details and fails closed.
+        """
+
+        row = self._by_idempotency(owner_id, idempotency_key)
+        if row is None:
+            return None
+        if row.proposal_fingerprint != proposal_fingerprint:
+            raise IdempotencyConflictError(
+                "admission idempotency key was reused for a different proposal"
+            )
+        return self._to_domain(row)
+
     def append_admission_record(
         self, record: AdmissionRecord, *, idempotency_key: str
-    ) -> AdmissionRecord:
+    ) -> AdmissionWriteResult:
         canonical = admission_canonical_json(record)
         identity = _identity(canonical)
         resolved = self._resolve_replay(
@@ -90,7 +127,10 @@ class SqlAlchemyAdmissionRepository:
             record.proposal_fingerprint,
         )
         if resolved is not None:
-            return self._to_domain(resolved)
+            return AdmissionWriteResult(
+                record=self._to_domain(resolved),
+                disposition=AdmissionDisposition.REPLAYED,
+            )
         row = OperationAdmissionRecordRow(
             admission_id=record.admission_id,
             owner_id=record.owner_id,
@@ -116,8 +156,10 @@ class SqlAlchemyAdmissionRepository:
             idempotency_key=idempotency_key,
             canonical_payload=json.loads(canonical),
         )
-        won = self._insert(row, record.owner_id, idempotency_key, record.proposal_fingerprint)
-        return self._to_domain(won)
+        won, disposition = self._insert(
+            row, record.owner_id, idempotency_key, record.proposal_fingerprint
+        )
+        return AdmissionWriteResult(record=self._to_domain(won), disposition=disposition)
 
     def get_admission_record(self, *, owner_id: str, admission_id: str) -> AdmissionRecord | None:
         row = self._by_id(owner_id, admission_id)
@@ -130,6 +172,43 @@ class SqlAlchemyAdmissionRepository:
             .order_by(
                 OperationAdmissionRecordRow.created_at, OperationAdmissionRecordRow.admission_id
             )
+        ).all()
+        return tuple(self._to_domain(row) for row in rows)
+
+    def list_admission_records_bounded(
+        self, *, owner_id: str, limit: int
+    ) -> tuple[AdmissionRecord, ...]:
+        """Return a deterministic owner-scoped prefix bounded in SQL."""
+
+        rows = self._s.scalars(
+            select(OperationAdmissionRecordRow)
+            .where(OperationAdmissionRecordRow.owner_id == owner_id)
+            .order_by(
+                OperationAdmissionRecordRow.created_at,
+                OperationAdmissionRecordRow.admission_id,
+            )
+            .limit(limit)
+        ).all()
+        return tuple(self._to_domain(row) for row in rows)
+
+    def list_admission_records_by_resolved_grants(
+        self, *, owner_id: str, grant_ids: tuple[str, ...], limit: int
+    ) -> tuple[AdmissionRecord, ...]:
+        """Read Admission rows linked to the supplied grants, without cross-domain joins."""
+
+        if not grant_ids:
+            return ()
+        rows = self._s.scalars(
+            select(OperationAdmissionRecordRow)
+            .where(
+                OperationAdmissionRecordRow.owner_id == owner_id,
+                OperationAdmissionRecordRow.resolved_authority_grant_id.in_(grant_ids),
+            )
+            .order_by(
+                OperationAdmissionRecordRow.created_at,
+                OperationAdmissionRecordRow.admission_id,
+            )
+            .limit(limit)
         ).all()
         return tuple(self._to_domain(row) for row in rows)
 
@@ -177,13 +256,13 @@ class SqlAlchemyAdmissionRepository:
         owner_id: str,
         idempotency_key: str,
         proposal_fingerprint: str,
-    ) -> OperationAdmissionRecordRow:
+    ) -> tuple[OperationAdmissionRecordRow, AdmissionDisposition]:
         if self._use_savepoint:
             try:
                 with self._s.begin_nested():
                     self._s.add(row)
                     self._s.flush()
-                return row
+                return row, AdmissionDisposition.CREATED
             except IntegrityError:
                 replayed = self._resolve_replay(
                     self._by_idempotency(owner_id, idempotency_key),
@@ -191,11 +270,11 @@ class SqlAlchemyAdmissionRepository:
                     proposal_fingerprint,
                 )
                 if replayed is not None:
-                    return replayed
+                    return replayed, AdmissionDisposition.REPLAYED
                 raise
         self._s.add(row)
         self._s.flush()
-        return row
+        return row, AdmissionDisposition.CREATED
 
     def _to_domain(self, row: OperationAdmissionRecordRow) -> AdmissionRecord:
         # 1: load the stored canonical payload; fail closed if it is not a bounded

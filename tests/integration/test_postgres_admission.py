@@ -8,12 +8,17 @@ from __future__ import annotations
 
 import os
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
+from threading import Barrier
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 from sqlalchemy import func, inspect, select, text
+from sqlalchemy.exc import IntegrityError
 
+import orbitmind.orchestration.admission_lifecycle as admission_lifecycle
 from orbitmind.admission.contracts import (
     OPERATION_PROFILES,
     AdmissionOperationKind,
@@ -31,7 +36,8 @@ from orbitmind.authority.contracts import (
     SubjectType,
 )
 from orbitmind.core.errors import IdempotencyConflictError
-from orbitmind.orchestration.admission_lifecycle import admit_operation
+from orbitmind.orchestration.admission_evidence import read_request_admission_chain
+from orbitmind.orchestration.admission_lifecycle import AdmissionDisposition, admit_operation
 from orbitmind.orchestration.authority_lifecycle import (
     CreateApprovalRequestCommand,
     IssueCapabilityGrantCommand,
@@ -43,6 +49,8 @@ from orbitmind.orchestration.authority_lifecycle import (
     revoke_capability_grant,
 )
 from orbitmind.persistence.admission_models import OperationAdmissionRecordRow
+from orbitmind.persistence.admission_repository import SqlAlchemyAdmissionRepository
+from orbitmind.persistence.authority_models import AuthorityCapabilityGrantRow
 from orbitmind.persistence.database import Database
 
 _PG_URL = os.environ.get("ORBITMIND_TEST_POSTGRES_URL")
@@ -191,6 +199,19 @@ def _admit(database: Database, proposal: OperationProposal, *, evaluated_at: dat
             authoritative_owner_id=OWNER,
             authoritative_actor_id=ACTOR,
             evaluated_at=evaluated_at,
+        ).record
+
+
+def _admit_result(
+    database: Database, proposal: OperationProposal, *, evaluated_at: datetime = T0
+) -> Any:
+    with database.session() as session:
+        return admit_operation(
+            session=session,
+            proposal=proposal,
+            authoritative_owner_id=OWNER,
+            authoritative_actor_id=ACTOR,
+            evaluated_at=evaluated_at,
         )
 
 
@@ -241,6 +262,57 @@ def test_pg_revoked_grant_is_denied(database: Database) -> None:
     assert record.primary_reason_code is AdmissionReasonCode.AUTHORITY_REVOKED
 
 
+def test_pg_authority_replay_skips_current_revoked_state(database: Database) -> None:
+    _seed_grant(database)
+    proposal = _proposal(
+        AdmissionOperationKind.PROPOSE_FILE_CHANGE,
+        requested_authority_grant_id=GRANT,
+    )
+    first = _admit_result(database, proposal)
+    assert first.disposition is AdmissionDisposition.CREATED
+    assert first.record.outcome is AdmissionOutcome.ADMITTED
+
+    with database.session() as session:
+        revoke_capability_grant(
+            session=session,
+            command=RevokeCapabilityGrantCommand(
+                owner_id=OWNER,
+                revocation_id="rvk-replay-0001",
+                grant_id=GRANT,
+                revoked_by=OWNER,
+                effective_at=T0 + timedelta(hours=1),
+                recorded_at=T0 + timedelta(hours=1),
+                reason="Revoked before PostgreSQL replay.",
+                policy_version=POLICY,
+                idempotency_key="rvk-replay-key",
+            ),
+        )
+
+    original_authority_evaluator = admission_lifecycle.evaluate_authority
+    original_admission_evaluator = admission_lifecycle.evaluate_admission
+    with (
+        patch.object(
+            admission_lifecycle,
+            "evaluate_authority",
+            wraps=original_authority_evaluator,
+        ) as authority_evaluator,
+        patch.object(
+            admission_lifecycle,
+            "evaluate_admission",
+            wraps=original_admission_evaluator,
+        ) as admission_evaluator,
+    ):
+        replay = _admit_result(database, proposal, evaluated_at=T0 + timedelta(days=2))
+        assert authority_evaluator.call_count == 0
+        assert admission_evaluator.call_count == 0
+
+    assert replay.disposition is AdmissionDisposition.REPLAYED
+    assert replay.record == first.record
+    assert replay.record.outcome is AdmissionOutcome.ADMITTED
+    with database.session() as session:
+        assert session.scalar(select(func.count()).select_from(OperationAdmissionRecordRow)) == 1
+
+
 def test_pg_owner_privacy_cross_owner_not_found(database: Database) -> None:
     _seed_grant(database, owner=OWNER_B)
     record = _admit(
@@ -252,8 +324,131 @@ def test_pg_owner_privacy_cross_owner_not_found(database: Database) -> None:
 
 def test_pg_replay_and_conflict(database: Database) -> None:
     proposal = _proposal(AdmissionOperationKind.READ_REPOSITORY)
-    first = _admit(database, proposal)
-    second = _admit(database, proposal)
-    assert first == second
-    with pytest.raises(IdempotencyConflictError):
+    first = _admit_result(database, proposal)
+    original_authority_evaluator = admission_lifecycle.evaluate_authority
+    original_admission_evaluator = admission_lifecycle.evaluate_admission
+    with (
+        patch.object(
+            admission_lifecycle,
+            "evaluate_authority",
+            wraps=original_authority_evaluator,
+        ) as authority_evaluator,
+        patch.object(
+            admission_lifecycle,
+            "evaluate_admission",
+            wraps=original_admission_evaluator,
+        ) as admission_evaluator,
+    ):
+        second = _admit_result(database, proposal, evaluated_at=T0 + timedelta(days=1))
+        assert authority_evaluator.call_count == 0
+        assert admission_evaluator.call_count == 0
+    assert first.record == second.record
+    assert first.disposition is AdmissionDisposition.CREATED
+    assert second.disposition is AdmissionDisposition.REPLAYED
+    with (
+        patch.object(
+            admission_lifecycle,
+            "evaluate_authority",
+            wraps=original_authority_evaluator,
+        ) as authority_evaluator,
+        patch.object(
+            admission_lifecycle,
+            "evaluate_admission",
+            wraps=original_admission_evaluator,
+        ) as admission_evaluator,
+        pytest.raises(IdempotencyConflictError),
+    ):
         _admit(database, _proposal(AdmissionOperationKind.RUN_LOCAL_VALIDATION))
+    assert authority_evaluator.call_count == 0
+    assert admission_evaluator.call_count == 0
+    with database.session() as session, session.begin():
+        repository = SqlAlchemyAdmissionRepository(session)
+        assert (
+            repository.resolve_historical_replay(
+                owner_id=OWNER_B,
+                idempotency_key=proposal.idempotency_key,
+                proposal_fingerprint=first.record.proposal_fingerprint,
+            )
+            is None
+        )
+        assert session.scalar(select(func.count()).select_from(OperationAdmissionRecordRow)) == 1
+
+
+def test_pg_concurrent_first_write_race_keeps_append_reconciliation(
+    database: Database,
+) -> None:
+    proposal = _proposal(AdmissionOperationKind.READ_REPOSITORY)
+    barrier = Barrier(2)
+    original_resolver = SqlAlchemyAdmissionRepository.resolve_historical_replay
+    original_evaluator = admission_lifecycle.evaluate_admission
+
+    def synchronize_initial_miss(
+        repository: SqlAlchemyAdmissionRepository,
+        *,
+        owner_id: str,
+        idempotency_key: str,
+        proposal_fingerprint: str,
+    ) -> Any:
+        result = original_resolver(
+            repository,
+            owner_id=owner_id,
+            idempotency_key=idempotency_key,
+            proposal_fingerprint=proposal_fingerprint,
+        )
+        if result is None:
+            barrier.wait(timeout=15)
+        return result
+
+    with (
+        patch.object(
+            SqlAlchemyAdmissionRepository,
+            "resolve_historical_replay",
+            new=synchronize_initial_miss,
+        ),
+        patch.object(
+            admission_lifecycle,
+            "evaluate_admission",
+            wraps=original_evaluator,
+        ) as evaluator,
+        ThreadPoolExecutor(max_workers=2) as pool,
+    ):
+        futures = [pool.submit(_admit_result, database, proposal) for _ in range(2)]
+        results = [future.result(timeout=30) for future in futures]
+
+    # Both genuine first writers evaluated after the synchronized historical miss;
+    # append-time unique-key reconciliation then selected one creator and one replay.
+    assert evaluator.call_count == 2
+    assert {result.disposition for result in results} == {
+        AdmissionDisposition.CREATED,
+        AdmissionDisposition.REPLAYED,
+    }
+    assert results[0].record == results[1].record
+    with database.session() as session:
+        assert session.scalar(select(func.count()).select_from(OperationAdmissionRecordRow)) == 1
+
+
+def test_pg_restart_request_chain_and_resolved_grant_fk_restrict(database: Database) -> None:
+    _seed_grant(database)
+    admission = _admit(
+        database,
+        _proposal(AdmissionOperationKind.PROPOSE_FILE_CHANGE, requested_authority_grant_id=GRANT),
+    )
+
+    database.dispose()
+    assert _PG_URL is not None
+    reopened = Database(_PG_URL)
+    try:
+        with reopened.session() as session:
+            chain = read_request_admission_chain(
+                session=session, owner_id=OWNER, request_id="req-00000001", limit=5
+            )
+        assert chain is not None
+        assert [record.admission_id for record in chain.admissions] == [admission.admission_id]
+
+        with pytest.raises(IntegrityError), reopened.session() as session, session.begin():
+            row = session.get(AuthorityCapabilityGrantRow, (GRANT, OWNER))
+            assert row is not None
+            session.delete(row)
+            session.flush()
+    finally:
+        reopened.dispose()

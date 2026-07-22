@@ -47,7 +47,13 @@ from orbitmind.authority.contracts import (
 from orbitmind.authority.evaluation import evaluate_authority
 from orbitmind.core.checksums import sha256_text
 from orbitmind.core.errors import ValidationError
-from orbitmind.persistence.admission_repository import SqlAlchemyAdmissionRepository
+from orbitmind.persistence.admission_repository import (
+    AdmissionDisposition as AdmissionDisposition,
+)
+from orbitmind.persistence.admission_repository import (
+    AdmissionWriteResult,
+    SqlAlchemyAdmissionRepository,
+)
 from orbitmind.persistence.authority_repository import SqlAlchemyAuthorityRepository
 
 _ADMISSION_ID_SEP: Final = "\x1e"
@@ -163,12 +169,15 @@ def admit_operation(
     authoritative_owner_id: str,
     authoritative_actor_id: str,
     evaluated_at: datetime,
-) -> AdmissionRecord:
+) -> AdmissionWriteResult:
     """Deterministically admit one proposed operation and persist the evidence.
 
     ``authoritative_owner_id`` / ``authoritative_actor_id`` come from the trusted
     boundary (never from the proposal body); ``evaluated_at`` is the single
-    injected trusted timestamp. Executes nothing.
+    injected trusted timestamp. A visible historical replay is resolved before
+    either policy evaluation. Concurrent first writers may both evaluate after
+    observing an initial miss; append-time race reconciliation remains authoritative.
+    Executes nothing.
     """
     if session.in_transaction():
         raise AdmissionServiceTransactionError("admission service requires a fresh session")
@@ -181,9 +190,21 @@ def admit_operation(
     )
 
     with session.begin():
-        authority_repo = SqlAlchemyAuthorityRepository(session)
         admission_repo = SqlAlchemyAdmissionRepository(session)
 
+        fingerprint = sha256_text(fingerprint_source(proposal, context))
+        historical = admission_repo.resolve_historical_replay(
+            owner_id=authoritative_owner_id,
+            idempotency_key=proposal.idempotency_key,
+            proposal_fingerprint=fingerprint,
+        )
+        if historical is not None:
+            return AdmissionWriteResult(
+                record=historical,
+                disposition=AdmissionDisposition.REPLAYED,
+            )
+
+        authority_repo = SqlAlchemyAuthorityRepository(session)
         kind = resolve_operation_kind(proposal.operation_kind)
         if kind is not None:
             profile = operation_profile(kind)
@@ -195,7 +216,6 @@ def admit_operation(
 
         decision = evaluate_admission(proposal, context, finding)
 
-        fingerprint = sha256_text(fingerprint_source(proposal, context))
         checksum = sha256_text(
             decision_checksum_source(
                 policy_version=decision.policy_version,
