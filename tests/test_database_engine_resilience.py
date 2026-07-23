@@ -14,9 +14,32 @@ from orbitmind.persistence import database as database_module
 from orbitmind.persistence.database import Database
 
 
-def test_non_sqlite_engine_enables_pre_ping_without_default_recycle() -> None:
+def _capture_driver_free_engine(
+    monkeypatch: pytest.MonkeyPatch,
+) -> dict[str, Any]:
+    """Capture PostgreSQL engine options without requiring its optional driver."""
+    captured: dict[str, Any] = {}
+
+    def capture_create_engine(url: str, **kwargs: Any) -> Any:
+        captured["url"] = url
+        captured["kwargs"] = dict(kwargs)
+        return sqlalchemy_create_engine("sqlite:///:memory:", **kwargs)
+
+    monkeypatch.setattr(database_module, "create_engine", capture_create_engine)
+    return captured
+
+
+def test_non_sqlite_engine_enables_pre_ping_without_default_recycle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured = _capture_driver_free_engine(monkeypatch)
     database = Database("postgresql+psycopg://unused:unused@127.0.0.1:1/unused")
     try:
+        assert captured["kwargs"] == {
+            "future": True,
+            "connect_args": {},
+            "pool_pre_ping": True,
+        }
         assert database.engine.pool._pre_ping is True
         assert database.engine.pool._recycle == -1
     finally:
@@ -49,12 +72,19 @@ def test_sqlite_engine_options_remain_unchanged(
         database.dispose()
 
 
-def test_non_sqlite_recycle_is_opt_in() -> None:
+def test_non_sqlite_recycle_is_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured = _capture_driver_free_engine(monkeypatch)
     database = Database(
         "postgresql+psycopg://unused:unused@127.0.0.1:1/unused",
         recycle_seconds=73,
     )
     try:
+        assert captured["kwargs"] == {
+            "future": True,
+            "connect_args": {},
+            "pool_pre_ping": True,
+            "pool_recycle": 73,
+        }
         assert database.engine.pool._pre_ping is True
         assert database.engine.pool._recycle == 73
     finally:
@@ -69,7 +99,10 @@ def test_recycle_setting_loads_from_environment(monkeypatch: pytest.MonkeyPatch)
     assert settings.database_pool_recycle_seconds == 91
 
 
-def test_app_container_threads_recycle_setting_to_database(tmp_path: Path) -> None:
+def test_app_container_threads_recycle_setting_to_database(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured = _capture_driver_free_engine(monkeypatch)
     settings = Settings(
         _env_file=None,
         database_url="postgresql+psycopg://unused:unused@127.0.0.1:1/unused",
@@ -80,6 +113,12 @@ def test_app_container_threads_recycle_setting_to_database(tmp_path: Path) -> No
     )
     container = AppContainer(settings=settings, caller_owns_lifecycle=True)
     try:
+        assert captured["kwargs"] == {
+            "future": True,
+            "connect_args": {},
+            "pool_pre_ping": True,
+            "pool_recycle": 127,
+        }
         assert container.database.engine.pool._pre_ping is True
         assert container.database.engine.pool._recycle == 127
     finally:
