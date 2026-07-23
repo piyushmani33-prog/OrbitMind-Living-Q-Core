@@ -44,6 +44,7 @@ class Settings(BaseSettings):
 
     # Storage
     database_url: str = "sqlite:///./data/orbitmind.db"
+    database_pool_recycle_seconds: int | None = None
     artifacts_dir: Path = PROJECT_ROOT / "artifacts"
 
     # Mission demonstration limits (safety bounds)

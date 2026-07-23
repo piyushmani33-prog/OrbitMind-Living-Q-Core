@@ -339,6 +339,37 @@ with recovery guidance; and SQLite locking must be assessed under the single-ins
 model. The exact packaged backup/migration mechanism must be decided before
 implementation and tested during U5.0B.
 
+### Packaged SQLite preflight taxonomy
+
+The packaged runtime derives its sole expected head and all recognized revisions from
+Alembic's `ScriptDirectory`; no current-head constant or migration-source parser is an
+authority. U9.0A adds no migration, and the sole packaged head remains
+`b8f3a2c9d4e1`.
+
+| Database or migration condition | Schema state | Exit and reason | Operator meaning |
+| --- | --- | --- | --- |
+| revision equals the sole packaged head | `CURRENT` | success | start normally |
+| revision is a recognized ancestor of the packaged head | `MIGRATION_REQUIRED` | `31` / `migration_failure` only when migration is declined or fails | back up, then offer the packaged upgrade |
+| revision is absent from the packaged graph | `UNRECOGNISED` | `33` / `schema_unrecognised` | this database was not produced by this build and may come from a newer version; fail closed |
+| packaged graph has zero or multiple heads | `GRAPH_INVALID` | `32` / `migration_graph_invalid` | packaged migrations are invalid; fail before startup |
+| file unreadable, integrity check fails, WAL mode is present, or revision storage is malformed | — | `30` / `database_corruption` | the SQLite file is damaged or violates the packaged runtime contract |
+
+A revision produced by a newer OrbitMind build and an unknown or foreign revision are
+not locally distinguishable: neither exists in this build's packaged graph. Both map
+to `UNRECOGNISED`; the runtime does not invent a more precise state.
+
+### PostgreSQL checkout resilience
+
+Non-SQLite engines enable `pool_pre_ping` so a pooled connection is validated at
+checkout and transparently replaced when it died while idle. SQLite keeps its existing
+engine options. `ORBITMIND_DATABASE_POOL_RECYCLE_SECONDS` is an optional operator
+setting with default `None`; no fixed recycle interval is imposed.
+
+Checkout validation cannot recover a transaction that fails in flight. That
+transaction is lost: the failure is surfaced, never silently retried, and a transaction
+whose commit outcome is unknown is never replayed. Any retry belongs at an outer
+lifecycle boundary that owns idempotency and is outside U9.0A.
+
 ## Shutdown and Crash Recovery
 
 Clean shutdown must preserve current behavior: Ctrl-C remains valid, the ASGI lifespan

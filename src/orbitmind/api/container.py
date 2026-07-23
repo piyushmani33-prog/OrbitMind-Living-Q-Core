@@ -189,7 +189,10 @@ class AppContainer:
             if self.settings.custom_tle_handoff_enabled
             else None
         )
-        self.database = Database(self.settings.database_url)
+        self.database = Database(
+            self.settings.database_url,
+            recycle_seconds=self.settings.database_pool_recycle_seconds,
+        )
         # U6: deterministic, non-executing laboratory catalog (explicit registration).
         self.laboratory_registry = build_default_registry()
         self.registry = SourceRegistry()
