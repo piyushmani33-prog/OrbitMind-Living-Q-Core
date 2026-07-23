@@ -34,8 +34,11 @@ from orbitmind.runtime.configuration import (
     parse_launcher_arguments,
 )
 from orbitmind.runtime.database import (
-    ALEMBIC_HEAD,
     MigrationResources,
+    SchemaState,
+    classify_revision,
+    packaged_head,
+    packaged_script,
     preflight_sqlite,
 )
 from orbitmind.runtime.launcher import LauncherServices, run_launcher
@@ -553,8 +556,9 @@ def _create_database_at_parent_revision(paths: RuntimePaths) -> str:
     resources = MigrationResources.discover()
     database_url = f"sqlite:///{paths.database_file.as_posix()}"
     config = runtime_database._alembic_config(database_url, resources)
-    script = ScriptDirectory.from_config(config)
-    head = script.get_revision(ALEMBIC_HEAD)
+    script = packaged_script(resources)
+    head_revision = packaged_head(script)
+    head = script.get_revision(head_revision)
     assert head is not None and isinstance(head.down_revision, str)
     parent = head.down_revision
     command.upgrade(config, parent)
@@ -563,35 +567,81 @@ def _create_database_at_parent_revision(paths: RuntimePaths) -> str:
     return parent
 
 
+def test_packaged_alembic_graph_is_authoritative_and_source_parser_is_absent() -> None:
+    script = packaged_script(MigrationResources.discover())
+    head = packaged_head(script)
+    revisions = {revision.revision for revision in script.walk_revisions()}
+
+    assert script.get_heads() == [head]
+    assert len(revisions) == 23
+    assert head == "b8f3a2c9d4e1"
+    assert head in revisions
+    source = Path(runtime_database.__file__).read_text(encoding="utf-8")
+    assert "ALEMBIC_HEAD" not in source
+    assert "_known_revisions" not in source
+
+
+def test_revision_classification_uses_packaged_graph() -> None:
+    script = packaged_script(MigrationResources.discover())
+    head = packaged_head(script)
+    head_revision = script.get_revision(head)
+    assert head_revision is not None and isinstance(head_revision.down_revision, str)
+
+    assert classify_revision(head, script) is SchemaState.CURRENT
+    assert classify_revision(head_revision.down_revision, script) is SchemaState.MIGRATION_REQUIRED
+    assert classify_revision("future_revision", script) is SchemaState.UNRECOGNISED
+
+
 def test_sqlite_first_run_uses_migrations_and_releases_file(tmp_path: Path) -> None:
     paths = _paths(tmp_path)
     url = f"sqlite:///{paths.database_file.as_posix()}"
+    expected_head = packaged_head(packaged_script(MigrationResources.discover()))
     assert preflight_sqlite(paths, url) is None
     with closing(sqlite3.connect(paths.database_file)) as connection:
         revision = connection.execute("SELECT version_num FROM alembic_version").fetchone()
         journal = connection.execute("PRAGMA journal_mode").fetchone()
-    assert revision == (ALEMBIC_HEAD,)
+    assert revision == (expected_head,)
     assert journal is not None and str(journal[0]).lower() != "wal"
+    assert preflight_sqlite(paths, url) is None
     paths.database_file.unlink()
     assert not paths.database_file.exists()
 
 
-def test_sqlite_integrity_and_newer_revision_fail_closed(tmp_path: Path) -> None:
-    corrupt_paths = _paths(tmp_path / "corrupt")
+def test_sqlite_integrity_failure_remains_database_corruption(tmp_path: Path) -> None:
+    corrupt_paths = _paths(tmp_path)
     corrupt_paths.database_file.write_bytes(b"not sqlite")
     with pytest.raises(RuntimeFailure) as corrupt:
         preflight_sqlite(corrupt_paths, f"sqlite:///{corrupt_paths.database_file.as_posix()}")
     assert corrupt.value.code is ExitCode.DATABASE_CORRUPTION
+    assert corrupt.value.reason is ReasonCode.DATABASE_CORRUPTION
 
-    newer_paths = _paths(tmp_path / "newer")
-    url = f"sqlite:///{newer_paths.database_file.as_posix()}"
-    preflight_sqlite(newer_paths, url)
-    with closing(sqlite3.connect(newer_paths.database_file)) as connection:
+
+def test_sqlite_unrecognised_revision_fails_closed_with_schema_taxonomy(tmp_path: Path) -> None:
+    paths = _paths(tmp_path)
+    url = f"sqlite:///{paths.database_file.as_posix()}"
+    preflight_sqlite(paths, url)
+    with closing(sqlite3.connect(paths.database_file)) as connection:
         connection.execute("UPDATE alembic_version SET version_num = 'future_revision'")
         connection.commit()
-    with pytest.raises(RuntimeFailure) as newer:
-        preflight_sqlite(newer_paths, url)
-    assert newer.value.code is ExitCode.DATABASE_CORRUPTION
+    with pytest.raises(RuntimeFailure) as unrecognised:
+        preflight_sqlite(paths, url)
+    assert unrecognised.value.code is ExitCode.SCHEMA_UNRECOGNISED
+    assert unrecognised.value.reason is ReasonCode.SCHEMA_UNRECOGNISED
+
+
+def test_multiple_packaged_heads_fail_closed_before_database_creation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(ScriptDirectory, "get_heads", lambda self: ["head_a", "head_b"])
+    script = packaged_script(MigrationResources.discover())
+    assert classify_revision("anything", script) is SchemaState.GRAPH_INVALID
+
+    paths = _paths(tmp_path)
+    with pytest.raises(RuntimeFailure) as invalid:
+        preflight_sqlite(paths, f"sqlite:///{paths.database_file.as_posix()}")
+    assert invalid.value.code is ExitCode.MIGRATION_GRAPH_INVALID
+    assert invalid.value.reason is ReasonCode.MIGRATION_GRAPH_INVALID
+    assert not paths.database_file.exists()
 
 
 def test_sqlite_known_revision_creates_verified_backup_before_migration(tmp_path: Path) -> None:
@@ -608,10 +658,23 @@ def test_sqlite_known_revision_creates_verified_backup_before_migration(tmp_path
     assert backup.is_file()
     with closing(sqlite3.connect(paths.database_file)) as connection:
         assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (
-            ALEMBIC_HEAD,
+            packaged_head(packaged_script(MigrationResources.discover())),
         )
     with closing(sqlite3.connect(backup)) as connection:
         assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (parent,)
+
+
+def test_sqlite_recognised_revision_declined_is_migration_failure(tmp_path: Path) -> None:
+    paths = _paths(tmp_path)
+    parent = _create_database_at_parent_revision(paths)
+    url = f"sqlite:///{paths.database_file.as_posix()}"
+
+    with pytest.raises(RuntimeFailure) as declined:
+        preflight_sqlite(paths, url, confirm_migration=lambda revision: revision != parent)
+
+    assert declined.value.code is ExitCode.MIGRATION_FAILURE
+    assert declined.value.reason is ReasonCode.MIGRATION_FAILURE
+    assert not tuple(paths.backups_dir.glob("*.sqlite3"))
 
 
 def test_sqlite_migration_failure_preserves_original_and_backup(
@@ -623,7 +686,7 @@ def test_sqlite_migration_failure_preserves_original_and_backup(
     monkeypatch.setattr(
         runtime_database,
         "_upgrade",
-        lambda config: (_ for _ in ()).throw(RuntimeError()),
+        lambda config, target_revision: (_ for _ in ()).throw(RuntimeError()),
     )
     with pytest.raises(RuntimeFailure) as caught:
         preflight_sqlite(paths, url, confirm_migration=lambda revision: revision == parent)
