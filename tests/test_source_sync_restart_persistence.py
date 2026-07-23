@@ -22,7 +22,7 @@ from orbitmind.persistence.source_repository import SqlAlchemySourceRepository
 from orbitmind.sources.policies import SourceCatalog
 from orbitmind.sources.registry import SourceRegistry
 
-ALEMBIC_HEAD = "a1f4c7e9b230"
+ALEMBIC_HEAD = "b8f3a2c9d4e1"
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 

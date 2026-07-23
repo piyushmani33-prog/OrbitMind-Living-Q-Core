@@ -59,6 +59,14 @@ class AdmissionWriteResult:
     disposition: AdmissionDisposition
 
 
+@dataclass(frozen=True, slots=True)
+class VerifiedAdmissionRecord:
+    """Fail-closed-verified Admission evidence with its stored identity."""
+
+    record: AdmissionRecord
+    record_identity: str
+
+
 class AdmissionRecordCorruptError(ValidationError):
     """A stored admission record failed fail-closed verification/re-parsing on read."""
 
@@ -164,6 +172,15 @@ class SqlAlchemyAdmissionRepository:
     def get_admission_record(self, *, owner_id: str, admission_id: str) -> AdmissionRecord | None:
         row = self._by_id(owner_id, admission_id)
         return None if row is None else self._to_domain(row)
+
+    def get_verified_admission_record(
+        self, *, owner_id: str, admission_id: str
+    ) -> VerifiedAdmissionRecord | None:
+        row = self._by_id(owner_id, admission_id)
+        if row is None:
+            return None
+        record = self._to_domain(row)
+        return VerifiedAdmissionRecord(record=record, record_identity=row.record_identity)
 
     def list_admission_records(self, *, owner_id: str) -> tuple[AdmissionRecord, ...]:
         rows = self._s.scalars(
