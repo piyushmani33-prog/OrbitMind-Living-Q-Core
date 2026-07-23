@@ -17,6 +17,8 @@ class ExitCode(IntEnum):
     PORT_COLLISION = 21
     DATABASE_CORRUPTION = 30
     MIGRATION_FAILURE = 31
+    MIGRATION_GRAPH_INVALID = 32
+    SCHEMA_UNRECOGNISED = 33
     READINESS_TIMEOUT = 40
     BACKEND_FAILURE = 50
     UNSUPPORTED_ENVIRONMENT = 60
@@ -44,6 +46,8 @@ class ReasonCode(StrEnum):
     PORT_COLLISION = "port_collision"
     DATABASE_CORRUPTION = "database_corruption"
     MIGRATION_FAILURE = "migration_failure"
+    MIGRATION_GRAPH_INVALID = "migration_graph_invalid"
+    SCHEMA_UNRECOGNISED = "schema_unrecognised"
     READINESS_TIMEOUT = "readiness_timeout"
     BACKEND_FAILURE = "backend_failure"
     SHUTDOWN_TIMEOUT = "shutdown_timeout"

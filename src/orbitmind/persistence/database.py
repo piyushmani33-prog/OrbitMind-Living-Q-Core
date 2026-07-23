@@ -40,15 +40,26 @@ class Base(DeclarativeBase):
 
 
 class Database:
-    """Owns the engine and session factory for one database URL."""
+    """Own the engine and session factory for one database URL.
 
-    def __init__(self, url: str) -> None:
+    Non-SQLite pools validate connections at checkout and replace connections that
+    died while idle. Checkout validation cannot recover an in-flight transaction:
+    failures are surfaced, never silently retried, and an uncertain commit is never
+    replayed. Any safe retry belongs to an outer boundary that owns idempotency.
+    """
+
+    def __init__(self, url: str, *, recycle_seconds: int | None = None) -> None:
         self._url = url
         connect_args: dict[str, Any] = {}
         if url.startswith("sqlite"):
             connect_args["check_same_thread"] = False
             self._ensure_sqlite_parent(url)
-        self.engine: Engine = create_engine(url, future=True, connect_args=connect_args)
+        engine_kwargs: dict[str, Any] = {"future": True, "connect_args": connect_args}
+        if not url.startswith("sqlite"):
+            engine_kwargs["pool_pre_ping"] = True
+            if recycle_seconds is not None:
+                engine_kwargs["pool_recycle"] = recycle_seconds
+        self.engine: Engine = create_engine(url, **engine_kwargs)
         self._session_factory = sessionmaker(bind=self.engine, expire_on_commit=False, future=True)
 
     @staticmethod

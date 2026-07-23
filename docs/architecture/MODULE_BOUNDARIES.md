@@ -11,6 +11,9 @@ created merely for appearance.
 | `api` | Implemented | HTTP routers, request/response schemas, error handlers, versioning | orchestration, mission, core, observability |
 | `observability` | Implemented | health/version/capabilities reporting | core, persistence |
 | `mission` | Implemented | mission domain models, request validation, status lifecycle | core |
+| `runtime` | Implemented Windows local runtime | packaged launcher composition root, config, SQLite preflight and Alembic state classification, loopback server supervision, single-instance mutex, console-control boundary | api (composition root only), persistence, core |
+| `admission` | U7.4 deterministic contracts | deterministic operation-admission contracts and policy; no execution | core |
+| `toolgateway` | U8.1A controlled foundation | immutable code-owned tool descriptors, catalog, eligibility policy; evaluates and records, never executes | core |
 | `orchestration` | Implemented | Prime Orchestrator + in-process Workflow abstraction | mission, space, verification, visualization, persistence, governance, sources, core |
 | `sources` | Implemented | source registry (offline fixtures) + typed source policy/rights, safe HTTP fetcher, cache/freshness, and the CelesTrak connector (`sources/celestrak/`) behind a generic `OrbitalSource` interface | core, space (elements), persistence (source_repository), httpx |
 | `space` | Implemented | SGP4 orbital propagation, coordinate transforms, units | core, sources |

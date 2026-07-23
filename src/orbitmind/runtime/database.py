@@ -9,17 +9,27 @@ from collections.abc import Callable
 from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from enum import StrEnum
 from pathlib import Path
 from typing import Final
 
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 
 from orbitmind.runtime.paths import RuntimePaths
 from orbitmind.runtime.status import ExitCode, ReasonCode, RuntimeFailure
 
-ALEMBIC_HEAD: Final = "n9c0d1e2f3g4"
 SQLITE_BUSY_TIMEOUT_MS: Final = 5_000
+
+
+class SchemaState(StrEnum):
+    """Relationship between a database revision and the packaged migration graph."""
+
+    CURRENT = "current"
+    MIGRATION_REQUIRED = "migration_required"
+    UNRECOGNISED = "unrecognised"
+    GRAPH_INVALID = "graph_invalid"
 
 
 @dataclass(frozen=True)
@@ -45,6 +55,42 @@ def _alembic_config(database_url: str, resources: MigrationResources) -> Config:
     return config
 
 
+def packaged_script(resources: MigrationResources) -> ScriptDirectory:
+    """Load the packaged Alembic graph without parsing migration source text."""
+
+    if not resources.alembic_ini.is_file() or not resources.migrations_dir.is_dir():
+        raise RuntimeFailure(ExitCode.MIGRATION_FAILURE, ReasonCode.MIGRATION_FAILURE)
+    config = Config(str(resources.alembic_ini))
+    config.set_main_option("script_location", str(resources.migrations_dir))
+    return ScriptDirectory.from_config(config)
+
+
+def packaged_head(script: ScriptDirectory) -> str:
+    """Return the sole packaged head, failing closed for an invalid graph."""
+
+    heads = script.get_heads()
+    if len(heads) != 1:
+        raise RuntimeFailure(
+            ExitCode.MIGRATION_GRAPH_INVALID,
+            ReasonCode.MIGRATION_GRAPH_INVALID,
+        )
+    return heads[0]
+
+
+def classify_revision(revision: str, script: ScriptDirectory) -> SchemaState:
+    """Classify a database revision against the authoritative Alembic graph."""
+
+    heads = script.get_heads()
+    if len(heads) != 1:
+        return SchemaState.GRAPH_INVALID
+    head = heads[0]
+    if revision == head:
+        return SchemaState.CURRENT
+    if any(item.revision == revision for item in script.iterate_revisions(head, "base")):
+        return SchemaState.MIGRATION_REQUIRED
+    return SchemaState.UNRECOGNISED
+
+
 def _inspect_database(path: Path) -> str:
     try:
         with closing(sqlite3.connect(path, timeout=5.0)) as connection:
@@ -61,17 +107,6 @@ def _inspect_database(path: Path) -> str:
     if len(revisions) != 1 or not isinstance(revisions[0][0], str):
         raise RuntimeFailure(ExitCode.DATABASE_CORRUPTION, ReasonCode.DATABASE_CORRUPTION)
     return revisions[0][0]
-
-
-def _known_revisions(resources: MigrationResources) -> tuple[str, ...]:
-    revisions: list[str] = []
-    for path in sorted((resources.migrations_dir / "versions").glob("*.py")):
-        text = path.read_text(encoding="utf-8")
-        for line in text.splitlines():
-            if line.startswith("revision: str = "):
-                revisions.append(line.partition("=")[2].strip().strip('"'))
-                break
-    return tuple(revisions)
 
 
 def _backup_database(path: Path, backup_dir: Path, now: datetime) -> Path:
@@ -93,11 +128,11 @@ def _backup_database(path: Path, backup_dir: Path, now: datetime) -> Path:
     return destination
 
 
-def _upgrade(config: Config) -> None:
+def _upgrade(config: Config, target_revision: str) -> None:
     """Run Alembic and promptly collect its completed context on Windows."""
 
     try:
-        command.upgrade(config, ALEMBIC_HEAD)
+        command.upgrade(config, target_revision)
     finally:
         # Alembic's proxy retains its closed migration context in a cycle. CPython
         # eventually collects it, but Windows otherwise keeps the SQLite handle long
@@ -119,34 +154,44 @@ def _preflight_sqlite_impl(
     if database_url != expected_url:
         raise RuntimeFailure(ExitCode.INVALID_CONFIGURATION, ReasonCode.INVALID_CONFIGURATION)
     migration_resources = resources or MigrationResources.discover()
+    script = packaged_script(migration_resources)
+    head = packaged_head(script)
     config = _alembic_config(database_url, migration_resources)
     existed = paths.database_file.exists()
     if not existed:
         try:
-            _upgrade(config)
+            _upgrade(config, head)
         except Exception as exc:
             paths.database_file.unlink(missing_ok=True)
             raise RuntimeFailure(ExitCode.MIGRATION_FAILURE, ReasonCode.MIGRATION_FAILURE) from exc
         del config
         gc.collect()
-        if _inspect_database(paths.database_file) != ALEMBIC_HEAD:
+        if _inspect_database(paths.database_file) != head:
             raise RuntimeFailure(ExitCode.MIGRATION_FAILURE, ReasonCode.MIGRATION_FAILURE)
         return None
 
     revision = _inspect_database(paths.database_file)
-    if revision == ALEMBIC_HEAD:
+    state = classify_revision(revision, script)
+    if state is SchemaState.CURRENT:
         return None
-    known = _known_revisions(migration_resources)
-    if revision not in known or ALEMBIC_HEAD not in known:
-        raise RuntimeFailure(ExitCode.DATABASE_CORRUPTION, ReasonCode.DATABASE_CORRUPTION)
+    if state is SchemaState.GRAPH_INVALID:
+        raise RuntimeFailure(
+            ExitCode.MIGRATION_GRAPH_INVALID,
+            ReasonCode.MIGRATION_GRAPH_INVALID,
+        )
+    if state is SchemaState.UNRECOGNISED:
+        raise RuntimeFailure(
+            ExitCode.SCHEMA_UNRECOGNISED,
+            ReasonCode.SCHEMA_UNRECOGNISED,
+        )
     if confirm_migration is None or not confirm_migration(revision):
         raise RuntimeFailure(ExitCode.MIGRATION_FAILURE, ReasonCode.MIGRATION_FAILURE)
     backup = _backup_database(paths.database_file, paths.backups_dir, now())
     try:
-        _upgrade(config)
+        _upgrade(config, head)
         del config
         gc.collect()
-        if _inspect_database(paths.database_file) != ALEMBIC_HEAD:
+        if _inspect_database(paths.database_file) != head:
             raise RuntimeFailure(ExitCode.MIGRATION_FAILURE, ReasonCode.MIGRATION_FAILURE)
     except Exception as exc:
         raise RuntimeFailure(ExitCode.MIGRATION_FAILURE, ReasonCode.MIGRATION_FAILURE) from exc

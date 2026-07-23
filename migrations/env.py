@@ -10,13 +10,15 @@ from __future__ import annotations
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
+import orbitmind.persistence.admission_models
 import orbitmind.persistence.authority_models
 import orbitmind.persistence.memory_models
 import orbitmind.persistence.models
 import orbitmind.persistence.observation_geometry_models
 import orbitmind.persistence.observation_planning_models
 import orbitmind.persistence.optimization_models
-import orbitmind.persistence.research_models  # noqa: F401 - register research-memory tables
+import orbitmind.persistence.research_models
+import orbitmind.persistence.tool_gateway_models  # noqa: F401 - register gateway tables
 from orbitmind.core.config import get_settings
 from orbitmind.persistence.database import Base
 
