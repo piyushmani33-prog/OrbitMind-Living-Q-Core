@@ -21,6 +21,7 @@ SPEC_PATH_NAMES = {"SPEC_DIR", "ROOT", "SOURCE", "MIGRATIONS", "SAMPLES", "LAUNC
 MIGRATION_HIDDEN_IMPORTS = {"orbitmind.persistence.research_models"}
 MIGRATION_NORMAL_ANALYSIS_IMPORTS = {
     "orbitmind.core.config",
+    "orbitmind.persistence.admission_models",
     "orbitmind.persistence.authority_models",
     "orbitmind.persistence.database",
     "orbitmind.persistence.memory_models",
@@ -28,6 +29,7 @@ MIGRATION_NORMAL_ANALYSIS_IMPORTS = {
     "orbitmind.persistence.observation_geometry_models",
     "orbitmind.persistence.observation_planning_models",
     "orbitmind.persistence.optimization_models",
+    "orbitmind.persistence.tool_gateway_models",
 }
 VERIFIER = PROJECT_ROOT / "scripts" / "verify_windows_poc.ps1"
 BUILD_SCRIPT = PROJECT_ROOT / "scripts" / "build_windows_poc.ps1"
